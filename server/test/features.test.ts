@@ -74,6 +74,20 @@ describe("scheduler", () => {
     expect(pausedTick.skipped[0].reason).toMatch(/paused/);
   });
 
+  it("re-enabling a schedule never leaves it stuck or fires missed runs at once", async () => {
+    const { app, store } = await makeApp();
+    const org = store.createOrg({ name: "Acme" });
+    const create = (cadence: string) =>
+      app.inject({ method: "POST", url: "/api/schedules", payload: { orgId: org.id, title: "t", instruction: "i", cadence, startAt: new Date(Date.now() + HOUR).toISOString() } });
+    const once = (await create("once")).json();
+    store.updateSchedule(once.id, { enabled: false, next_run_at: null });
+    expect((await app.inject({ method: "PATCH", url: `/api/schedules/${once.id}`, payload: { enabled: true } })).statusCode).toBe(400);
+    const weekly = (await create("weekly")).json();
+    store.updateSchedule(weekly.id, { enabled: false, next_run_at: new Date(Date.now() - 3 * 24 * HOUR).toISOString() });
+    const res = (await app.inject({ method: "PATCH", url: `/api/schedules/${weekly.id}`, payload: { enabled: true } })).json();
+    expect(Date.parse(res.next_run_at)).toBeGreaterThan(Date.now());
+  });
+
   it("lets Haley schedule a one-off follow-up that runs on the ticket with its requester's authority", async () => {
     const runAt = new Date(Date.now() + 2 * HOUR).toISOString();
     const llm = new ScriptedLlm(

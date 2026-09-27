@@ -5,6 +5,8 @@ import {
   Inbox,
   LayoutDashboard,
   Menu,
+  MessagesSquare,
+  Radio,
   ScrollText,
   ShieldCheck,
   Sparkles,
@@ -85,6 +87,12 @@ export function Layout() {
           <div className="nav-section">Workspace</div>
           <NavItem to="/clients" icon={<Building className="icon" aria-hidden="true" />}>
             Clients
+          </NavItem>
+          <NavItem to="/channels" icon={<Radio className="icon" aria-hidden="true" />}>
+            Channels
+          </NavItem>
+          <NavItem to="/simulate" icon={<MessagesSquare className="icon" aria-hidden="true" />}>
+            Try as end user
           </NavItem>
           <NavItem to="/kb" icon={<BookOpen className="icon" aria-hidden="true" />}>
             Knowledge base

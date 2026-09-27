@@ -1,9 +1,10 @@
-import { CircleCheck, Eye, ShieldCheck, Zap } from "lucide-react";
-import type { Autonomy } from "../api";
+import { Bot, CircleCheck, Eye, ShieldCheck, Zap } from "lucide-react";
+import type { ReactNode } from "react";
+import { AUTONOMY_LEVELS, type Autonomy, type OrgSettings } from "../api";
 import { AUTONOMY_META } from "../lib/format";
 
-const ICONS: Record<Autonomy, typeof Eye> = { read_only: Eye, supervised: ShieldCheck, autonomous: Zap };
-const ORDER: Autonomy[] = ["read_only", "supervised", "autonomous"];
+const ICONS: Record<Autonomy, typeof Eye> = { read_only: Eye, supervised: ShieldCheck, autonomous: Zap, unattended: Bot };
+const ORDER: Autonomy[] = AUTONOMY_LEVELS;
 
 export function AutonomyPicker({ value, onChange, disabled }: { value: Autonomy; onChange: (a: Autonomy) => void; disabled?: boolean }) {
   return (
@@ -48,46 +49,88 @@ export function AutonomyPicker({ value, onChange, disabled }: { value: Autonomy;
   );
 }
 
-/** The approval matrix from server/src/agent/policy.ts, for reference next to the picker. */
-export function PolicyMatrix() {
-  const cell = (d: "run" | "approve" | "block") =>
-    d === "run" ? <span className="pill tone-green">Runs</span> : d === "approve" ? <span className="pill tone-amber">Approval</span> : <span className="pill">Blocked</span>;
+type Cell = "run" | "approve" | "block";
+
+const cell = (d: Cell) =>
+  d === "run" ? <span className="pill tone-green">Runs</span> : d === "approve" ? <span className="pill tone-amber">Approval</span> : <span className="pill">Blocked</span>;
+
+function Conditional({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="table-wrap">
-      <table className="policy-table">
-        <thead>
-          <tr>
-            <th scope="col">Policy</th>
-            <th scope="col">Read</th>
-            <th scope="col">Internal</th>
-            <th scope="col">Write</th>
-            <th scope="col">Destructive</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <th scope="row">Read-only</th>
-            <td>{cell("run")}</td>
-            <td>{cell("run")}</td>
-            <td>{cell("block")}</td>
-            <td>{cell("block")}</td>
-          </tr>
-          <tr>
-            <th scope="row">Supervised</th>
-            <td>{cell("run")}</td>
-            <td>{cell("run")}</td>
-            <td>{cell("approve")}</td>
-            <td>{cell("approve")}</td>
-          </tr>
-          <tr>
-            <th scope="row">Autonomous</th>
-            <td>{cell("run")}</td>
-            <td>{cell("run")}</td>
-            <td>{cell("run")}</td>
-            <td>{cell("approve")}</td>
-          </tr>
-        </tbody>
-      </table>
+    <span className="policy-cond">
+      <span className="pill tone-teal">{label}</span>
+      <span className="policy-cond-note">{children}</span>
+    </span>
+  );
+}
+
+/** The approval matrix from server/src/agent/policy.ts, for reference next to the picker. */
+export function PolicyMatrix({ settings, highlight }: { settings?: Pick<OrgSettings, "maxAutoChangesPerHour" | "maxSelfServicePerUserPerDay">; highlight?: Autonomy }) {
+  const perDay = settings ? `${settings.maxSelfServicePerUserPerDay} per person per day` : "the daily per-person limit";
+  const perHour = settings ? `${settings.maxAutoChangesPerHour} automatic changes an hour` : "the hourly limit";
+  const row = (a: Autonomy) => (highlight === a ? "is-current" : undefined);
+  return (
+    <div className="stack-sm">
+      <div className="table-wrap">
+        <table className="policy-table">
+          <thead>
+            <tr>
+              <th scope="col">Policy</th>
+              <th scope="col">Read</th>
+              <th scope="col">Internal</th>
+              <th scope="col">Write</th>
+              <th scope="col">Destructive</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className={row("read_only")}>
+              <th scope="row">Read-only</th>
+              <td>{cell("run")}</td>
+              <td>{cell("run")}</td>
+              <td>{cell("block")}</td>
+              <td>{cell("block")}</td>
+            </tr>
+            <tr className={row("supervised")}>
+              <th scope="row">Supervised</th>
+              <td>{cell("run")}</td>
+              <td>{cell("run")}</td>
+              <td>{cell("approve")}</td>
+              <td>{cell("approve")}</td>
+            </tr>
+            <tr className={row("autonomous")}>
+              <th scope="row">Autonomous</th>
+              <td>{cell("run")}</td>
+              <td>{cell("run")}</td>
+              <td>{cell("run")}</td>
+              <td>{cell("approve")}</td>
+            </tr>
+            <tr className={row("unattended")}>
+              <th scope="row">Unattended</th>
+              <td>{cell("run")}</td>
+              <td>{cell("run")}</td>
+              <td>
+                <Conditional label="Runs if…">
+                  it's the requester's own account (email-verified or better), or the requester is an authorized approver. Access grants (groups,
+                  mailboxes) always need an authorized approver.
+                </Conditional>
+              </td>
+              <td>
+                <Conditional label="Runs if…">
+                  it's the requester's own account with a chat or directory identity, within {perDay}; or an authorized approver asks with a chat
+                  or directory identity. Email alone never qualifies.
+                </Conditional>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <ul className="policy-notes">
+        <li>In every mode, changes to protected accounts wait for a technician.</li>
+        <li>
+          Unattended: an unverified requester, anything past {perHour}, or anything the rules above don't cover goes to the approval queue instead
+          of failing, so the request still gets handled.
+        </li>
+        <li>Tickets a technician enters, and tasks you start, act with technician authority.</li>
+      </ul>
     </div>
   );
 }

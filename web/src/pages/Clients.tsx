@@ -1,4 +1,4 @@
-import { Building, Plus, Ticket as TicketIcon } from "lucide-react";
+import { Building, OctagonPause, Plus, Ticket as TicketIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, errorMessage, type Autonomy } from "../api";
@@ -54,7 +54,7 @@ export function ClientsPage() {
       ) : (
         <div className="org-grid">
           {orgs.data?.map((o) => (
-            <Link key={o.id} to={`/clients/${o.id}`} className="org-card">
+            <Link key={o.id} to={`/clients/${o.id}`} className={`org-card ${o.settings?.paused ? "is-paused" : ""}`}>
               <div className="row" style={{ gap: 12, alignItems: "flex-start" }}>
                 <span className="org-initial" aria-hidden="true">
                   {o.name.slice(0, 1).toUpperCase()}
@@ -67,6 +67,11 @@ export function ClientsPage() {
                 </div>
                 <AutonomyPill autonomy={o.autonomy} />
               </div>
+              {o.settings?.paused && (
+                <div className="paused-badge" role="status">
+                  <OctagonPause className="icon-sm" aria-hidden="true" /> Haley paused · technicians only
+                </div>
+              )}
               <div className="stack-sm">
                 {o.integrations.length === 0 ? (
                   <span className="muted" style={{ fontSize: "var(--text-sm)" }}>

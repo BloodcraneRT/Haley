@@ -2,26 +2,10 @@ import { Check, Copy, KeyRound, ShieldAlert } from "lucide-react";
 import { useState } from "react";
 import { api, errorMessage } from "../api";
 import { useApp } from "../lib/app-context";
+import { copyText } from "../lib/clipboard";
 import { humanize } from "../lib/format";
 import { Spinner } from "./Feedback";
 import { Modal } from "./Modal";
-
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand("copy");
-    ta.remove();
-    return ok;
-  }
-}
 
 export function RevealSecretButton({ actionId, size = "sm" }: { actionId: string; size?: "sm" | "md" }) {
   const { toast, user } = useApp();

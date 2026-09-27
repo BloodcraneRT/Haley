@@ -1,4 +1,4 @@
-import { Building, Check, MessageSquareText, Sparkles, Ticket as TicketIcon, Wrench, X, Zap } from "lucide-react";
+import { Building, Check, MessageSquareText, ShieldQuestion, Sparkles, Ticket as TicketIcon, Wrench, X, Zap } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError, errorMessage, type Action, type Approval } from "../api";
@@ -135,6 +135,7 @@ export function ApprovalCard({
       </div>
 
       <div className="approval-body">
+        {action.policy_reason?.trim() && <PolicyReason reason={action.policy_reason} />}
         {action.rationale.trim() && (
           <div className="rationale">
             <div className="rationale-label">
@@ -158,5 +159,17 @@ export function ApprovalCard({
 
       {controls}
     </article>
+  );
+}
+
+/** Why the client's policy held this call for a technician (server/src/agent/policy.ts). */
+export function PolicyReason({ reason, compact, label = "Why this needs approval" }: { reason: string; compact?: boolean; label?: string }) {
+  return (
+    <div className={`policy-reason ${compact ? "compact" : ""}`}>
+      <ShieldQuestion className="icon-sm" aria-hidden="true" />
+      <span>
+        <strong>{label}:</strong> {reason}
+      </span>
+    </div>
   );
 }

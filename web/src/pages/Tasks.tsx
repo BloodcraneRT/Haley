@@ -1,14 +1,15 @@
-import { ClipboardList, FileSearch, HeartPulse, PenLine, ShieldCheck, Sparkles, UserMinus, UserPlus, Zap } from "lucide-react";
+import { CalendarClock, ClipboardList, FileSearch, HeartPulse, PenLine, ShieldCheck, Sparkles, UserMinus, UserPlus, Zap } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { api, errorMessage } from "../api";
+import { api, errorMessage, type Cadence, type RunMode } from "../api";
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
 import { OrgSelect } from "../components/OrgSelect";
 import { PageHeader } from "../components/PageHeader";
 import { RunRow } from "../components/RunRow";
+import { CadenceFields, defaultStartLocal, localInputToIso, ModeToggle } from "../components/Schedules";
 import { usePoll } from "../hooks/usePoll";
 import { useApp } from "../lib/app-context";
-import { isRunActive } from "../lib/format";
+import { CADENCE_META, isRunActive } from "../lib/format";
 
 const TEMPLATE_ICONS: Record<string, typeof Zap> = {
   onboard: UserPlus,
@@ -31,6 +32,10 @@ export function TasksPage() {
   const [orgId, setOrgId] = useState(params.get("orgId") ?? "");
   const [title, setTitle] = useState("");
   const [instruction, setInstruction] = useState("");
+  const [mode, setMode] = useState<RunMode>("live");
+  const [when, setWhen] = useState<"now" | "schedule">("now");
+  const [cadence, setCadence] = useState<Cadence>("once");
+  const [startAt, setStartAt] = useState(defaultStartLocal);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,8 +60,20 @@ export function TasksPage() {
     setBusy(true);
     setError(null);
     try {
-      const run = await api.startTask({ orgId, title: title.trim(), instruction: instruction.trim() });
-      toast("Task started.");
+      if (when === "schedule") {
+        const iso = localInputToIso(startAt);
+        if (!iso) {
+          setBusy(false);
+          return setError("Choose when it should run.");
+        }
+        await api.createSchedule({ orgId, title: title.trim(), instruction: instruction.trim(), cadence, mode, startAt: iso });
+        toast(`Scheduled "${title.trim()}" (${CADENCE_META[cadence].every.toLowerCase()}). It's listed on the client's page.`);
+        refreshStats();
+        navigate(`/clients/${orgId}`);
+        return;
+      }
+      const run = await api.startTask({ orgId, title: title.trim(), instruction: instruction.trim(), mode });
+      toast(mode === "plan" ? "Planning started. Nothing will be changed." : "Task started.");
       refreshStats();
       navigate(`/runs/${run.id}`);
     } catch (err) {
@@ -148,6 +165,30 @@ export function TasksPage() {
                     placeholder="Pick a template above, or describe what you need. Be specific about names, dates and what 'done' looks like."
                   />
                 </div>
+                <div className="field">
+                  <span className="field-label">Mode</span>
+                  <ModeToggle value={mode} onChange={setMode} />
+                  <span className="help">
+                    {mode === "live"
+                      ? "Haley does the work. Changes follow the client's approval policy."
+                      : "Dry run: Haley investigates and writes up the exact plan. Nothing is changed."}
+                  </span>
+                </div>
+                <div className="field">
+                  <span className="field-label">When</span>
+                  <div className="segmented" role="group" aria-label="When" style={{ alignSelf: "flex-start" }}>
+                    <button type="button" aria-pressed={when === "now"} onClick={() => setWhen("now")}>
+                      <Zap className="icon-sm seg-icon" aria-hidden="true" />
+                      Now
+                    </button>
+                    <button type="button" aria-pressed={when === "schedule"} onClick={() => setWhen("schedule")}>
+                      <CalendarClock className="icon-sm seg-icon" aria-hidden="true" />
+                      Schedule this
+                    </button>
+                  </div>
+                  <span className="help">{when === "now" ? "Starts right away; you'll see her work live." : "Runs later, once or on a repeating cadence."}</span>
+                </div>
+                {when === "schedule" && <CadenceFields idPrefix="task" cadence={cadence} onCadence={setCadence} startAt={startAt} onStartAt={setStartAt} />}
               </div>
               {error && (
                 <p className="error-text" role="alert">
@@ -157,11 +198,18 @@ export function TasksPage() {
             </div>
             <div className="card-footer">
               <span className="muted" style={{ fontSize: "var(--text-sm)" }}>
-                {health.claudeCredentials ? "Haley starts right away; you'll see her work live." : "The server has no Claude credentials, so this run will fail."}
+                {health.claudeCredentials
+                  ? when === "schedule"
+                    ? "Scheduled runs are skipped while Haley is paused for the client."
+                    : mode === "plan"
+                      ? "Haley plans right away; nothing is changed."
+                      : "Haley starts right away; you'll see her work live."
+                  : "The server has no Claude credentials, so runs will fail."}
               </span>
               <span className="spacer" />
               <button className="btn btn-primary" type="submit" disabled={busy}>
-                {busy ? <Spinner /> : <Zap className="icon-sm" aria-hidden="true" />} Start task
+                {busy ? <Spinner /> : when === "schedule" ? <CalendarClock className="icon-sm" aria-hidden="true" /> : mode === "plan" ? <ClipboardList className="icon-sm" aria-hidden="true" /> : <Zap className="icon-sm" aria-hidden="true" />}
+                {when === "schedule" ? "Create schedule" : mode === "plan" ? "Start plan" : "Start task"}
               </button>
             </div>
           </form>

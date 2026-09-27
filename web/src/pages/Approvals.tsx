@@ -59,7 +59,8 @@ export function ApprovalsPage() {
         <div className="card">
           <EmptyState icon={<CircleCheck className="icon" />} title="You're all caught up">
             No changes are waiting for approval. Clients on <strong>Supervised</strong> autonomy route every change here; <strong>Autonomous</strong>{" "}
-            clients only route security-sensitive ones. Adjust a client's policy on its <Link to="/clients">client page</Link>.
+            clients only route security-sensitive ones; <strong>Unattended</strong> clients route what a verified requester can't justify on their
+            own. Adjust a client's policy on its <Link to="/clients">client page</Link>.
           </EmptyState>
         </div>
       ) : visible.length === 0 ? (

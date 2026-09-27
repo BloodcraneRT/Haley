@@ -1,12 +1,15 @@
 import {
   ArrowRight,
+  CalendarClock,
   Check,
   ChevronRight,
+  ClipboardList,
   CircleDot,
   CircleX,
   Flag,
   Lock,
   Mail,
+  MessageCircle,
   PencilLine,
   Play,
   Reply,
@@ -14,6 +17,7 @@ import {
   ShieldCheck,
   Sparkles,
   TriangleAlert,
+  Undo2,
   X,
 } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
@@ -25,7 +29,11 @@ import {
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   type Action,
+  type Delivery,
   type Run,
+  type RunMode,
+  type Schedule,
+  type SlaState,
   type TicketDetail,
   type TicketEvent,
   type TicketPatch,
@@ -37,12 +45,12 @@ import { Avatar, displayName, isHaley } from "../components/Avatar";
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
 import { Markdown } from "../components/Markdown";
 import { PageHeader } from "../components/PageHeader";
-import { Pill, RunStatusPill, TicketStatusPill } from "../components/Pill";
+import { AssuranceBadge, ChannelBadge, Pill, RunModeBadge, RunStatusPill, SlaStatePill, TicketStatusPill } from "../components/Pill";
 import { RelativeTime } from "../components/RelativeTime";
 import { RevealSecretButton } from "../components/RevealSecret";
 import { usePoll } from "../hooks/usePoll";
 import { useApp } from "../lib/app-context";
-import { humanize, isRunActive, PRIORITY_META, TICKET_STATUS_META } from "../lib/format";
+import { absoluteTime, ASSURANCE_META, CADENCE_META, CHANNEL_META, humanize, isRunActive, PRIORITY_META, TICKET_STATUS_META } from "../lib/format";
 
 const runBusy = (r: Run) => r.status === "queued" || r.status === "running" || r.status === "awaiting_approval";
 
@@ -50,7 +58,7 @@ export function TicketDetailPage() {
   const { id = "" } = useParams();
   const { toast, refreshStats } = useApp();
   const detail = usePoll(() => api.ticket(id), [id], (d) => (d?.runs.some((r) => isRunActive(r.status)) ? 2000 : 15_000));
-  const [starting, setStarting] = useState(false);
+  const [starting, setStarting] = useState<RunMode | null>(null);
 
   if (detail.error instanceof ApiError && detail.error.status === 404) {
     return (
@@ -64,6 +72,7 @@ export function TicketDetailPage() {
   if (!detail.data) return detail.error ? <ErrorBanner error={detail.error} onRetry={detail.reload} /> : <Loading />;
 
   const { ticket, events, runs, actions } = detail.data;
+  const schedules = detail.data.schedules ?? [];
   // Runs come newest first.
   const latest = runs[0];
   const active = runs.find(runBusy);
@@ -71,16 +80,16 @@ export function TicketDetailPage() {
   const secrets = actions.filter((a) => a.has_secrets);
   const actionsById = new Map(actions.map((a) => [a.id, a]));
 
-  const runHaley = async () => {
-    setStarting(true);
+  const runHaley = async (mode: RunMode = "live") => {
+    setStarting(mode);
     try {
-      await api.runTicket(ticket.id);
-      toast("Haley is working this ticket.");
+      await api.runTicket(ticket.id, mode);
+      toast(mode === "plan" ? "Haley is planning this ticket. Nothing will be changed." : "Haley is working this ticket.");
       refreshStats();
     } catch (err) {
       toast(err instanceof ApiError && err.status === 409 ? err.message : errorMessage(err), err instanceof ApiError && err.status === 409 ? "info" : "error");
     } finally {
-      setStarting(false);
+      setStarting(null);
       void detail.reload();
     }
   };
@@ -118,22 +127,57 @@ export function TicketDetailPage() {
         subtitle={
           <span className="row row-wrap" style={{ gap: 8 }}>
             <TicketStatusPill status={ticket.status} />
+            {ticket.channel && <ChannelBadge channel={ticket.channel} />}
+            {ticket.assurance && <AssuranceBadge assurance={ticket.assurance} verification={ticket.verification} />}
             <span>
               {ticket.requester_name || ticket.requester_email || "Unknown requester"} · opened <RelativeTime iso={ticket.created_at} />
             </span>
           </span>
         }
         actions={
-          <button className="btn btn-primary" onClick={runHaley} disabled={starting || Boolean(active)} title={active ? "Haley is already working this ticket" : undefined}>
-            {starting || (active && isRunActive(active.status)) ? <Spinner /> : <Play className="icon-sm" aria-hidden="true" />}
-            {active ? (active.status === "awaiting_approval" ? "Waiting for approval" : "Haley is working…") : runs.length ? "Run Haley again" : "Run Haley"}
-          </button>
+          <>
+            {!active && (
+              <button
+                className="btn"
+                onClick={() => void runHaley("plan")}
+                disabled={starting !== null}
+                title="Dry run: Haley investigates and writes up exactly what she would do. Nothing is changed and the requester isn't contacted."
+              >
+                {starting === "plan" ? <Spinner /> : <ClipboardList className="icon-sm" aria-hidden="true" />} Plan (dry run)
+              </button>
+            )}
+            <button
+              className="btn btn-primary"
+              onClick={() => void runHaley("live")}
+              disabled={starting !== null || Boolean(active)}
+              title={active ? "Haley is already working this ticket" : undefined}
+            >
+              {starting === "live" || (active && isRunActive(active.status)) ? <Spinner /> : <Play className="icon-sm" aria-hidden="true" />}
+              {active
+                ? active.status === "awaiting_approval"
+                  ? "Waiting for approval"
+                  : active.mode === "plan"
+                    ? "Haley is planning…"
+                    : "Haley is working…"
+                : runs.length
+                  ? "Run Haley again"
+                  : "Run Haley"}
+            </button>
+          </>
         }
       />
 
       <div className="layout-main-side">
         <div className="stack" style={{ gap: 20 }}>
-          {latest && <RunBanner run={latest} pendingCount={pending.length} />}
+          {latest && <RunBanner run={latest} pendingCount={pending.length} onRunLive={() => void runHaley("live")} starting={starting === "live"} />}
+          {ticket.needs_followup && (
+            <div className="banner banner-info" role="status">
+              <MessageCircle className="icon" aria-hidden="true" />
+              <span>
+                <strong>New message from the requester.</strong> It arrived while Haley was busy; she'll take another pass when the current run ends.
+              </span>
+            </div>
+          )}
 
           {pending.length > 0 && (
             <section className="stack" aria-labelledby="pending-title">
@@ -172,6 +216,8 @@ export function TicketDetailPage() {
 
         <aside className="stack">
           <TicketProps detail={detail.data} onPatch={patchTicket} />
+          {ticket.sla && <SlaCard ticket={detail.data.ticket} />}
+          {schedules.length > 0 && <FollowUps schedules={schedules} />}
           {secrets.length > 0 && (
             <section className="card" aria-labelledby="cred-title">
               <div className="card-header">
@@ -203,8 +249,9 @@ export function TicketDetailPage() {
                   <li key={r.id}>
                     <Link to={`/runs/${r.id}`} className="list-row">
                       <span style={{ flex: 1, minWidth: 0 }}>
-                        <span className="title" style={{ display: "block" }}>
+                        <span className="title row" style={{ gap: 6 }}>
                           Run {runs.length - n}
+                          <RunModeBadge mode={r.mode} />
                         </span>
                         <span className="meta">
                           {r.created_by} · <RelativeTime iso={r.created_at} />
@@ -223,13 +270,22 @@ export function TicketDetailPage() {
   );
 }
 
-function RunBanner({ run, pendingCount }: { run: Run; pendingCount: number }) {
+function RunBanner({ run, pendingCount, onRunLive, starting }: { run: Run; pendingCount: number; onRunLive: () => void; starting: boolean }) {
+  const plan = run.mode === "plan";
   if (run.status === "queued" || run.status === "running") {
     return (
       <div className="banner banner-info" role="status">
         <Spinner />
         <span className="spacer">
-          <strong>Haley is working on this ticket.</strong> Updates appear below as she goes.
+          {plan ? (
+            <>
+              <strong>Haley is planning this ticket (dry run).</strong> Nothing will be changed and the requester won't be contacted.
+            </>
+          ) : (
+            <>
+              <strong>Haley is working on this ticket.</strong> Updates appear below as she goes.
+            </>
+          )}
         </span>
         <Link to={`/runs/${run.id}`} className="row nowrap" style={{ gap: 4 }}>
           Watch live <ArrowRight className="icon-sm" aria-hidden="true" />
@@ -250,12 +306,28 @@ function RunBanner({ run, pendingCount }: { run: Run; pendingCount: number }) {
       </div>
     );
   }
+  if (run.status === "completed" && plan) {
+    return (
+      <div className="banner banner-plan" role="status">
+        <ClipboardList className="icon" aria-hidden="true" />
+        <span className="spacer">
+          <strong>Plan ready.</strong> Haley's dry run finished without changing anything. Review her plan below, then let her do it for real.
+        </span>
+        <Link to={`/runs/${run.id}`} className="nowrap">
+          View plan run
+        </Link>
+        <button className="btn btn-primary btn-sm" onClick={onRunLive} disabled={starting}>
+          {starting ? <Spinner /> : <Play className="icon-sm" aria-hidden="true" />} Run for real
+        </button>
+      </div>
+    );
+  }
   if (run.status === "failed") {
     return (
       <div className="banner banner-error" role="status">
         <TriangleAlert className="icon" aria-hidden="true" />
         <span className="spacer">
-          <strong>Haley's last run failed.</strong> {run.error}
+          <strong>{plan ? "Haley's plan run failed." : "Haley's last run failed."}</strong> {run.error}
         </span>
         <Link to={`/runs/${run.id}`} className="nowrap">
           View run
@@ -350,6 +422,29 @@ function TicketProps({ detail, onPatch }: { detail: TicketDetail; onPatch: (p: T
               </a>
             )}
           </dd>
+          {t.channel && (
+            <>
+              <dt>Channel</dt>
+              <dd>
+                <span title={CHANNEL_META[t.channel]?.help}>
+                  <ChannelBadge channel={t.channel} />
+                </span>
+              </dd>
+            </>
+          )}
+          {t.assurance && (
+            <>
+              <dt>Identity</dt>
+              <dd className="stack-sm" style={{ gap: 4 }}>
+                <span>
+                  <AssuranceBadge assurance={t.assurance} verification={t.verification} />
+                </span>
+                <span className="muted" style={{ fontSize: "var(--text-sm)", overflowWrap: "anywhere" }}>
+                  {t.verification || ASSURANCE_META[t.assurance]?.how}
+                </span>
+              </dd>
+            </>
+          )}
           <dt>Updated</dt>
           <dd>
             <RelativeTime iso={t.updated_at} />
@@ -449,6 +544,17 @@ function TimelineItem({ event: e, action }: { event: TicketEvent; action: Action
       body = e.body.trim() ? <div className="pre-wrap">{e.body}</div> : <span className="muted">No description.</span>;
       break;
     case "comment":
+      if (typeof e.meta.channel === "string") {
+        // Messages that arrived from the requester's channel (email, Slack, Teams, chat) are theirs, not internal notes.
+        cardClass += " inbound";
+        label = (
+          <span className="row" style={{ gap: 4 }}>
+            <MessageCircle className="icon-sm" aria-hidden="true" /> wrote via {CHANNEL_META[e.meta.channel as keyof typeof CHANNEL_META]?.label ?? e.meta.channel}
+          </span>
+        );
+        body = <div className="pre-wrap">{e.body}</div>;
+        break;
+      }
       cardClass += " note";
       label = (
         <span className="row" style={{ gap: 4 }}>
@@ -460,14 +566,19 @@ function TimelineItem({ event: e, action }: { event: TicketEvent; action: Action
       cardClass += " reply";
       label = (
         <span className="row" style={{ gap: 4 }}>
-          <Reply className="icon-sm" aria-hidden="true" /> Replied to requester
+          <Reply className="icon-sm" aria-hidden="true" /> {e.meta.auto ? "Automatic reply" : "Replied to requester"}
         </span>
       );
       break;
     case "agent_note":
       cardClass += " haley";
       if (e.meta.error) cardClass += " error";
-      label = e.meta.summary ? (
+      if (e.meta.plan) cardClass += " plan";
+      label = e.meta.summary && e.meta.plan ? (
+        <span className="row" style={{ gap: 6 }}>
+          <RunModeBadge mode="plan" />
+        </span>
+      ) : e.meta.summary ? (
         <Pill tone="violet">Summary</Pill>
       ) : e.meta.error ? (
         <Pill tone="red">Stopped</Pill>
@@ -501,6 +612,7 @@ function TimelineItem({ event: e, action }: { event: TicketEvent; action: Action
           {runLink}
         </header>
         <div className="tl-card-body">{body}</div>
+        {e.kind === "reply" && isDelivery(e.meta.delivery) && <DeliveryLine delivery={e.meta.delivery} />}
       </article>
     </li>
   );
@@ -581,5 +693,103 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
         </button>
       </div>
     </form>
+  );
+}
+
+function isDelivery(v: unknown): v is Delivery {
+  return Boolean(v) && typeof v === "object" && typeof (v as Delivery).delivered === "boolean";
+}
+
+function DeliveryLine({ delivery }: { delivery: Delivery }) {
+  return (
+    <div className={`delivery-line ${delivery.delivered ? "ok" : "failed"}`}>
+      {delivery.delivered ? <Check className="icon-xs" aria-hidden="true" /> : <Undo2 className="icon-xs" aria-hidden="true" />}
+      <span>{delivery.delivered ? `Delivered: ${delivery.detail}` : `Not delivered: ${delivery.detail}`}</span>
+    </div>
+  );
+}
+
+function SlaRow({ label, state, due }: { label: string; state: SlaState; due: string }) {
+  const done = state === "met";
+  return (
+    <div className="sla-row">
+      <div className="sla-row-head">
+        <span className="sla-label">{label}</span>
+        <SlaStatePill state={state} />
+      </div>
+      <span className="muted" style={{ fontSize: "var(--text-sm)" }} title={absoluteTime(due)}>
+        {done ? (
+          <>Target {absoluteTime(due)}</>
+        ) : (
+          <>
+            {state === "breached" ? "Was due " : "Due "}
+            <RelativeTime iso={due} /> · {absoluteTime(due)}
+          </>
+        )}
+      </span>
+    </div>
+  );
+}
+
+function SlaCard({ ticket }: { ticket: TicketDetail["ticket"] }) {
+  const sla = ticket.sla!;
+  const breached = sla.response === "breached" || sla.resolution === "breached";
+  return (
+    <section className={`card ${breached ? "card-alert" : ""}`} aria-labelledby="sla-title">
+      <div className="card-header">
+        <h2 id="sla-title">SLA</h2>
+        <span className="spacer" />
+        <span className="muted" style={{ fontSize: "var(--text-sm)" }}>
+          {PRIORITY_META[ticket.priority].label} priority
+        </span>
+      </div>
+      <div className="card-body stack-sm" style={{ gap: 12 }}>
+        <SlaRow label="First response" state={sla.response} due={sla.responseDue} />
+        <SlaRow label="Resolution" state={sla.resolution} due={sla.resolutionDue} />
+        {ticket.first_response_at && (
+          <span className="muted" style={{ fontSize: "var(--text-sm)" }}>
+            First responded <RelativeTime iso={ticket.first_response_at} />
+          </span>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function FollowUps({ schedules }: { schedules: Schedule[] }) {
+  return (
+    <section className="card" aria-labelledby="fu-title">
+      <div className="card-header">
+        <CalendarClock className="icon-sm" aria-hidden="true" />
+        <h2 id="fu-title">Scheduled follow-ups</h2>
+      </div>
+      <ul className="list">
+        {schedules.map((s) => (
+          <li key={s.id} className="list-row" style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
+            <span className="row row-wrap" style={{ gap: 6 }}>
+              <span className="title">{s.title}</span>
+              {s.cadence !== "once" && <Pill tone="blue">{CADENCE_META[s.cadence].every}</Pill>}
+              <RunModeBadge mode={s.mode} />
+            </span>
+            <span className="meta">
+              {s.enabled && s.next_run_at ? (
+                <>
+                  Next <RelativeTime iso={s.next_run_at} />
+                </>
+              ) : s.last_run_id ? (
+                <>
+                  Ran <RelativeTime iso={s.last_run_at} /> · <Link to={`/runs/${s.last_run_id}`}>View run</Link>
+                </>
+              ) : (
+                "Not scheduled"
+              )}
+            </span>
+            <span className="secondary line-clamp-2" style={{ fontSize: "var(--text-sm)" }} title={s.instruction}>
+              {s.instruction}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

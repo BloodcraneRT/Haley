@@ -1,7 +1,7 @@
 import { Ticket as TicketIcon, Zap } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { Run } from "../api";
-import { RunStatusPill } from "./Pill";
+import { RunModeBadge, RunStatusPill } from "./Pill";
 import { RelativeTime } from "./RelativeTime";
 
 /** One run in a list: kind icon, title, context line and status. */
@@ -20,6 +20,7 @@ export function RunRow({ run, showOrg = true }: { run: Run & { org_name?: string
           {run.created_by} · <RelativeTime iso={run.created_at} />
         </span>
       </span>
+      <RunModeBadge mode={run.mode} />
       <RunStatusPill status={run.status} />
     </Link>
   );

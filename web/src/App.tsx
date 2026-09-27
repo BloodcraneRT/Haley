@@ -7,7 +7,9 @@ import { Layout } from "./components/Layout";
 import { AppProvider } from "./lib/app-context";
 import { ApprovalsPage } from "./pages/Approvals";
 import { AuditPage } from "./pages/Audit";
+import { ChannelsPage } from "./pages/Channels";
 import { ClientDetailPage } from "./pages/ClientDetail";
+import { ClientReportPage } from "./pages/ClientReport";
 import { ClientsPage } from "./pages/Clients";
 import { DashboardPage } from "./pages/Dashboard";
 import { KbArticlePage, KbNewPage } from "./pages/KbArticle";
@@ -17,6 +19,7 @@ import { RunDetailPage } from "./pages/RunDetail";
 import { RunsPage } from "./pages/Runs";
 import { SettingsPage } from "./pages/Settings";
 import { SignIn } from "./pages/SignIn";
+import { SimulatorPage } from "./pages/Simulator";
 import { TasksPage } from "./pages/Tasks";
 import { TicketDetailPage } from "./pages/TicketDetail";
 import { TicketsPage } from "./pages/Tickets";
@@ -107,6 +110,9 @@ export function App() {
             <Route path="approvals" element={<ApprovalsPage />} />
             <Route path="clients" element={<ClientsPage />} />
             <Route path="clients/:id" element={<Keyed><ClientDetailPage /></Keyed>} />
+            <Route path="clients/:id/report" element={<Keyed><ClientReportPage /></Keyed>} />
+            <Route path="channels" element={<ChannelsPage />} />
+            <Route path="simulate" element={<SimulatorPage />} />
             <Route path="tickets" element={<TicketsPage />} />
             <Route path="tickets/:id" element={<Keyed><TicketDetailPage /></Keyed>} />
             <Route path="tasks" element={<TasksPage />} />

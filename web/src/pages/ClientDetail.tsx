@@ -2,9 +2,12 @@ import {
   BookOpen,
   ChevronRight,
   CircleCheck,
+  FileChartColumn,
   FlaskConical,
   Globe,
   Inbox,
+  MessagesSquare,
+  OctagonPause,
   Plug,
   Plus,
   RefreshCw,
@@ -32,11 +35,13 @@ import { AutonomyPicker, PolicyMatrix } from "../components/AutonomyPicker";
 import { Disclosure } from "../components/Disclosure";
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
 import { ConfirmModal, Modal } from "../components/Modal";
+import { PausedBanner, SafetySettingsForm, usePauseControl } from "../components/OrgSafety";
 import { PageHeader } from "../components/PageHeader";
-import { IntegrationStatusPill, ModePill, RiskPill } from "../components/Pill";
+import { IntegrationStatusPill, ModePill, Pill, RiskPill } from "../components/Pill";
 import { ProviderLogo } from "../components/ProviderLogo";
 import { RelativeTime } from "../components/RelativeTime";
 import { RunRow } from "../components/RunRow";
+import { SchedulesSection } from "../components/Schedules";
 import { usePoll } from "../hooks/usePoll";
 import { useApp } from "../lib/app-context";
 import { AUTONOMY_META, isRunActive, PROVIDER_NAMES } from "../lib/format";
@@ -49,6 +54,8 @@ export function ClientDetailPage() {
   const org = usePoll(() => api.org(id), [id]);
   const runs = usePoll(() => api.runs({ orgId: id }), [id], (d) => (d?.some((r) => isRunActive(r.status)) ? 3000 : null));
   const openTickets = usePoll(() => api.tickets({ orgId: id, status: "open" }), [id]);
+  const providers = usePoll(() => api.providers(), []);
+  const pause = usePauseControl(org.data, () => void org.reload());
   const [savingAutonomy, setSavingAutonomy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -103,6 +110,7 @@ export function ClientDetailPage() {
   };
 
   const connected = new Set(o.integrations.map((i) => i.provider));
+  const allConnected = providers.data ? providers.data.every((p) => connected.has(p.id)) : false;
 
   return (
     <>
@@ -129,6 +137,11 @@ export function ClientDetailPage() {
         }
         actions={
           <>
+            {!pause.paused && (
+              <button className="btn btn-danger-ghost" onClick={pause.askToPause} title="Kill switch: stop Haley acting for this client">
+                <OctagonPause className="icon-sm" aria-hidden="true" /> Pause Haley
+              </button>
+            )}
             <Link to={`/tasks?orgId=${o.id}`} className="btn">
               <Zap className="icon-sm" aria-hidden="true" /> Ask Haley
             </Link>
@@ -138,6 +151,8 @@ export function ClientDetailPage() {
           </>
         }
       />
+
+      {pause.paused && <PausedBanner orgName={o.name} onResume={pause.resume} busy={pause.busy} />}
 
       <nav className="row row-wrap" style={{ marginBottom: 20 }} aria-label="Client records">
         <Link to={`/tickets?orgId=${o.id}`} className="btn btn-sm">
@@ -153,6 +168,12 @@ export function ClientDetailPage() {
         <Link to={`/audit?orgId=${o.id}`} className="btn btn-sm">
           <ScrollText className="icon-sm" aria-hidden="true" /> Audit log
         </Link>
+        <Link to={`/simulate?orgId=${o.id}`} className="btn btn-sm">
+          <MessagesSquare className="icon-sm" aria-hidden="true" /> Try as end user
+        </Link>
+        <Link to={`/clients/${o.id}/report`} className="btn btn-sm">
+          <FileChartColumn className="icon-sm" aria-hidden="true" /> Client report
+        </Link>
       </nav>
 
       <div className="layout-main-side layout-client">
@@ -162,7 +183,7 @@ export function ClientDetailPage() {
               <h2 id="int-title">Integrations</h2>
               <span className="count">{o.integrations.length}</span>
               <span className="spacer" />
-              <button className="btn btn-sm" onClick={() => setConnectOpen(true)} disabled={connected.size >= 2}>
+              <button className="btn btn-sm" onClick={() => setConnectOpen(true)} disabled={allConnected}>
                 <Plug className="icon-sm" aria-hidden="true" /> Connect
               </button>
             </div>
@@ -178,7 +199,8 @@ export function ClientDetailPage() {
                     </button>
                   }
                 >
-                  Without a connection Haley can only work with tickets and the knowledge base. Use a sandbox tenant to try her out safely.
+                  Without a connection Haley can only work with tickets and the knowledge base. Use a sandbox tenant to try her out safely. Slack
+                  can be connected too, so employees can message Haley directly.
                 </EmptyState>
               </div>
             ) : (
@@ -201,11 +223,15 @@ export function ClientDetailPage() {
                 to the customer's systems.
               </p>
               <AutonomyPicker value={o.autonomy} onChange={setAutonomy} disabled={savingAutonomy} />
-              <Disclosure summary="Approval matrix by risk level">
-                <PolicyMatrix />
+              <Disclosure summary="Approval rules by risk level" defaultOpen={o.autonomy === "unattended"}>
+                <PolicyMatrix settings={o.settings} highlight={o.autonomy} />
               </Disclosure>
             </div>
           </section>
+
+          <SafetySettingsForm org={o} onSaved={() => void org.reload()} pause={pause} />
+
+          <SchedulesSection orgId={o.id} orgName={o.name} paused={o.settings.paused} />
 
           <section aria-labelledby="runs-title">
             <div className="section-title">
@@ -269,6 +295,7 @@ export function ClientDetailPage() {
       >
         This permanently removes the client and everything Haley stored for it. The audit log keeps a record of the deletion.
       </ConfirmModal>
+      {pause.dialog}
     </>
   );
 }
@@ -365,6 +392,8 @@ function IntegrationCard({ integration: i, onChanged }: { integration: Integrati
   const [removing, setRemoving] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  // Slack is how end users reach Haley, not a set of tools she acts with.
+  const isChannel = i.provider === "slack";
 
   const test = async () => {
     setTesting(true);
@@ -409,16 +438,18 @@ function IntegrationCard({ integration: i, onChanged }: { integration: Integrati
       </div>
       <div className="row row-wrap">
         <IntegrationStatusPill status={i.status} />
-        <ModePill mode={i.mode} />
+        {isChannel ? <Pill tone="blue">End-user channel</Pill> : <ModePill mode={i.mode} />}
       </div>
       {i.status_detail && <p className={`status-detail ${i.status === "error" ? "error" : ""}`}>{i.status_detail}</p>}
       <div className="integration-actions">
         <button className="btn btn-sm" onClick={test} disabled={testing}>
           {testing ? <Spinner /> : <RefreshCw className="icon-sm" aria-hidden="true" />} Test
         </button>
-        <button className="btn btn-sm" onClick={() => setToolsOpen(true)}>
-          <Wrench className="icon-sm" aria-hidden="true" /> View tools
-        </button>
+        {!isChannel && (
+          <button className="btn btn-sm" onClick={() => setToolsOpen(true)}>
+            <Wrench className="icon-sm" aria-hidden="true" /> View tools
+          </button>
+        )}
         <span className="spacer" />
         <button className="btn btn-sm btn-danger-ghost" onClick={() => setConfirmRemove(true)}>
           <Trash className="icon-sm" aria-hidden="true" /> Remove
@@ -433,7 +464,7 @@ function IntegrationCard({ integration: i, onChanged }: { integration: Integrati
         onConfirm={remove}
         onClose={() => setConfirmRemove(false)}
       >
-        Haley will lose access to this tenant immediately. Stored credentials are deleted; you can reconnect at any time.
+        {isChannel ? "Employees will no longer be able to message Haley from this workspace." : "Haley will lose access to this tenant immediately."} Stored credentials are deleted; you can reconnect at any time.
         {i.mode === "sandbox" && " The simulated tenant's state is discarded."}
       </ConfirmModal>
     </article>
@@ -528,12 +559,25 @@ function ConnectModal({
   useEffect(() => {
     if (open && !provider && providers.data) {
       const first = providers.data.find((p) => !taken.has(p.id));
-      if (first) setProvider(first.id);
+      if (first) choose(first);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, providers.data, provider]);
 
   const info: ProviderInfo | undefined = providers.data?.find((p) => p.id === provider);
+
+  const choose = (p: ProviderInfo) => {
+    setProvider(p.id);
+    setConfig({});
+    setError(null);
+    // Providers without a simulated tenant (Slack) can only connect live.
+    setMode(p.supportsSandbox ? "sandbox" : "live");
+  };
+
+  const groups: Array<{ kind: ProviderInfo["kind"]; title: string; help: string }> = [
+    { kind: "directory", title: "Directories (tools for Haley)", help: "Where Haley looks things up and makes changes." },
+    { kind: "channel", title: "Channels (how end users reach Haley)", help: "Employees message Haley here; she answers in the same place." },
+  ];
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -565,7 +609,7 @@ function ConnectModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={`Connect a tenant for ${org.name}`}
+      title={`Connect ${org.name}`}
       size="wide"
       footer={
         <>
@@ -574,7 +618,7 @@ function ConnectModal({
           </button>
           <button className="btn btn-primary" type="submit" form="connect-form" disabled={!info || busy}>
             {busy ? <Spinner /> : <Plug className="icon-sm" aria-hidden="true" />}
-            {mode === "sandbox" ? "Create sandbox" : "Connect & test"}
+            {mode === "sandbox" && info?.supportsSandbox ? "Create sandbox" : "Connect & test"}
           </button>
         </>
       }
@@ -584,39 +628,45 @@ function ConnectModal({
         !providers.error && <Loading />
       ) : (
         <form id="connect-form" className="stack" onSubmit={submit}>
-          <div className="field">
-            <span className="field-label">Provider</span>
-            <div className="choice-grid" role="radiogroup" aria-label="Provider">
-              {providers.data.map((p) => {
-                const isTaken = taken.has(p.id);
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={provider === p.id}
-                    className="choice"
-                    disabled={isTaken}
-                    style={isTaken ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
-                    onClick={() => {
-                      setProvider(p.id);
-                      setConfig({});
-                      setError(null);
-                    }}
-                  >
-                    <span className="choice-title">
-                      <ProviderLogo provider={p.id} />
-                      {p.name}
-                    </span>
-                    <span className="choice-desc">{isTaken ? "Already connected for this client. Remove it first to reconnect." : p.description}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          {groups.map((g) => {
+            const items = providers.data!.filter((p) => (p.kind ?? "directory") === g.kind);
+            if (!items.length) return null;
+            return (
+              <div className="field" key={g.kind}>
+                <span className="field-label">{g.title}</span>
+                <span className="help" style={{ marginTop: -3 }}>
+                  {g.help}
+                </span>
+                <div className="choice-grid" role="radiogroup" aria-label={g.title}>
+                  {items.map((p) => {
+                    const isTaken = taken.has(p.id);
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={provider === p.id}
+                        className="choice"
+                        disabled={isTaken}
+                        style={isTaken ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
+                        onClick={() => choose(p)}
+                      >
+                        <span className="choice-title">
+                          <ProviderLogo provider={p.id} />
+                          {p.name}
+                        </span>
+                        <span className="choice-desc">{isTaken ? "Already connected for this client. Remove it first to reconnect." : p.description}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
 
           {info && (
             <>
+              {info.supportsSandbox && (
               <div className="field">
                 <span className="field-label">Mode</span>
                 <div className="choice-grid" role="radiogroup" aria-label="Mode">
@@ -634,6 +684,7 @@ function ConnectModal({
                   </button>
                 </div>
               </div>
+              )}
 
               <div className="field">
                 <span className="field-label">What Haley can do</span>
@@ -664,7 +715,7 @@ function ConnectModal({
               ) : (
                 <div className="grid-2" style={{ alignItems: "start" }}>
                   <div className="stack-sm">
-                    <span className="field-label">Setup in the customer's tenant</span>
+                    <span className="field-label">{info.kind === "channel" ? `Setup in ${org.name}'s ${info.name}` : "Setup in the customer's tenant"}</span>
                     <ol className="steps">
                       {info.setupSteps.map((s, n) => (
                         <li key={n}>

@@ -21,7 +21,7 @@ import { SlackChannel } from "./channels/slack.js";
 import { TeamsChannel } from "./channels/teams.js";
 import { clientReport } from "./report.js";
 import { registerHooks } from "./routes/hooks.js";
-import { Scheduler } from "./scheduler.js";
+import { nextOccurrence, Scheduler } from "./scheduler.js";
 import { slaFor } from "./sla.js";
 import { buildTranscript } from "./transcript.js";
 import { AUTONOMY_LEVELS, TICKET_PRIORITIES, TICKET_STATUSES, type Integration, type Org, type Ticket } from "./types.js";
@@ -169,7 +169,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
       const sla = slaFor(t, org.settings.sla);
       return sla.response === "breached" || sla.resolution === "breached";
     }).length;
-    return { ...store.stats(), slaBreached, schedules: store.listSchedules().filter((s) => s.enabled).length };
+    return { ...store.stats(), slaBreached, schedules: store.listSchedules().filter((s) => s.enabled && s.next_run_at).length };
   });
   app.get("/api/providers", async () => PROVIDERS);
   app.get("/api/templates", async () => TASK_TEMPLATES);
@@ -591,7 +591,14 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
       req,
     );
     const { startAt, ...rest } = patch;
-    const updated = store.updateSchedule(current.id, { ...rest, ...(startAt ? { next_run_at: new Date(startAt).toISOString() } : {}) });
+    let nextRunAt = startAt ? new Date(startAt).toISOString() : current.next_run_at;
+    if (patch.enabled && !current.enabled && !startAt) {
+      // A one-time schedule that already fired has nowhere to go; a recurring one skips the runs it missed.
+      if (!nextRunAt) throw new HttpError(400, "Choose when this schedule should next run (startAt).");
+      if (Date.parse(nextRunAt) < Date.now()) nextRunAt = nextOccurrence(nextRunAt, patch.cadence ?? current.cadence, Date.now());
+      if (!nextRunAt) throw new HttpError(400, "This one-time schedule's time has passed; choose a new startAt.");
+    }
+    const updated = store.updateSchedule(current.id, { ...rest, next_run_at: nextRunAt });
     store.audit({ orgId: current.org_id, actor: actor(req), action: "schedule.updated", target: current.id, detail: { fields: Object.keys(patch) } });
     return updated;
   });

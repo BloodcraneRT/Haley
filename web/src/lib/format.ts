@@ -1,4 +1,4 @@
-import type { ActionStatus, Autonomy, IntegrationStatus, Risk, RunStatus, TicketPriority, TicketStatus } from "../api";
+import type { ActionStatus, Assurance, Autonomy, Cadence, IntegrationStatus, Risk, RunStatus, SlaState, TicketChannel, TicketPriority, TicketStatus } from "../api";
 
 export type Tone = "neutral" | "blue" | "green" | "amber" | "red" | "violet" | "teal";
 
@@ -34,6 +34,20 @@ export function absoluteTime(iso: string): string {
 
 const numberFmt = new Intl.NumberFormat();
 export const formatNumber = (n: number) => numberFmt.format(n);
+
+/** Compact duration for minutes: "45 min", "3.5 h", "2 d". */
+export function formatMinutes(minutes: number | null | undefined): string {
+  if (minutes == null || Number.isNaN(minutes)) return "—";
+  if (minutes < 60) return `${Math.round(minutes)} min`;
+  const hours = minutes / 60;
+  if (hours < 48) return `${hours < 10 ? Math.round(hours * 10) / 10 : Math.round(hours)} h`;
+  const days = hours / 24;
+  return `${days < 10 ? Math.round(days * 10) / 10 : Math.round(days)} d`;
+}
+
+export function formatPercent(value: number | null | undefined): string {
+  return value == null ? "—" : `${Math.round(value * 10) / 10}%`;
+}
 
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -78,6 +92,7 @@ export const ACTION_STATUS_META: Record<ActionStatus, { label: string; tone: Ton
   approved: { label: "Approved", tone: "teal" },
   rejected: { label: "Rejected", tone: "neutral" },
   blocked: { label: "Blocked by policy", tone: "neutral" },
+  planned: { label: "Planned – not executed", tone: "blue" },
 };
 
 export const PRIORITY_META: Record<TicketPriority, { label: string; tone: Tone }> = {
@@ -112,9 +127,47 @@ export const AUTONOMY_META: Record<Autonomy, { label: string; tone: Tone; summar
     summary: "Routine changes run automatically.",
     detail: "Routine write actions (licenses, groups, mailbox settings) run without waiting. Security-sensitive actions such as password resets, sign-in blocks and deletions still need approval.",
   },
+  unattended: {
+    label: "Unattended",
+    tone: "teal",
+    summary: "End users self-serve, no technician.",
+    detail:
+      "Verified requesters get their own problems fixed with no technician: password resets, sign-outs, Temporary Access Passes on their own account. Access grants need an authorized approver; email alone never authorizes security-sensitive changes; protected accounts and unusual volume fall back to approvals.",
+  },
 };
 
-export const PROVIDER_NAMES: Record<string, string> = { m365: "Microsoft 365", google: "Google Workspace" };
+export const PROVIDER_NAMES: Record<string, string> = { m365: "Microsoft 365", google: "Google Workspace", slack: "Slack" };
+
+export const CHANNEL_META: Record<TicketChannel, { label: string; help: string }> = {
+  portal: { label: "Portal", help: "Entered in the Haley dashboard by a technician" },
+  api: { label: "API", help: "Submitted through the API (PSA or integration)" },
+  email: { label: "Email", help: "Arrived by email" },
+  slack: { label: "Slack", help: "Direct message or @mention in Slack" },
+  teams: { label: "Teams", help: "Message to the Haley bot in Microsoft Teams" },
+  chat: { label: "Chat", help: "Chat bridge (web widget, SMS, Google Chat) or the end-user simulator" },
+};
+
+export const ASSURANCE_META: Record<Assurance, { label: string; tone: Tone; short: string; how: string }> = {
+  none: { label: "Unverified", tone: "neutral", short: "None", how: "Nothing beyond what they typed: an unsigned API call, a chat user the bridge didn't vouch for, or email that failed DMARC." },
+  email: { label: "Email verified", tone: "blue", short: "Email", how: "DMARC-aligned email. The domain vouches for the sender, but mailboxes get phished and spoofed." },
+  chat: { label: "Chat verified", tone: "violet", short: "Chat", how: "A signed-in chat identity: a Slack workspace member, or a chat bridge that authenticated the user." },
+  directory: { label: "Directory verified", tone: "green", short: "Directory", how: "Matched to an active directory account through SSO (Teams with Entra ID)." },
+  technician: { label: "Technician", tone: "teal", short: "Technician", how: "Entered or confirmed by a technician." },
+};
+
+export const SLA_STATE_META: Record<SlaState, { label: string; tone: Tone }> = {
+  pending: { label: "On track", tone: "neutral" },
+  at_risk: { label: "At risk", tone: "amber" },
+  breached: { label: "Breached", tone: "red" },
+  met: { label: "Met", tone: "green" },
+};
+
+export const CADENCE_META: Record<Cadence, { label: string; every: string }> = {
+  once: { label: "Once", every: "One time" },
+  daily: { label: "Daily", every: "Every day" },
+  weekly: { label: "Weekly", every: "Every week" },
+  monthly: { label: "Monthly", every: "Every month" },
+};
 
 export const isRunActive = (status: RunStatus) => status === "queued" || status === "running";
 

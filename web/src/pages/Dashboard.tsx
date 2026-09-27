@@ -2,13 +2,18 @@ import {
   Activity,
   ArrowRight,
   BookOpen,
+  Building,
+  CalendarClock,
   CircleCheck,
   FlaskConical,
   Flag,
   Inbox,
+  MessagesSquare,
+  OctagonPause,
   Plus,
   ShieldCheck,
   Ticket as TicketIcon,
+  TimerOff,
   TriangleAlert,
   Wrench,
   Zap,
@@ -94,6 +99,7 @@ export function DashboardPage() {
   };
 
   const noOrgs = orgs.data !== undefined && orgs.data.length === 0;
+  const paused = (orgs.data ?? []).filter((o) => o.settings?.paused);
   const queue = approvals.data ?? [];
   const recentRuns = (runs.data ?? []).slice(0, 8);
 
@@ -112,6 +118,9 @@ export function DashboardPage() {
         actions={
           !noOrgs && (
             <>
+              <Link to="/simulate" className="btn">
+                <MessagesSquare className="icon-sm" aria-hidden="true" /> Try as end user
+              </Link>
               <Link to="/tasks" className="btn">
                 <Zap className="icon-sm" aria-hidden="true" /> Ask Haley
               </Link>
@@ -124,6 +133,22 @@ export function DashboardPage() {
       />
 
       {orgs.error && <ErrorBanner error={orgs.error} onRetry={orgs.reload} />}
+
+      {paused.length > 0 && (
+        <div className="banner banner-error" role="status" style={{ marginBottom: 20 }}>
+          <OctagonPause className="icon" aria-hidden="true" />
+          <span>
+            <strong>Haley is paused for {paused.length === 1 ? "1 client" : `${paused.length} clients`}:</strong>{" "}
+            {paused.map((o, i) => (
+              <span key={o.id}>
+                {i > 0 && ", "}
+                <Link to={`/clients/${o.id}`}>{o.name}</Link>
+              </span>
+            ))}
+            . Their tickets go straight to technicians and scheduled runs are skipped until she's resumed.
+          </span>
+        </div>
+      )}
 
       {noOrgs && (
         <section className="card welcome" aria-labelledby="welcome-title">
@@ -174,7 +199,7 @@ export function DashboardPage() {
 
       {!noOrgs && (
         <>
-          <div className="kpis">
+          <div className="kpis kpis-dashboard">
             <Kpi label="Open tickets" value={stats?.openTickets} icon={<TicketIcon className="icon-sm" />} to="/tickets?status=open" />
             <Kpi
               label="To approve"
@@ -190,10 +215,20 @@ export function DashboardPage() {
               to="/tickets?status=escalated"
               variant={stats && stats.escalated > 0 ? "alert" : undefined}
             />
+            <Kpi
+              label="SLA breached"
+              value={stats?.slaBreached}
+              icon={<TimerOff className="icon-sm" />}
+              to="/tickets?sla=breached"
+              hint="Open tickets past target"
+              variant={stats && stats.slaBreached > 0 ? "alert" : undefined}
+            />
             <Kpi label="Resolved (7d)" value={stats?.resolvedThisWeek} icon={<CircleCheck className="icon-sm" />} to="/tickets?status=resolved" />
             <Kpi label="Changes (7d)" value={stats?.actionsExecutedThisWeek} icon={<Wrench className="icon-sm" />} hint="Customer-system changes" to="/audit" />
             <Kpi label="KB articles" value={stats?.kbArticles} icon={<BookOpen className="icon-sm" />} to="/kb" />
             <Kpi label="Active runs" value={stats?.activeRuns} icon={<Activity className="icon-sm" />} to="/runs" />
+            <Kpi label="Clients" value={stats?.orgs} icon={<Building className="icon-sm" />} to="/clients" />
+            <Kpi label="Schedules" value={stats?.schedules} icon={<CalendarClock className="icon-sm" />} hint="Enabled audits & follow-ups" to="/clients" />
           </div>
 
           <div className="layout-main-side layout-dashboard">

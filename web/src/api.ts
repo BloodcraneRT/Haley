@@ -5,8 +5,20 @@
 
 // ------------------------------------------------------------------ domain
 
-export type Autonomy = "read_only" | "supervised" | "autonomous";
-export type ProviderId = "m365" | "google";
+export type Autonomy = "read_only" | "supervised" | "autonomous" | "unattended";
+export const AUTONOMY_LEVELS: Autonomy[] = ["read_only", "supervised", "autonomous", "unattended"];
+export type ProviderId = "m365" | "google" | "slack";
+export type ProviderKind = "directory" | "channel";
+
+/** How strongly the requester's identity is established, weakest first (server/src/types.ts). */
+export type Assurance = "none" | "email" | "chat" | "directory" | "technician";
+export const ASSURANCE_LEVELS: Assurance[] = ["none", "email", "chat", "directory", "technician"];
+
+/** Where a ticket came from; replies go back the same way. */
+export type TicketChannel = "portal" | "api" | "email" | "slack" | "teams" | "chat";
+export type RunMode = "live" | "plan";
+export type Cadence = "once" | "daily" | "weekly" | "monthly";
+export const CADENCES: Cadence[] = ["once", "daily", "weekly", "monthly"];
 export type IntegrationMode = "live" | "sandbox";
 export type IntegrationStatus = "unknown" | "connected" | "error";
 
@@ -34,7 +46,28 @@ export const TICKET_PRIORITIES: TicketPriority[] = ["low", "normal", "high", "ur
 export type RunStatus = "queued" | "running" | "awaiting_approval" | "completed" | "failed";
 export type RunKind = "ticket" | "task";
 export type Risk = "read" | "internal" | "write" | "destructive";
-export type ActionStatus = "executed" | "failed" | "pending_approval" | "approved" | "rejected" | "blocked";
+export type ActionStatus = "executed" | "failed" | "pending_approval" | "approved" | "rejected" | "blocked" | "planned";
+
+export interface SlaTarget {
+  responseMinutes: number;
+  resolutionMinutes: number;
+}
+
+export interface OrgSettings {
+  /** Email domains (besides the primary domain) whose senders belong to this org. */
+  emailDomains: string[];
+  /** Entra tenant id used to route Microsoft Teams messages to this org. */
+  teamsTenantId: string;
+  /** People allowed to request changes to other users' accounts (managers, the IT contact). */
+  authorizedRequesters: string[];
+  /** Accounts Haley never changes without a technician. */
+  protectedAccounts: string[];
+  maxAutoChangesPerHour: number;
+  maxSelfServicePerUserPerDay: number;
+  /** Kill switch: Haley stops acting on this client's tickets. */
+  paused: boolean;
+  sla: Record<TicketPriority, SlaTarget>;
+}
 
 export interface Org {
   id: string;
@@ -42,6 +75,7 @@ export interface Org {
   domain: string;
   autonomy: Autonomy;
   notes: string;
+  settings: OrgSettings;
   created_at: string;
 }
 
@@ -77,12 +111,36 @@ export interface Ticket {
   priority: TicketPriority;
   category: string;
   assignee: string;
+  channel: TicketChannel;
+  /** Channel-specific routing for replies (thread ids, conversation ids, message ids). */
+  channel_ref: Record<string, string>;
+  /** How strongly the channel established who the requester is. */
+  assurance: Assurance;
+  /** How the requester was (or wasn't) verified. */
+  verification: string;
+  /** A requester message arrived while Haley was busy; she takes another pass when the current one ends. */
+  needs_followup: boolean;
+  first_response_at: string | null;
+  resolved_at: string | null;
+  sla_escalated: boolean;
   created_at: string;
   updated_at: string;
 }
 
+export type SlaState = "met" | "pending" | "at_risk" | "breached";
+
+/** server/src/sla.ts */
+export interface SlaStatus {
+  responseDue: string;
+  resolutionDue: string;
+  response: SlaState;
+  resolution: SlaState;
+}
+
 export interface TicketWithOrg extends Ticket {
   org_name: string;
+  /** Null when the ticket's org is gone. */
+  sla: SlaStatus | null;
 }
 
 export type TicketEventKind =
@@ -110,6 +168,7 @@ export interface Run {
   org_id: string;
   ticket_id: string | null;
   kind: RunKind;
+  mode: RunMode;
   title: string;
   instruction: string;
   status: RunStatus;
@@ -137,6 +196,8 @@ export interface Action {
   risk: Risk;
   description: string;
   rationale: string;
+  /** Why the policy held or blocked this call (empty when it ran automatically). */
+  policy_reason: string;
   status: ActionStatus;
   result: unknown;
   has_secrets: boolean;
@@ -150,6 +211,28 @@ export interface Action {
 export interface Approval extends Action {
   org_name: string;
   run_title: string;
+  ticket: { id: string; number: number; title: string } | null;
+}
+
+export interface Schedule {
+  id: string;
+  org_id: string;
+  /** Follow-ups Haley schedules on a ticket run as that ticket. */
+  ticket_id: string | null;
+  title: string;
+  instruction: string;
+  cadence: Cadence;
+  mode: RunMode;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_run_id: string | null;
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
+}
+
+export interface ScheduleListItem extends Schedule {
+  org_name: string;
   ticket: { id: string; number: number; title: string } | null;
 }
 
@@ -201,6 +284,76 @@ export interface ProviderInfo {
   fields: ProviderField[];
   setupSteps: string[];
   capabilities: string[];
+  supportsSandbox: boolean;
+  /** directory: tools Haley acts with; channel: how end users reach Haley. */
+  kind: ProviderKind;
+}
+
+export interface ChannelInfo {
+  id: "email" | "slack" | "teams" | "chat";
+  name: string;
+  enabled: boolean;
+  inbound: boolean;
+  outbound: boolean;
+  webhookUrl: string;
+  env: string[];
+}
+
+export interface SimulateInput {
+  orgId: string;
+  email: string;
+  name?: string;
+  text: string;
+  assurance?: Exclude<Assurance, "technician">;
+  threadId?: string;
+}
+
+export interface SimulateResult {
+  ticketId: string;
+  ticketNumber: number;
+  created: boolean;
+  runId: string | null;
+  threadId: string;
+}
+
+export interface CountRow {
+  name: string;
+  count: number;
+}
+
+/** server/src/report.ts clientReport() */
+export interface ClientReport {
+  org: { id: string; name: string; autonomy: Autonomy };
+  period: { from: string; to: string; days: number };
+  tickets: {
+    opened: number;
+    resolved: number;
+    stillOpen: number;
+    resolvedByHaleyAlone: number;
+    automationRate: number | null;
+    escalated: number;
+    medianResolutionMinutes: number | null;
+    byCategory: CountRow[];
+    byChannel: CountRow[];
+    byPriority: CountRow[];
+    topRequesters: CountRow[];
+  };
+  sla: {
+    responseCompliance: number | null;
+    resolutionCompliance: number | null;
+    responseBreaches: number;
+    resolutionBreaches: number;
+  };
+  changes: {
+    executed: number;
+    automatic: number;
+    approvedByTechnician: number;
+    rejected: number;
+    blockedByPolicy: number;
+    byTool: CountRow[];
+  };
+  knowledge: { articlesWrittenByHaley: number; articlesTotal: number };
+  timeSaved: { hours: number; assumptions: string };
 }
 
 export interface TaskTemplate {
@@ -233,10 +386,22 @@ export interface Stats {
   actionsExecutedThisWeek: number;
   kbArticles: number;
   activeRuns: number;
+  /** Open tickets past their response or resolution SLA. */
+  slaBreached: number;
+  /** Enabled schedules. */
+  schedules: number;
+}
+
+/** event.meta.delivery on replies: whether it reached the requester's channel. */
+export interface Delivery {
+  delivered: boolean;
+  detail: string;
 }
 
 export interface TicketDetail {
   ticket: TicketWithOrg;
+  /** Follow-ups Haley scheduled on this ticket. */
+  schedules: Schedule[];
   events: TicketEvent[];
   runs: Run[];
   actions: Action[];
@@ -367,6 +532,26 @@ export interface OrgInput {
   domain?: string;
   autonomy?: Autonomy;
   notes?: string;
+  settings?: Partial<OrgSettings>;
+}
+
+export interface ScheduleInput {
+  orgId: string;
+  title: string;
+  instruction: string;
+  cadence: Cadence;
+  mode?: RunMode;
+  /** ISO date-time with offset. */
+  startAt: string;
+}
+
+export interface SchedulePatch {
+  title?: string;
+  instruction?: string;
+  cadence?: Cadence;
+  mode?: RunMode;
+  enabled?: boolean;
+  startAt?: string;
 }
 
 export interface NewTicketInput {
@@ -419,11 +604,22 @@ export const api = {
   updateTicket: (id: string, input: TicketPatch) => patch<Ticket>(`/api/tickets/${enc(id)}`, input),
   addComment: (id: string, input: { body: string; kind: "comment" | "reply"; runAgent?: boolean }) =>
     post<{ event: TicketEvent; runId: string | null }>(`/api/tickets/${enc(id)}/comments`, input),
-  runTicket: (id: string) => post<Run>(`/api/tickets/${enc(id)}/run`),
+  runTicket: (id: string, mode: RunMode = "live") => post<Run>(`/api/tickets/${enc(id)}/run`, { mode }),
 
   runs: (q: { orgId?: string; kind?: RunKind } = {}) => get<RunWithOrg[]>("/api/runs", q),
   run: (id: string) => get<RunDetail>(`/api/runs/${enc(id)}`),
-  startTask: (input: { orgId: string; title: string; instruction: string }) => post<Run>("/api/runs", input),
+  startTask: (input: { orgId: string; title: string; instruction: string; mode?: RunMode }) => post<Run>("/api/runs", input),
+
+  schedules: (q: { orgId?: string } = {}) => get<ScheduleListItem[]>("/api/schedules", q),
+  createSchedule: (input: ScheduleInput) => post<Schedule>("/api/schedules", input),
+  updateSchedule: (id: string, input: SchedulePatch) => patch<Schedule>(`/api/schedules/${enc(id)}`, input),
+  deleteSchedule: (id: string) => del<{ ok: true }>(`/api/schedules/${enc(id)}`),
+  runSchedule: (id: string) => post<{ scheduleId: string; runId: string }>(`/api/schedules/${enc(id)}/run`),
+
+  report: (orgId: string, days: number) => get<ClientReport>(`/api/orgs/${enc(orgId)}/report`, { days }),
+
+  channels: () => get<ChannelInfo[]>("/api/channels"),
+  simulate: (input: SimulateInput) => post<SimulateResult>("/api/simulate", input),
 
   approvals: () => get<Approval[]>("/api/approvals"),
   approve: (id: string, note = "") => post<Action>(`/api/actions/${enc(id)}/approve`, { note }),

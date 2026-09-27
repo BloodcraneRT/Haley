@@ -1,14 +1,14 @@
-import { ArrowDown, ChevronRight, CircleAlert, Coins, FileText, Repeat, RotateCcw, ShieldCheck, Sparkles, Ticket as TicketIcon, User, Zap } from "lucide-react";
+import { ArrowDown, ChevronRight, CircleAlert, ClipboardList, Coins, FileText, Play, Repeat, RotateCcw, ShieldCheck, Sparkles, Ticket as TicketIcon, User, Zap } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, ApiError, errorMessage, type Action, type RunDetail, type TranscriptStep } from "../api";
-import { ApprovalCard } from "../components/ApprovalCard";
+import { api, ApiError, errorMessage, type Action, type RunDetail, type RunMode, type TranscriptStep } from "../api";
+import { ApprovalCard, PolicyReason } from "../components/ApprovalCard";
 import { Avatar } from "../components/Avatar";
 import { CodeBlock, Disclosure } from "../components/Disclosure";
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
 import { Markdown } from "../components/Markdown";
 import { PageHeader } from "../components/PageHeader";
-import { ActionStatusPill, Pill, RiskPill, RunStatusPill } from "../components/Pill";
+import { ActionStatusPill, Pill, RiskPill, RunModeBadge, RunStatusPill } from "../components/Pill";
 import { RelativeTime } from "../components/RelativeTime";
 import { RevealSecretButton } from "../components/RevealSecret";
 import { usePoll } from "../hooks/usePoll";
@@ -26,7 +26,7 @@ export function RunDetailPage() {
     [id],
     (d) => (!d ? null : isRunActive(d.run.status) ? 2000 : d.run.status === "awaiting_approval" ? 10_000 : null),
   );
-  const [retrying, setRetrying] = useState(false);
+  const [retrying, setRetrying] = useState<RunMode | null>(null);
 
   if (detail.error instanceof ApiError && detail.error.status === 404) {
     return (
@@ -42,19 +42,21 @@ export function RunDetailPage() {
   const pending = actions.filter((a) => a.status === "pending_approval");
   const done = run.status === "completed" || run.status === "failed";
 
-  const retry = async () => {
-    setRetrying(true);
+  const plan = run.mode === "plan";
+
+  const retry = async (mode: RunMode) => {
+    setRetrying(mode);
     try {
       const next = run.ticket_id
-        ? await api.runTicket(run.ticket_id)
-        : await api.startTask({ orgId: run.org_id, title: run.title, instruction: run.instruction });
-      toast("Started a new run.");
+        ? await api.runTicket(run.ticket_id, mode)
+        : await api.startTask({ orgId: run.org_id, title: run.title, instruction: run.instruction, mode });
+      toast(mode === "live" && plan ? "Running it for real." : "Started a new run.");
       refreshStats();
       navigate(`/runs/${next.id}`);
     } catch (err) {
       toast(errorMessage(err), err instanceof ApiError && err.status === 409 ? "info" : "error");
     } finally {
-      setRetrying(false);
+      setRetrying(null);
     }
   };
 
@@ -73,6 +75,7 @@ export function RunDetailPage() {
         subtitle={
           <span className="row row-wrap" style={{ gap: 8 }}>
             <RunStatusPill status={run.status} />
+            <RunModeBadge mode={run.mode} />
             <Pill tone="neutral">{run.kind === "ticket" ? "Ticket run" : "Task"}</Pill>
             <span>
               Started by {run.created_by} <RelativeTime iso={run.created_at} />
@@ -87,9 +90,14 @@ export function RunDetailPage() {
               </Link>
             )}
             {done && (
-              <button className="btn" onClick={retry} disabled={retrying}>
-                {retrying ? <Spinner /> : run.status === "failed" ? <RotateCcw className="icon-sm" aria-hidden="true" /> : <Repeat className="icon-sm" aria-hidden="true" />}
-                {run.status === "failed" ? "Try again" : run.ticket_id ? "Follow-up run" : "Run again"}
+              <button className="btn" onClick={() => void retry(run.mode)} disabled={retrying !== null}>
+                {retrying === run.mode ? <Spinner /> : run.status === "failed" ? <RotateCcw className="icon-sm" aria-hidden="true" /> : <Repeat className="icon-sm" aria-hidden="true" />}
+                {run.status === "failed" ? "Try again" : plan ? "Plan again" : run.ticket_id ? "Follow-up run" : "Run again"}
+              </button>
+            )}
+            {plan && run.status === "completed" && (
+              <button className="btn btn-primary" onClick={() => void retry("live")} disabled={retrying !== null}>
+                {retrying === "live" ? <Spinner /> : <Play className="icon-sm" aria-hidden="true" />} Run for real
               </button>
             )}
           </>
@@ -115,6 +123,22 @@ export function RunDetailPage() {
       </div>
 
       <div className="stack" style={{ gap: 20 }}>
+        {plan && (
+          <div className="banner banner-plan" role="note">
+            <ClipboardList className="icon" aria-hidden="true" />
+            <span className="spacer">
+              <strong>Plan (dry run).</strong> Haley investigated with read-only tools and simulated every change. Steps marked{" "}
+              <em>Planned – not executed</em> show what she would do and whether the live policy would run them automatically or ask for approval.
+              {run.ticket_id ? " The requester wasn't contacted." : ""}
+            </span>
+            {run.status === "completed" && (
+              <button className="btn btn-primary btn-sm" onClick={() => void retry("live")} disabled={retrying !== null}>
+                {retrying === "live" ? <Spinner /> : <Play className="icon-sm" aria-hidden="true" />} Run for real
+              </button>
+            )}
+          </div>
+        )}
+
         {run.status === "failed" && (
           <div className="banner banner-error" role="alert">
             <CircleAlert className="icon" aria-hidden="true" />
@@ -141,7 +165,7 @@ export function RunDetailPage() {
           <section className="card" aria-labelledby="summary-title">
             <div className="card-header">
               <Sparkles className="icon-sm" style={{ color: "var(--tone-violet-fg)" }} aria-hidden="true" />
-              <h2 id="summary-title">Summary</h2>
+              <h2 id="summary-title">{plan ? "The plan" : "Summary"}</h2>
             </div>
             <div className="card-body">
               <Markdown source={run.summary} />
@@ -267,8 +291,13 @@ function ToolCall({
 }) {
   const isError = result?.isError || action?.status === "failed";
   const pending = action?.status === "pending_approval";
+  const planned = action?.status === "planned";
+  const live = planned ? liveOutcome(action?.result) : null;
   return (
-    <li id={action ? `action-${action.id}` : undefined} className={`feed-tool ${isError ? "is-error" : ""} ${pending ? "is-pending" : ""}`}>
+    <li
+      id={action ? `action-${action.id}` : undefined}
+      className={`feed-tool ${isError ? "is-error" : ""} ${pending ? "is-pending" : ""} ${planned ? "is-planned" : ""}`}
+    >
       <div className="feed-tool-row">
         <span className="tool-name">{tool}</span>
         <span className="desc truncate" title={action?.description}>
@@ -283,6 +312,16 @@ function ToolCall({
           </Pill>
         ) : null}
       </div>
+      {live && <div className="planned-note">{live}</div>}
+      {action?.policy_reason?.trim() && (action.status === "pending_approval" || action.status === "blocked" || action.decided_by || planned) && (
+        <div style={{ padding: "0 10px 8px" }}>
+          <PolicyReason
+            reason={action.policy_reason}
+            compact
+            label={action.status === "blocked" ? "Why it was blocked" : planned ? "Live policy" : "Why this needs approval"}
+          />
+        </div>
+      )}
       {action?.decided_by && action.decided_by !== "system" && (action.status === "executed" || action.status === "rejected" || action.status === "failed" || action.status === "approved") && (
         <div className="muted" style={{ padding: "0 10px 6px", fontSize: "var(--text-sm)" }}>
           {action.status === "rejected" ? "Rejected" : "Approved"} by {action.decided_by}
@@ -307,4 +346,13 @@ function ToolCall({
       {pending && action && <ApprovalCard action={action} minimal compact onDecided={onDecided} />}
     </li>
   );
+}
+
+/** Plan runs store { planned: true, live: "run" | "approve" | "block" }: what the live policy would have done. */
+function liveOutcome(result: unknown): string | null {
+  const live = result && typeof result === "object" ? (result as { live?: unknown }).live : undefined;
+  if (live === "run") return "In a live run this step would run automatically.";
+  if (live === "approve") return "In a live run this step would wait for a technician's approval.";
+  if (live === "block") return "In a live run this step would be blocked by the client's policy.";
+  return "Not executed: this is a dry run.";
 }

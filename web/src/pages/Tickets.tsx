@@ -1,4 +1,4 @@
-import { Plus, Search, Sparkles, Ticket as TicketIcon } from "lucide-react";
+import { Plus, Search, Sparkles, Ticket as TicketIcon, TimerOff } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, errorMessage, TICKET_PRIORITIES, TICKET_STATUSES, type OrgSummary, type TicketPriority } from "../api";
@@ -6,7 +6,7 @@ import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedbac
 import { Modal } from "../components/Modal";
 import { OrgSelect } from "../components/OrgSelect";
 import { PageHeader } from "../components/PageHeader";
-import { Priority, TicketStatusPill } from "../components/Pill";
+import { AssuranceBadge, ChannelBadge, Priority, SlaIndicator, TicketStatusPill } from "../components/Pill";
 import { RelativeTime } from "../components/RelativeTime";
 import { usePoll } from "../hooks/usePoll";
 import { useApp } from "../lib/app-context";
@@ -18,6 +18,7 @@ export function TicketsPage() {
   const orgId = params.get("orgId") ?? "";
   const status = params.get("status") ?? "open";
   const q = params.get("q") ?? "";
+  const slaBreached = params.get("sla") === "breached";
   const creating = params.get("new") === "1";
   const [search, setSearch] = useState(q);
 
@@ -43,8 +44,9 @@ export function TicketsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
-  const list = tickets.data ?? [];
-  const filtered = Boolean(orgId || q || status !== "open");
+  const all = tickets.data ?? [];
+  const list = slaBreached ? all.filter((t) => t.sla && (t.sla.response === "breached" || t.sla.resolution === "breached")) : all;
+  const filtered = Boolean(orgId || q || status !== "open" || slaBreached);
   const noOrgs = orgs.data?.length === 0;
 
   return (
@@ -89,6 +91,15 @@ export function TicketsPage() {
             </option>
           ))}
         </select>
+        <button
+          type="button"
+          className={`btn btn-sm toggle-btn ${slaBreached ? "is-on" : ""}`}
+          aria-pressed={slaBreached}
+          onClick={() => update("sla", slaBreached ? null : "breached")}
+          title="Only tickets past their response or resolution target"
+        >
+          <TimerOff className="icon-sm" aria-hidden="true" /> SLA breached
+        </button>
         {filtered && (
           <button
             className="btn btn-ghost btn-sm"
@@ -126,6 +137,10 @@ export function TicketsPage() {
             >
               Tickets belong to a client organization. Add one (or load the demo workspace from the dashboard) to get started.
             </EmptyState>
+          ) : slaBreached && all.length > 0 ? (
+            <EmptyState icon={<TimerOff className="icon" />} title="No SLA breaches" compact>
+              None of the {all.length} ticket{all.length === 1 ? "" : "s"} matching the other filters is past its response or resolution target.
+            </EmptyState>
           ) : filtered ? (
             <EmptyState icon={<Search className="icon" />} title="No tickets match" compact>
               Try a different search or status, or clear the filters.
@@ -140,7 +155,8 @@ export function TicketsPage() {
                 </button>
               }
             >
-              Nice. Create one by hand, or point your helpdesk mailbox at <code>POST /api/intake</code> so requests arrive automatically.
+              Nice. Create one by hand, connect an end-user <Link to="/channels">channel</Link> (email, Slack, Teams), or post to{" "}
+              <code>POST /api/intake</code> from your PSA so requests arrive automatically.
             </EmptyState>
           )
         ) : (
@@ -160,9 +176,12 @@ export function TicketsPage() {
                   </th>
                   <th scope="col">Status</th>
                   <th scope="col" className="hide-sm">
+                    SLA
+                  </th>
+                  <th scope="col" className="hide-sm">
                     Priority
                   </th>
-                  <th scope="col" className="hide-md">
+                  <th scope="col" className="hide-lg">
                     Category
                   </th>
                   <th scope="col" className="hide-sm">
@@ -174,24 +193,33 @@ export function TicketsPage() {
                 {list.map((t) => (
                   <tr key={t.id} className="clickable" onClick={(e) => !(e.target as HTMLElement).closest("a") && navigate(`/tickets/${t.id}`)}>
                     <td className="col-num">{t.number}</td>
-                    <td className="cell-title" style={{ maxWidth: 420 }}>
-                      <Link to={`/tickets/${t.id}`} className="truncate" style={{ display: "block" }}>
-                        {t.title}
-                      </Link>
+                    <td className="cell-title">
+                      <div className="row title-cell" style={{ gap: 8 }}>
+                        <ChannelBadge channel={t.channel} iconOnly />
+                        <Link to={`/tickets/${t.id}`} className="truncate" style={{ display: "block" }} title={t.title}>
+                          {t.title}
+                        </Link>
+                      </div>
                     </td>
                     <td className="hide-sm nowrap secondary">{t.org_name}</td>
                     <td className="hide-md">
-                      <span className="truncate" style={{ display: "block", maxWidth: 200 }} title={t.requester_email}>
-                        {t.requester_name || t.requester_email || <span className="muted">—</span>}
+                      <span className="row" style={{ gap: 6, maxWidth: 240 }}>
+                        <span className="truncate" title={t.requester_email}>
+                          {t.requester_name || t.requester_email || <span className="muted">—</span>}
+                        </span>
+                        {t.assurance && <AssuranceBadge assurance={t.assurance} verification={t.verification} short />}
                       </span>
                     </td>
                     <td>
                       <TicketStatusPill status={t.status} />
                     </td>
                     <td className="hide-sm">
+                      <SlaIndicator sla={t.sla} resolved={t.status === "resolved" || t.status === "closed"} />
+                    </td>
+                    <td className="hide-sm">
                       <Priority priority={t.priority} />
                     </td>
-                    <td className="hide-md secondary">{t.category && t.category !== "uncategorized" ? t.category : <span className="muted">—</span>}</td>
+                    <td className="hide-lg secondary">{t.category && t.category !== "uncategorized" ? t.category : <span className="muted">—</span>}</td>
                     <td className="hide-sm muted">
                       <RelativeTime iso={t.updated_at} />
                     </td>

@@ -23,5 +23,21 @@ export function ProviderLogo({ provider }: { provider: string }) {
       </span>
     );
   }
+  if (provider === "slack") {
+    return (
+      <span className="provider-logo" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 16 16">
+          <rect x="0.5" y="4.5" width="7" height="3" rx="1.5" fill="#36c5f0" />
+          <rect x="4.5" y="0.5" width="3" height="3" rx="1.5" fill="#36c5f0" />
+          <rect x="8.5" y="0.5" width="3" height="7" rx="1.5" fill="#2eb67d" />
+          <rect x="12.5" y="4.5" width="3" height="3" rx="1.5" fill="#2eb67d" />
+          <rect x="8.5" y="8.5" width="7" height="3" rx="1.5" fill="#ecb22e" />
+          <rect x="8.5" y="12.5" width="3" height="3" rx="1.5" fill="#ecb22e" />
+          <rect x="4.5" y="8.5" width="3" height="7" rx="1.5" fill="#e01e5a" />
+          <rect x="0.5" y="8.5" width="3" height="3" rx="1.5" fill="#e01e5a" />
+        </svg>
+      </span>
+    );
+  }
   return <span className="provider-logo" aria-hidden="true" />;
 }
