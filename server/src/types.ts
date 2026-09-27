@@ -1,5 +1,20 @@
-export type Autonomy = "read_only" | "supervised" | "autonomous";
-export type ProviderId = "m365" | "google";
+export type Autonomy = "read_only" | "supervised" | "autonomous" | "unattended";
+export const AUTONOMY_LEVELS: Autonomy[] = ["read_only", "supervised", "autonomous", "unattended"];
+export type ProviderId = "m365" | "google" | "slack";
+
+/**
+ * How strongly the requester's identity is established, weakest first.
+ *  none        nothing beyond what they typed
+ *  email       DMARC / aligned-DKIM email: the domain vouches, but mailboxes get phished and spoofed
+ *  chat        signed-in chat identity (Slack workspace member, a chat bridge that authenticated them)
+ *  directory   matched to an active directory account through SSO (Teams / Entra ID)
+ *  technician  entered or confirmed by a technician
+ */
+export type Assurance = "none" | "email" | "chat" | "directory" | "technician";
+export const ASSURANCE_RANK: Record<Assurance, number> = { none: 0, email: 1, chat: 2, directory: 3, technician: 4 };
+
+/** Where a ticket came from; replies go back the same way. */
+export type TicketChannel = "portal" | "api" | "email" | "slack" | "teams" | "chat";
 export type IntegrationMode = "live" | "sandbox";
 
 export type TicketStatus =
@@ -40,7 +55,38 @@ export type ActionStatus =
   | "pending_approval"
   | "approved"
   | "rejected"
-  | "blocked";
+  | "blocked"
+  | "planned";
+
+/** live runs act; plan runs are dry runs that simulate every change and report what would happen. */
+export type RunMode = "live" | "plan";
+
+export interface OrgSettings {
+  /** Email domains (besides the primary domain) whose senders belong to this org. */
+  emailDomains: string[];
+  /** Entra tenant id used to route Microsoft Teams messages to this org. */
+  teamsTenantId: string;
+  /** People (emails) allowed to request changes to other users' accounts, e.g. managers and the IT contact. */
+  authorizedRequesters: string[];
+  /** Accounts Haley never changes without a technician, e.g. admins and executives. */
+  protectedAccounts: string[];
+  /** Unattended mode safety valve: customer-system changes per hour before Haley falls back to approvals. */
+  maxAutoChangesPerHour: number;
+  /** Unattended mode: security-sensitive self-service changes per person per day (e.g. password resets). */
+  maxSelfServicePerUserPerDay: number;
+  /** Kill switch: Haley stops picking up and acting on this client's tickets; everything goes to technicians. */
+  paused: boolean;
+}
+
+export const DEFAULT_ORG_SETTINGS: OrgSettings = {
+  emailDomains: [],
+  teamsTenantId: "",
+  authorizedRequesters: [],
+  protectedAccounts: [],
+  maxAutoChangesPerHour: 20,
+  maxSelfServicePerUserPerDay: 3,
+  paused: false,
+};
 
 export interface Org {
   id: string;
@@ -48,6 +94,7 @@ export interface Org {
   domain: string;
   autonomy: Autonomy;
   notes: string;
+  settings: OrgSettings;
   created_at: string;
 }
 
@@ -74,6 +121,15 @@ export interface Ticket {
   priority: TicketPriority;
   category: string;
   assignee: string;
+  channel: TicketChannel;
+  /** Channel-specific routing for replies (thread ids, conversation ids, message ids). */
+  channel_ref: Record<string, string>;
+  /** How strongly the channel established who the requester is. */
+  assurance: Assurance;
+  /** How the requester was (or wasn't) verified, shown to technicians and the agent. */
+  verification: string;
+  /** A requester message arrived while Haley was busy; start another pass when the current one ends. */
+  needs_followup: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -93,6 +149,7 @@ export interface Run {
   org_id: string;
   ticket_id: string | null;
   kind: RunKind;
+  mode: RunMode;
   title: string;
   instruction: string;
   status: RunStatus;
@@ -116,6 +173,8 @@ export interface Action {
   risk: Risk;
   description: string;
   rationale: string;
+  /** Why the policy held or blocked this call (empty when it ran automatically). */
+  policy_reason: string;
   status: ActionStatus;
   result: unknown;
   has_secrets: boolean;

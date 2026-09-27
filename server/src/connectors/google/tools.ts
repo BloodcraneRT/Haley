@@ -69,6 +69,7 @@ export function googleTools(api: GoogleApi): HaleyTool[] {
         role: z.enum(["MEMBER", "MANAGER", "OWNER"]).default("MEMBER"),
       }),
       risk: "write",
+      grantsAccess: true,
       describe: (i) => `Add ${i.userEmail} to ${i.groupEmail} as ${i.role}`,
       run: async ({ groupEmail, userEmail, role }) => {
         await api.addGroupMember(groupEmail, userEmail, role);

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { decide } from "../src/agent/policy.js";
+import { decide, targetsOf, type PolicyInput } from "../src/agent/policy.js";
 import { toApiTool } from "../src/agent/runner.js";
 import { m365Tools } from "../src/connectors/m365/tools.js";
 import { googleTools } from "../src/connectors/google/tools.js";
@@ -18,20 +18,84 @@ const memoryState = <T>(): StateStore<T> & { value: T | null } => {
 const ctx = { orgId: "org", runId: "run", ticketId: null };
 
 describe("approval policy", () => {
+  const base: PolicyInput = {
+    autonomy: "unattended",
+    risk: "destructive",
+    grantsAccess: false,
+    requester: { email: "sam@acme.example", assurance: "chat", authorized: false },
+    targets: ["sam@acme.example"],
+    protectedTargets: [],
+    changesLastHour: 0,
+    maxChangesPerHour: 20,
+    selfServiceToday: 0,
+    maxSelfServicePerDay: 3,
+  };
+  const outcome = (patch: Partial<PolicyInput>) => decide({ ...base, ...patch }).outcome;
+
   it("never gates reads or internal writes", () => {
-    for (const autonomy of ["read_only", "supervised", "autonomous"] as const) {
-      expect(decide(autonomy, "read")).toBe("run");
-      expect(decide(autonomy, "internal")).toBe("run");
+    for (const autonomy of ["read_only", "supervised", "autonomous", "unattended"] as const) {
+      for (const risk of ["read", "internal"] as const) {
+        expect(outcome({ autonomy, risk, requester: { email: null, assurance: "none", authorized: false } })).toBe("run");
+      }
     }
   });
 
-  it("gates customer changes by autonomy and always gates destructive ones", () => {
-    expect(decide("read_only", "write")).toBe("block");
-    expect(decide("read_only", "destructive")).toBe("block");
-    expect(decide("supervised", "write")).toBe("approve");
-    expect(decide("supervised", "destructive")).toBe("approve");
-    expect(decide("autonomous", "write")).toBe("run");
-    expect(decide("autonomous", "destructive")).toBe("approve");
+  it("gates customer changes by autonomy", () => {
+    expect(outcome({ autonomy: "read_only", risk: "write" })).toBe("block");
+    expect(outcome({ autonomy: "supervised", risk: "write" })).toBe("approve");
+    expect(outcome({ autonomy: "supervised", risk: "destructive" })).toBe("approve");
+    expect(outcome({ autonomy: "autonomous", risk: "write" })).toBe("run");
+    expect(outcome({ autonomy: "autonomous", risk: "destructive" })).toBe("approve");
+  });
+
+  it("always sends protected accounts to a technician", () => {
+    for (const autonomy of ["autonomous", "unattended"] as const) {
+      expect(outcome({ autonomy, risk: "write", protectedTargets: ["sam@acme.example"] })).toBe("approve");
+    }
+    expect(outcome({ requester: { ...base.requester, authorized: true }, protectedTargets: ["sam@acme.example"] })).toBe("approve");
+  });
+
+  it("unattended: lets a verified requester fix their own account", () => {
+    expect(outcome({})).toBe("run");
+    expect(outcome({ requester: { ...base.requester, assurance: "directory" } })).toBe("run");
+    expect(outcome({ risk: "write" })).toBe("run");
+  });
+
+  it("unattended: never lets email alone authorize security-sensitive changes", () => {
+    const email = { ...base.requester, assurance: "email" as const };
+    expect(outcome({ requester: email })).toBe("approve");
+    expect(outcome({ requester: { ...email, authorized: true } })).toBe("approve");
+    expect(outcome({ requester: email, risk: "write" })).toBe("run");
+    expect(decide({ ...base, requester: email }).reason).toMatch(/stronger identity than email/);
+  });
+
+  it("unattended: unverified requesters always fall back to approval", () => {
+    expect(outcome({ requester: { ...base.requester, assurance: "none" }, risk: "write" })).toBe("approve");
+  });
+
+  it("unattended: changes to someone else need an authorized approver", () => {
+    expect(outcome({ targets: ["kevin@acme.example"] })).toBe("approve");
+    expect(outcome({ targets: ["kevin@acme.example"], risk: "write" })).toBe("approve");
+    expect(outcome({ targets: [] })).toBe("approve");
+    const manager = { ...base.requester, authorized: true };
+    expect(outcome({ targets: ["kevin@acme.example"], requester: manager })).toBe("run");
+    expect(outcome({ targets: ["kevin@acme.example"], requester: manager, risk: "write" })).toBe("run");
+  });
+
+  it("unattended: access grants need an approver even for yourself", () => {
+    expect(outcome({ risk: "write", grantsAccess: true })).toBe("approve");
+    expect(outcome({ risk: "write", grantsAccess: true, requester: { ...base.requester, authorized: true } })).toBe("run");
+  });
+
+  it("unattended: rate limits fall back to approval", () => {
+    expect(outcome({ selfServiceToday: 3 })).toBe("approve");
+    expect(outcome({ risk: "write", changesLastHour: 20 })).toBe("approve");
+  });
+
+  it("reads change targets from tool inputs", () => {
+    expect(targetsOf({ user: "Sam@Acme.example", enabled: false })).toEqual(["sam@acme.example"]);
+    expect(targetsOf({ groupEmail: "g@acme.example", userEmail: "kev@acme.example" })).toEqual(["kev@acme.example"]);
+    expect(targetsOf({})).toEqual([]);
   });
 });
 

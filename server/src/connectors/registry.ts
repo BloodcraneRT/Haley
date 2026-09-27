@@ -25,6 +25,8 @@ export const PROVIDERS: ProviderInfo[] = [
       "Under Certificates & secrets create a client secret and paste the tenant ID, client ID and secret here.",
     ],
     capabilities: ["Users & licenses", "Groups & shared mailboxes", "Password resets & sign-in blocks", "MFA method review", "Intune devices", "Service health", "Out-of-office"],
+    supportsSandbox: true,
+    kind: "directory",
   },
   {
     id: "google",
@@ -40,6 +42,23 @@ export const PROVIDERS: ProviderInfo[] = [
       "Paste the JSON key and the email of a super admin Haley should act as.",
     ],
     capabilities: ["Users & org units", "Groups", "Password resets", "Suspend / restore", "Force sign-out", "2SV enrollment review"],
+    supportsSandbox: true,
+    kind: "directory",
+  },
+  {
+    id: "slack",
+    name: "Slack",
+    description: "Lets this client's employees DM or @mention Haley in their Slack workspace. Haley answers in the thread and can send self-service credentials by DM.",
+    fields: [{ key: "botToken", label: "Bot user OAuth token", secret: true, placeholder: "xoxb-…" }],
+    setupSteps: [
+      "Create (once, for your MSP) a Slack app at api.slack.com/apps. Under OAuth & Permissions add bot scopes: chat:write, im:history, app_mentions:read, users:read, users:read.email.",
+      "Under Event Subscriptions, enable events with the Request URL shown on Haley's Channels page (…/hooks/slack/events) and subscribe to bot events message.im and app_mention. Under App Home, enable the Messages tab.",
+      "Set HALEY_SLACK_SIGNING_SECRET on the Haley server to the app's signing secret.",
+      "Install the app to the client's workspace and paste its bot token here. Haley detects the workspace automatically.",
+    ],
+    capabilities: ["DMs and @mentions become tickets", "Replies in thread", "Private credential delivery", "Verified identity from Slack profile"],
+    supportsSandbox: false,
+    kind: "channel",
   },
 ];
 
@@ -99,6 +118,23 @@ export function buildConnector(store: Store, integration: Integration, fetchImpl
       test: async () => {
         const [users, ous] = await Promise.all([api.listUsers(), api.listOrgUnits()]);
         return `Connected; ${users.length} users and ${ous.length} org units visible.`;
+      },
+    };
+  }
+
+  if (integration.provider === "slack") {
+    required(config, ["botToken"]);
+    return {
+      integrationId: integration.id,
+      provider: "slack",
+      label: integration.label,
+      tools: [],
+      test: async () => {
+        const res = await fetchImpl("https://slack.com/api/auth.test", { method: "POST", headers: { authorization: `Bearer ${config.botToken}` } });
+        const data = (await res.json()) as { ok: boolean; error?: string; team?: string; team_id?: string; user?: string };
+        if (!data.ok) throw new ConnectorError(`Slack rejected the token: ${data.error}`);
+        store.setIntegrationState(integration.id, { teamId: data.team_id, team: data.team });
+        return `Connected to the ${data.team} workspace as @${data.user}.`;
       },
     };
   }

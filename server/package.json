@@ -7,7 +7,7 @@
     "dev": "tsx watch --disable-warning=ExperimentalWarning src/index.ts",
     "start": "node --enable-source-maps --disable-warning=ExperimentalWarning dist/index.js",
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run"
   },
   "dependencies": {
@@ -15,10 +15,12 @@
     "@fastify/cors": "^11.3.0",
     "@fastify/static": "^10.1.5",
     "fastify": "^5.12.5",
+    "nodemailer": "^10.0.11",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^22.20.4",
+    "@types/nodemailer": "^8.0.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2"

@@ -16,6 +16,8 @@ export interface HaleyTool<I = any> {
   description: string;
   input: z.ZodType;
   risk: Risk;
+  /** Grants access to data or resources (group, mailbox, app membership); unattended mode wants an approver. */
+  grantsAccess?: boolean;
   /** One-line, human-readable summary shown to technicians in the approval queue. */
   describe?: (input: I) => string;
   run: (input: I, ctx: ToolContext) => Promise<unknown>;
@@ -26,6 +28,7 @@ export function defineTool<S extends z.ZodType>(tool: {
   description: string;
   input: S;
   risk: Risk;
+  grantsAccess?: boolean;
   describe?: (input: z.infer<S>) => string;
   run: (input: z.infer<S>, ctx: ToolContext) => Promise<unknown>;
 }): HaleyTool<z.infer<S>> {
@@ -83,4 +86,8 @@ export interface ProviderInfo {
   fields: ProviderField[];
   setupSteps: string[];
   capabilities: string[];
+  /** Whether a simulated tenant is available for trying the provider without credentials. */
+  supportsSandbox: boolean;
+  /** "directory" providers give Haley tools; "channel" providers let end users reach Haley. */
+  kind: "directory" | "channel";
 }

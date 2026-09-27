@@ -122,10 +122,31 @@ CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
 
 export type Db = DatabaseSync;
 
+/** Forward-only migrations, applied in order and tracked with PRAGMA user_version. */
+const MIGRATIONS: string[] = [
+  // 1: end-user channels, verified identity, per-org self-service settings
+  `ALTER TABLE orgs ADD COLUMN settings TEXT NOT NULL DEFAULT '{}';
+   ALTER TABLE tickets ADD COLUMN channel TEXT NOT NULL DEFAULT 'portal';
+   ALTER TABLE tickets ADD COLUMN channel_ref TEXT NOT NULL DEFAULT '{}';
+   ALTER TABLE tickets ADD COLUMN assurance TEXT NOT NULL DEFAULT 'none';
+   ALTER TABLE tickets ADD COLUMN verification TEXT NOT NULL DEFAULT '';
+   ALTER TABLE tickets ADD COLUMN needs_followup INTEGER NOT NULL DEFAULT 0;
+   ALTER TABLE actions ADD COLUMN policy_reason TEXT NOT NULL DEFAULT '';
+   ALTER TABLE runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'live';
+   CREATE INDEX IF NOT EXISTS idx_tickets_requester ON tickets(channel, requester_email, status);`,
+];
+
 export function openDb(path: string): Db {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
+  const { user_version: version } = db.prepare("PRAGMA user_version").get() as { user_version: number };
+  for (let i = version; i < MIGRATIONS.length; i++) {
+    tx(db, () => {
+      db.exec(MIGRATIONS[i]);
+      db.exec(`PRAGMA user_version = ${i + 1}`);
+    });
+  }
   return db;
 }
 

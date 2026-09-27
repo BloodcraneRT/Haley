@@ -14,13 +14,21 @@ import { ConnectorError, type Connector } from "./connectors/types.js";
 import { openDb } from "./db.js";
 import { seedDemo } from "./demo.js";
 import { Store } from "./store.js";
+import { ChatWebhookAdapter } from "./channels/chat.js";
+import { EmailAdapter } from "./channels/email.js";
+import { ChannelHub } from "./channels/hub.js";
+import { SlackChannel } from "./channels/slack.js";
+import { TeamsChannel } from "./channels/teams.js";
+import { registerHooks } from "./routes/hooks.js";
 import { buildTranscript } from "./transcript.js";
-import { TICKET_PRIORITIES, TICKET_STATUSES, type Integration } from "./types.js";
+import { AUTONOMY_LEVELS, TICKET_PRIORITIES, TICKET_STATUSES, type Integration } from "./types.js";
 
 export interface AppDeps {
   config: HaleyConfig;
   llm?: LlmClient;
   fetchImpl?: typeof fetch;
+  /** Outbound email transport; defaults to SMTP from HALEY_SMTP_URL. Tests pass a fake. */
+  mailTransport?: { sendMail(options: Record<string, unknown>): Promise<unknown> };
 }
 
 class HttpError extends Error {
@@ -59,7 +67,7 @@ export interface HaleyApp {
   agent: AgentService;
 }
 
-export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Promise<HaleyApp> {
+export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }: AppDeps): Promise<HaleyApp> {
   const db = openDb(config.dbPath);
   const store = new Store(db, config.secretKey);
 
@@ -83,11 +91,39 @@ export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Pro
       }
     });
 
-  const agent = new AgentService(store, llm ?? new AnthropicLlm(config), config, connectorsFor);
+  // End-user channels. Each is enabled by its own secrets; the simulator-backed chat adapter is always on.
+  const ch = config.channels;
+  const hub = new ChannelHub(store);
+  hub.register(new ChatWebhookAdapter(ch.chatWebhookSecret, fetchImpl));
+  if (mailTransport || ch.smtpUrl) hub.register(new EmailAdapter(mailTransport ?? ch.smtpUrl, ch.smtpFrom || "Haley <haley@localhost>"));
+  const slack = ch.slackSigningSecret ? new SlackChannel(store, fetchImpl) : null;
+  if (slack) hub.register(slack);
+  const teams =
+    ch.teamsAppId && ch.teamsAppPassword
+      ? new TeamsChannel({ appId: ch.teamsAppId, appPassword: ch.teamsAppPassword, tenantId: ch.teamsTenantId }, store, connectorsFor, fetchImpl)
+      : null;
+  if (teams) hub.register(teams);
+
+  const agent = new AgentService(store, llm ?? new AnthropicLlm(config), config, connectorsFor, hub);
+  hub.attach(agent);
   agent.recoverInterrupted();
 
   const app = Fastify({ logger: config.production ? { level: "info" } : false, bodyLimit: 2 * 1024 * 1024 });
   await app.register(cors, { origin: config.production ? false : true });
+
+  // Keep the raw body: Slack and chat webhooks are authenticated by signatures over the exact bytes.
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (req, body, done) => {
+    (req as typeof req & { rawBody?: string }).rawBody = body as string;
+    if (!body) return done(null, {});
+    try {
+      done(null, JSON.parse(body as string));
+    } catch {
+      done(Object.assign(new Error("Invalid JSON body"), { statusCode: 400 }), undefined);
+    }
+  });
+
+  registerHooks(app, { config: ch, store, hub, slack, teams, log: (err) => app.log.error(err) });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof HttpError) return reply.status(err.statusCode).send({ error: err.message });
@@ -128,11 +164,25 @@ export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Pro
 
   // --------------------------------------------------------------- orgs
 
+  const emails = z.array(z.string().trim().toLowerCase().email());
+  const settingsInput = z
+    .object({
+      emailDomains: z.array(z.string().trim().toLowerCase().min(3)),
+      teamsTenantId: z.string().trim(),
+      authorizedRequesters: emails,
+      protectedAccounts: emails,
+      maxAutoChangesPerHour: z.number().int().min(0).max(1000),
+      maxSelfServicePerUserPerDay: z.number().int().min(0).max(50),
+      paused: z.boolean(),
+    })
+    .partial();
+  const autonomy = z.enum(AUTONOMY_LEVELS as [string, ...string[]]);
   const orgInput = z.object({
     name: z.string().trim().min(1),
     domain: z.string().trim().default(""),
-    autonomy: z.enum(["read_only", "supervised", "autonomous"]).default("supervised"),
+    autonomy: autonomy.default("supervised"),
     notes: z.string().default(""),
+    settings: settingsInput.default({}),
   });
 
   app.get("/api/orgs", async () => {
@@ -146,7 +196,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Pro
 
   app.post("/api/orgs", async (req) => {
     const input = body(orgInput, req);
-    const org = store.createOrg(input);
+    const org = store.createOrg({ ...input, autonomy: input.autonomy as never });
     store.audit({ orgId: org.id, actor: actor(req), action: "org.created", target: org.id, detail: { name: org.name } });
     return org;
   });
@@ -162,21 +212,26 @@ export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Pro
       z.object({
         name: z.string().trim().min(1).optional(),
         domain: z.string().trim().optional(),
-        autonomy: z.enum(["read_only", "supervised", "autonomous"]).optional(),
+        autonomy: autonomy.optional(),
         notes: z.string().optional(),
+        settings: settingsInput.optional(),
       }),
       req,
     );
     const before = store.getOrg(req.params.id);
-    const org = store.updateOrg(req.params.id, patch);
-    if (!org) throw notFound("Organization");
-    store.audit({
-      orgId: org.id,
-      actor: actor(req),
-      action: before?.autonomy !== org.autonomy ? "org.autonomy_changed" : "org.updated",
-      target: org.id,
-      detail: before?.autonomy !== org.autonomy ? { from: before?.autonomy, to: org.autonomy } : { fields: Object.keys(patch) },
-    });
+    const org = store.updateOrg(req.params.id, patch as never);
+    if (!before || !org) throw notFound("Organization");
+    const who = actor(req);
+    if (before.autonomy !== org.autonomy) {
+      store.audit({ orgId: org.id, actor: who, action: "org.autonomy_changed", target: org.id, detail: { from: before.autonomy, to: org.autonomy } });
+    }
+    if (before.settings.paused !== org.settings.paused) {
+      store.audit({ orgId: org.id, actor: who, action: org.settings.paused ? "org.haley_paused" : "org.haley_resumed", target: org.id });
+    }
+    const fields = Object.keys(patch).filter((k) => k !== "autonomy");
+    if (fields.length) {
+      store.audit({ orgId: org.id, actor: who, action: "org.updated", target: org.id, detail: { fields, settings: Object.keys(patch.settings ?? {}) } });
+    }
     return org;
   });
 
@@ -206,7 +261,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Pro
     if (!org) throw notFound("Organization");
     const input = body(
       z.object({
-        provider: z.enum(["m365", "google"]),
+        provider: z.enum(["m365", "google", "slack"]),
         mode: z.enum(["live", "sandbox"]).default("live"),
         label: z.string().trim().optional(),
         config: z.record(z.string(), z.string()).default({}),
@@ -214,6 +269,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Pro
       req,
     );
     const info = providerInfo(input.provider)!;
+    if (input.mode === "sandbox" && !info.supportsSandbox) throw new HttpError(400, `${info.name} has no sandbox mode.`);
     if (input.mode === "live") {
       const missing = info.fields.filter((f) => !input.config[f.key]?.trim()).map((f) => f.label);
       if (missing.length) throw new HttpError(400, `Missing: ${missing.join(", ")}`);
@@ -274,13 +330,24 @@ export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Pro
   app.post("/api/tickets", async (req) => {
     const input = body(ticketInput, req);
     if (!store.getOrg(input.orgId)) throw notFound("Organization");
-    const ticket = store.createTicket({ ...input, priority: input.priority as never, author: actor(req) });
+    const org = store.getOrg(input.orgId)!;
+    const ticket = store.createTicket({
+      ...input,
+      priority: input.priority as never,
+      author: actor(req),
+      channel: "portal",
+      assurance: "technician",
+      verification: `Entered by ${actor(req)}`,
+    });
     store.audit({ orgId: input.orgId, actor: actor(req), action: "ticket.created", target: ticket.id, detail: { number: ticket.number } });
-    const run = input.autoRun ? agent.startTicketRun(ticket.id, actor(req)) : null;
+    const run = input.autoRun && !org.settings.paused ? agent.startTicketRun(ticket.id, actor(req)) : null;
     return { ...ticket, runId: run?.id ?? null };
   });
 
-  /** Inbound email / PSA webhook: routes to the org whose domain matches the sender. */
+  /**
+   * PSA / integration intake behind the API token. The caller relays a request on someone's behalf, so the
+   * requester's identity is only as good as the caller says: pass verified=true when the PSA authenticated them.
+   */
   app.post("/api/intake", async (req) => {
     const input = body(
       z.object({
@@ -289,24 +356,81 @@ export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Pro
         subject: z.string().trim().min(1),
         body: z.string().default(""),
         orgId: z.string().optional(),
+        verified: z.boolean().default(false),
         autoRun: z.boolean().default(true),
       }),
       req,
     );
     const domain = input.from.split("@")[1].toLowerCase();
-    const org = input.orgId ? store.getOrg(input.orgId) : store.listOrgs().find((o) => o.domain.toLowerCase() === domain);
+    const org = input.orgId ? store.getOrg(input.orgId) : store.findOrgByEmailDomain(input.from);
     if (!org) throw new HttpError(422, `No organization matches sender domain ${domain}.`);
-    const ticket = store.createTicket({
-      orgId: org.id,
-      title: input.subject,
-      description: input.body,
-      requesterName: input.fromName,
-      requesterEmail: input.from,
-      author: input.fromName || input.from,
+    if (!input.autoRun) {
+      const ticket = store.createTicket({
+        orgId: org.id,
+        title: input.subject,
+        description: input.body,
+        requesterName: input.fromName,
+        requesterEmail: input.from.toLowerCase(),
+        author: input.fromName || input.from,
+        channel: "api",
+        assurance: input.verified ? "email" : "none",
+        verification: input.verified ? "Verified by the submitting integration" : "Submitted through the API",
+      });
+      store.audit({ orgId: org.id, actor: "intake", action: "ticket.created", target: ticket.id, detail: { from: input.from } });
+      return { ...ticket, runId: null };
+    }
+    const result = await hub.receive({
+      channel: "api",
+      org,
+      sender: {
+        name: input.fromName,
+        email: input.from.toLowerCase(),
+        assurance: input.verified ? "email" : "none",
+        verification: input.verified ? "Verified by the submitting integration" : "Submitted through the API",
+      },
+      subject: input.subject,
+      text: input.body,
+      thread: null,
+      ref: {},
     });
-    store.audit({ orgId: org.id, actor: "intake", action: "ticket.created", target: ticket.id, detail: { from: input.from } });
-    const run = input.autoRun ? agent.startTicketRun(ticket.id, "intake") : null;
-    return { ...ticket, runId: run?.id ?? null };
+    return { ...store.getTicket(result.ticketId)!, runId: result.runId };
+  });
+
+  /** Lets a technician try the end-user experience: messages go through the same pipeline as Slack or Teams. */
+  app.post("/api/simulate", async (req) => {
+    const input = body(
+      z.object({
+        orgId: z.string(),
+        email: z.string().trim().toLowerCase().email(),
+        name: z.string().default(""),
+        text: z.string().trim().min(1),
+        assurance: z.enum(["none", "email", "chat", "directory"]).default("directory"),
+        threadId: z.string().optional(),
+      }),
+      req,
+    );
+    const org = store.getOrg(input.orgId);
+    if (!org) throw notFound("Organization");
+    const threadId = input.threadId ?? `sim-${Date.now().toString(36)}`;
+    const result = await hub.receive({
+      channel: "chat",
+      org,
+      sender: { name: input.name, email: input.email, assurance: input.assurance, verification: `Simulated by ${actor(req)} (${input.assurance})` },
+      text: input.text,
+      thread: { key: "threadId", value: threadId },
+      ref: { threadId, simulated: "1", private: "1" },
+    });
+    return { ...result, threadId };
+  });
+
+  app.get("/api/channels", async () => {
+    const base = config.channels.publicUrl;
+    return [
+      { id: "email", name: "Email", enabled: hub.has("email") && Boolean(config.channels.emailHookSecret), inbound: Boolean(config.channels.emailHookSecret), outbound: hub.has("email"), webhookUrl: `${base}/hooks/email?key=…`, env: ["HALEY_EMAIL_HOOK_SECRET", "HALEY_SMTP_URL", "HALEY_SMTP_FROM"] },
+      { id: "slack", name: "Slack", enabled: hub.has("slack"), inbound: hub.has("slack"), outbound: hub.has("slack"), webhookUrl: `${base}/hooks/slack/events`, env: ["HALEY_SLACK_SIGNING_SECRET"] },
+      { id: "teams", name: "Microsoft Teams", enabled: hub.has("teams"), inbound: hub.has("teams"), outbound: hub.has("teams"), webhookUrl: `${base}/hooks/teams/messages`, env: ["HALEY_TEAMS_APP_ID", "HALEY_TEAMS_APP_PASSWORD", "HALEY_TEAMS_TENANT_ID"] },
+      { id: "chat", name: "Chat bridge (Google Chat, SMS, custom)", enabled: Boolean(config.channels.chatWebhookSecret), inbound: Boolean(config.channels.chatWebhookSecret), outbound: Boolean(config.channels.chatWebhookSecret), webhookUrl: `${base}/hooks/chat`, env: ["HALEY_CHAT_WEBHOOK_SECRET"] },
+    ];
   });
 
   app.get<{ Params: { id: string } }>("/api/tickets/:id", async (req) => {
@@ -352,17 +476,25 @@ export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Pro
     // Check before saving so a 409 never leaves a half-applied request behind.
     const active = input.runAgent ? agent.activeRun(ticket.id) : undefined;
     if (active) throw new RunConflictError(`Haley is already working this ticket (run ${active.id}).`);
+    if (input.runAgent && store.getOrg(ticket.org_id)?.settings.paused) throw new RunConflictError("Haley is paused for this client.");
     const event = store.addTicketEvent(ticket.id, input.kind, input.author || actor(req), input.body);
     if (ticket.status === "waiting_on_customer" && input.kind === "comment" && input.author) {
       store.setTicketStatus(ticket.id, "in_progress", "system");
     }
     const run = input.runAgent ? agent.startTicketRun(ticket.id, actor(req)) : null;
+    if (input.kind === "reply") {
+      // A technician's public reply goes out on the requester's channel too.
+      const delivery = await hub.deliverReply(ticket, input.body);
+      event.meta = store.mergeEventMeta(event.id, { delivery });
+    }
     return { event, runId: run?.id ?? null };
   });
 
+  const runMode = z.object({ mode: z.enum(["live", "plan"]).default("live") });
+
   app.post<{ Params: { id: string } }>("/api/tickets/:id/run", async (req) => {
     if (!store.getTicket(req.params.id)) throw notFound("Ticket");
-    return agent.startTicketRun(req.params.id, actor(req));
+    return agent.startTicketRun(req.params.id, actor(req), body(runMode, req).mode);
   });
 
   // --------------------------------------------------------------- runs
@@ -374,9 +506,12 @@ export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Pro
   });
 
   app.post("/api/runs", async (req) => {
-    const input = body(z.object({ orgId: z.string(), title: z.string().trim().min(1), instruction: z.string().trim().min(1) }), req);
+    const input = body(
+      z.object({ orgId: z.string(), title: z.string().trim().min(1), instruction: z.string().trim().min(1), mode: z.enum(["live", "plan"]).default("live") }),
+      req,
+    );
     if (!store.getOrg(input.orgId)) throw notFound("Organization");
-    return agent.startTaskRun(input.orgId, input.title, input.instruction, actor(req));
+    return agent.startTaskRun(input.orgId, input.title, input.instruction, actor(req), input.mode);
   });
 
   app.get<{ Params: { id: string } }>("/api/runs/:id", async (req) => {

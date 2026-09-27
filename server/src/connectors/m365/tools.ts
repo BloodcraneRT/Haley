@@ -153,6 +153,7 @@ export function m365Tools(api: M365Api): HaleyTool[] {
       description: "Add a user to a group (by group id, display name or email). Use for shared mailbox / distribution list / Teams / app access requests.",
       input: z.object({ user, group: z.string().min(1) }),
       risk: "write",
+      grantsAccess: true,
       describe: (i) => `Add ${i.user} to group "${i.group}"`,
       run: async ({ user, group }) => {
         const [u, g] = await Promise.all([api.getUser(user), resolveGroup(api, group)]);

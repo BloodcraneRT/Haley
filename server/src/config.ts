@@ -17,6 +17,25 @@ export interface HaleyConfig {
   maxAgentIterations: number;
   webDist: string | null;
   production: boolean;
+  channels: ChannelConfig;
+}
+
+/** End-user channel credentials. A channel is enabled when its secrets are set. */
+export interface ChannelConfig {
+  /** Public base URL of this server, used to show webhook addresses in the dashboard. */
+  publicUrl: string;
+  /** Shared secret for the inbound email webhook (?key= or x-haley-hook-secret header). */
+  emailHookSecret: string;
+  /** SMTP URL for outbound email, e.g. smtps://user:pass@smtp.example.com:465 */
+  smtpUrl: string;
+  smtpFrom: string;
+  slackSigningSecret: string;
+  teamsAppId: string;
+  teamsAppPassword: string;
+  /** Set for single-tenant bot registrations; empty for multi-tenant bots. */
+  teamsTenantId: string;
+  /** HMAC secret for the generic chat webhook (Google Chat, SMS or custom bridges). */
+  chatWebhookSecret: string;
 }
 
 function parseKey(raw: string | undefined, production: boolean, dbPath: string): Buffer {
@@ -59,5 +78,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HaleyConfig {
     // Built dashboard; from src/ or dist/ this resolves to <repo>/web/dist.
     webDist: env.HALEY_WEB_DIST ?? join(import.meta.dirname, "../../web/dist"),
     production,
+    channels: {
+      publicUrl: (env.HALEY_PUBLIC_URL ?? `http://localhost:${env.PORT ?? 8787}`).replace(/\/$/, ""),
+      emailHookSecret: env.HALEY_EMAIL_HOOK_SECRET ?? "",
+      smtpUrl: env.HALEY_SMTP_URL ?? "",
+      smtpFrom: env.HALEY_SMTP_FROM ?? "",
+      slackSigningSecret: env.HALEY_SLACK_SIGNING_SECRET ?? "",
+      teamsAppId: env.HALEY_TEAMS_APP_ID ?? "",
+      teamsAppPassword: env.HALEY_TEAMS_APP_PASSWORD ?? "",
+      teamsTenantId: env.HALEY_TEAMS_TENANT_ID ?? "",
+      chatWebhookSecret: env.HALEY_CHAT_WEBHOOK_SECRET ?? "",
+    },
   };
 }

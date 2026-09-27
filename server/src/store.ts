@@ -6,21 +6,26 @@ import type {
   Action,
   ActionStatus,
   AuditEntry,
+  Assurance,
   Autonomy,
   Integration,
   IntegrationMode,
   KbArticle,
   Org,
+  OrgSettings,
   ProviderId,
   Risk,
   Run,
   RunKind,
+  RunMode,
   RunStatus,
   Ticket,
   TicketEvent,
   TicketPriority,
+  TicketChannel,
   TicketStatus,
 } from "./types.js";
+import { DEFAULT_ORG_SETTINGS } from "./types.js";
 
 type Row = Record<string, unknown>;
 
@@ -58,37 +63,57 @@ export class Store {
 
   // ---------------------------------------------------------------- orgs
 
-  createOrg(input: { name: string; domain?: string; autonomy?: Autonomy; notes?: string }): Org {
+  createOrg(input: { name: string; domain?: string; autonomy?: Autonomy; notes?: string; settings?: Partial<OrgSettings> }): Org {
     const org: Org = {
       id: newId("org"),
       name: input.name,
       domain: input.domain ?? "",
       autonomy: input.autonomy ?? "supervised",
       notes: input.notes ?? "",
+      settings: { ...DEFAULT_ORG_SETTINGS, ...input.settings },
       created_at: now(),
     };
     this.db
-      .prepare("INSERT INTO orgs (id, name, domain, autonomy, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(org.id, org.name, org.domain, org.autonomy, org.notes, org.created_at);
+      .prepare("INSERT INTO orgs (id, name, domain, autonomy, notes, settings, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(org.id, org.name, org.domain, org.autonomy, org.notes, json(org.settings), org.created_at);
     return org;
   }
 
   listOrgs(): Org[] {
-    return this.db.prepare("SELECT * FROM orgs ORDER BY name COLLATE NOCASE").all() as unknown as Org[];
+    return (this.db.prepare("SELECT * FROM orgs ORDER BY name COLLATE NOCASE").all() as Row[]).map((r) => this.toOrg(r));
   }
 
   getOrg(id: string): Org | null {
-    return (this.db.prepare("SELECT * FROM orgs WHERE id = ?").get(id) as unknown as Org) ?? null;
+    const row = this.db.prepare("SELECT * FROM orgs WHERE id = ?").get(id) as Row | undefined;
+    return row ? this.toOrg(row) : null;
   }
 
-  updateOrg(id: string, patch: Partial<Pick<Org, "name" | "domain" | "autonomy" | "notes">>): Org | null {
+  updateOrg(
+    id: string,
+    patch: Partial<Pick<Org, "name" | "domain" | "autonomy" | "notes">> & { settings?: Partial<OrgSettings> },
+  ): Org | null {
     const org = this.getOrg(id);
     if (!org) return null;
-    const next = { ...org, ...patch };
+    const next = { ...org, ...patch, settings: { ...org.settings, ...patch.settings } };
     this.db
-      .prepare("UPDATE orgs SET name = ?, domain = ?, autonomy = ?, notes = ? WHERE id = ?")
-      .run(next.name, next.domain, next.autonomy, next.notes, id);
+      .prepare("UPDATE orgs SET name = ?, domain = ?, autonomy = ?, notes = ?, settings = ? WHERE id = ?")
+      .run(next.name, next.domain, next.autonomy, next.notes, json(next.settings), id);
     return next;
+  }
+
+  /** The org whose primary or extra email domains include this address's domain. */
+  findOrgByEmailDomain(email: string): Org | null {
+    const domain = email.split("@")[1]?.toLowerCase();
+    if (!domain) return null;
+    return (
+      this.listOrgs().find(
+        (o) => o.domain.toLowerCase() === domain || o.settings.emailDomains.some((d) => d.toLowerCase() === domain),
+      ) ?? null
+    );
+  }
+
+  private toOrg(row: Row): Org {
+    return { ...(row as unknown as Org), settings: { ...DEFAULT_ORG_SETTINGS, ...parse<Partial<OrgSettings>>(row.settings, {}) } };
   }
 
   deleteOrg(id: string): boolean {
@@ -175,6 +200,10 @@ export class Store {
     priority?: TicketPriority;
     category?: string;
     author?: string;
+    channel?: TicketChannel;
+    channelRef?: Record<string, string>;
+    assurance?: Assurance;
+    verification?: string;
   }): Ticket {
     return tx(this.db, () => {
       const next = this.db.prepare("SELECT COALESCE(MAX(number), 1000) + 1 AS n FROM tickets").get() as Row;
@@ -191,14 +220,19 @@ export class Store {
         priority: input.priority ?? "normal",
         category: input.category ?? "uncategorized",
         assignee: "haley",
+        channel: input.channel ?? "portal",
+        channel_ref: input.channelRef ?? {},
+        assurance: input.assurance ?? "none",
+        verification: input.verification ?? "",
+        needs_followup: false,
         created_at: ts,
         updated_at: ts,
       };
       this.db
         .prepare(
           `INSERT INTO tickets (id, number, org_id, title, description, requester_name, requester_email,
-             status, priority, category, assignee, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             status, priority, category, assignee, channel, channel_ref, assurance, verification, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           ticket.id,
@@ -212,6 +246,10 @@ export class Store {
           ticket.priority,
           ticket.category,
           ticket.assignee,
+          ticket.channel,
+          json(ticket.channel_ref),
+          ticket.assurance,
+          ticket.verification,
           ticket.created_at,
           ticket.updated_at,
         );
@@ -242,11 +280,44 @@ export class Store {
       ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, updated_at DESC
       LIMIT ?`;
     args.push(filter.limit ?? 200);
-    return this.db.prepare(sql).all(...args) as unknown as Ticket[];
+    return (this.db.prepare(sql).all(...args) as Row[]).map((r) => this.toTicket(r));
   }
 
   getTicket(id: string): Ticket | null {
-    return (this.db.prepare("SELECT * FROM tickets WHERE id = ?").get(id) as unknown as Ticket) ?? null;
+    const row = this.db.prepare("SELECT * FROM tickets WHERE id = ?").get(id) as Row | undefined;
+    return row ? this.toTicket(row) : null;
+  }
+
+  getTicketByNumber(number: number): Ticket | null {
+    const row = this.db.prepare("SELECT * FROM tickets WHERE number = ?").get(number) as Row | undefined;
+    return row ? this.toTicket(row) : null;
+  }
+
+  /** Most recently updated open ticket matching a channel reference key, for threading follow-up messages. */
+  findOpenTicketByChannelRef(orgId: string, channel: TicketChannel, key: string, value: string): Ticket | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM tickets WHERE org_id = ? AND channel = ? AND status NOT IN ('resolved', 'closed')
+           AND json_extract(channel_ref, '$.' || ?) = ? ORDER BY updated_at DESC LIMIT 1`,
+      )
+      .get(orgId, channel, key, value) as Row | undefined;
+    return row ? this.toTicket(row) : null;
+  }
+
+  setTicketChannelRef(id: string, ref: Record<string, string>): void {
+    this.db.prepare("UPDATE tickets SET channel_ref = ? WHERE id = ?").run(json(ref), id);
+  }
+
+  setNeedsFollowup(id: string, value: boolean): void {
+    this.db.prepare("UPDATE tickets SET needs_followup = ? WHERE id = ?").run(value ? 1 : 0, id);
+  }
+
+  private toTicket(row: Row): Ticket {
+    return {
+      ...(row as unknown as Ticket),
+      channel_ref: parse(row.channel_ref, {}),
+      needs_followup: Boolean(row.needs_followup),
+    };
   }
 
   updateTicket(
@@ -264,11 +335,12 @@ export class Store {
     }
     if (Object.keys(changes).length === 0) return ticket;
     const next = { ...ticket, ...patch, updated_at: now() } as Ticket;
+    if (patch.status === "resolved" || patch.status === "closed") next.needs_followup = false;
     this.db
       .prepare(
-        "UPDATE tickets SET status = ?, priority = ?, category = ?, assignee = ?, title = ?, updated_at = ? WHERE id = ?",
+        "UPDATE tickets SET status = ?, priority = ?, category = ?, assignee = ?, title = ?, needs_followup = ?, updated_at = ? WHERE id = ?",
       )
-      .run(next.status, next.priority, next.category, next.assignee, next.title, next.updated_at, id);
+      .run(next.status, next.priority, next.category, next.assignee, next.title, next.needs_followup ? 1 : 0, next.updated_at, id);
     for (const [field, change] of Object.entries(changes)) {
       this.addTicketEvent(
         id,
@@ -300,6 +372,13 @@ export class Store {
     return event;
   }
 
+  mergeEventMeta(eventId: string, meta: Record<string, unknown>): Record<string, unknown> {
+    const row = this.db.prepare("SELECT meta FROM ticket_events WHERE id = ?").get(eventId) as Row | undefined;
+    const merged = { ...parse<Record<string, unknown>>(row?.meta, {}), ...meta };
+    this.db.prepare("UPDATE ticket_events SET meta = ? WHERE id = ?").run(json(merged), eventId);
+    return merged;
+  }
+
   listTicketEvents(ticketId: string): TicketEvent[] {
     return (this.db.prepare("SELECT * FROM ticket_events WHERE ticket_id = ? ORDER BY created_at, rowid").all(ticketId) as Row[]).map(
       (r) => ({ ...(r as unknown as TicketEvent), meta: parse(r.meta, {}) }),
@@ -312,6 +391,7 @@ export class Store {
     orgId: string;
     ticketId?: string | null;
     kind: RunKind;
+    mode?: RunMode;
     title: string;
     instruction: string;
     createdBy: string;
@@ -320,17 +400,17 @@ export class Store {
     const id = newId("run");
     this.db
       .prepare(
-        `INSERT INTO runs (id, org_id, ticket_id, kind, title, instruction, status, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
+        `INSERT INTO runs (id, org_id, ticket_id, kind, mode, title, instruction, status, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
       )
-      .run(id, input.orgId, input.ticketId ?? null, input.kind, input.title, input.instruction, input.createdBy, ts, ts);
+      .run(id, input.orgId, input.ticketId ?? null, input.kind, input.mode ?? "live", input.title, input.instruction, input.createdBy, ts, ts);
     return this.getRun(id)!;
   }
 
   getRun(id: string): Run | null {
     const row = this.db
       .prepare(
-        `SELECT id, org_id, ticket_id, kind, title, instruction, status, summary, error, iterations,
+        `SELECT id, org_id, ticket_id, kind, mode, title, instruction, status, summary, error, iterations,
                 input_tokens, output_tokens, created_by, created_at, updated_at FROM runs WHERE id = ?`,
       )
       .get(id);
@@ -355,7 +435,7 @@ export class Store {
     args.push(filter.limit ?? 100);
     return this.db
       .prepare(
-        `SELECT id, org_id, ticket_id, kind, title, instruction, status, summary, error, iterations,
+        `SELECT id, org_id, ticket_id, kind, mode, title, instruction, status, summary, error, iterations,
                 input_tokens, output_tokens, created_by, created_at, updated_at
          FROM runs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT ?`,
       )
@@ -443,12 +523,13 @@ export class Store {
     description: string;
     rationale: string;
     status: ActionStatus;
+    policyReason?: string;
   }): Action {
     const id = newId("act");
     this.db
       .prepare(
-        `INSERT INTO actions (id, run_id, org_id, tool_use_id, tool, input, risk, description, rationale, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO actions (id, run_id, org_id, tool_use_id, tool, input, risk, description, rationale, status, policy_reason, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -461,6 +542,7 @@ export class Store {
         input.description,
         input.rationale,
         input.status,
+        input.policyReason ?? "",
         now(),
       );
     return this.getAction(id)!;
@@ -556,6 +638,7 @@ export class Store {
       risk: row.risk as Risk,
       description: row.description as string,
       rationale: row.rationale as string,
+      policy_reason: (row.policy_reason as string) ?? "",
       status: row.status as ActionStatus,
       result: parse(row.result, null),
       has_secrets: Boolean(row.secrets_sealed),
@@ -646,6 +729,29 @@ export class Store {
       ? this.db.prepare("SELECT * FROM audit_log WHERE org_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?").all(filter.orgId, filter.limit ?? 200)
       : this.db.prepare("SELECT * FROM audit_log ORDER BY created_at DESC, rowid DESC LIMIT ?").all(filter.limit ?? 200);
     return (rows as Row[]).map((r) => ({ ...(r as unknown as AuditEntry), detail: parse(r.detail, {}) }));
+  }
+
+  /** Security-sensitive changes Haley made on its own for one requester since the given ISO time. */
+  countSelfServiceSince(orgId: string, requesterEmail: string, since: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM actions a JOIN runs r ON r.id = a.run_id JOIN tickets t ON t.id = r.ticket_id
+         WHERE a.org_id = ? AND LOWER(t.requester_email) = LOWER(?) AND a.status = 'executed' AND a.risk = 'destructive'
+           AND a.decided_by IS NULL AND a.executed_at >= ?`,
+      )
+      .get(orgId, requesterEmail, since) as Row;
+    return Number(row.n);
+  }
+
+  /** Customer-system changes Haley executed for an org since the given ISO time. */
+  countAgentChangesSince(orgId: string, since: string): number {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM actions WHERE org_id = ? AND status = 'executed' AND risk IN ('write', 'destructive')
+           AND decided_by IS NULL AND executed_at >= ?`,
+      )
+      .get(orgId, since) as Row;
+    return Number(row.n);
   }
 
   // --------------------------------------------------------------- stats

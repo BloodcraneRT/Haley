@@ -2,13 +2,16 @@ import { z } from "zod";
 import type { HaleyConfig } from "../config.js";
 import { SensitiveResult, type Connector, type HaleyTool, type ToolContext } from "../connectors/types.js";
 import type { PendingState, Store } from "../store.js";
-import type { Action, Org, Run } from "../types.js";
+import type { ReplyDelivery } from "../channels/types.js";
+import { ASSURANCE_RANK, type Action, type Org, type Run, type RunMode } from "../types.js";
 import { builtinTools } from "./builtinTools.js";
 import { describeLlmError, type LlmClient, type Message, type MessageParam, type ToolParam } from "./llm.js";
-import { decide } from "./policy.js";
+import { decide, targetsOf, type Requester } from "./policy.js";
 import { orgContext, SYSTEM_PROMPT, ticketContext } from "./prompts.js";
 
 const AGENT = "haley";
+
+const PLAN_MODE_TEXT = `PLAN MODE (dry run): nothing you do in this run takes effect. Tools that would change anything (customer systems, the ticket, replies, the knowledge base) are simulated and tell you what would happen, including whether the live policy would run the step automatically or need approval. Investigate normally with read tools, then finish with the exact plan: each step, the tool and inputs you would use, and what the requester would be told.`;
 const MAX_RESULT_CHARS = 40_000;
 
 type ToolResult = { content: string; is_error: boolean };
@@ -44,29 +47,36 @@ export class AgentService {
     private readonly llm: LlmClient,
     private readonly config: Pick<HaleyConfig, "maxAgentIterations">,
     private readonly connectorsFor: (orgId: string) => Connector[],
+    private readonly delivery: ReplyDelivery | null = null,
   ) {}
 
   // --------------------------------------------------------------- start
 
-  startTicketRun(ticketId: string, createdBy: string): Run {
+  startTicketRun(ticketId: string, createdBy: string, mode: RunMode = "live"): Run {
     const ticket = this.store.getTicket(ticketId);
     if (!ticket) throw new Error(`No ticket ${ticketId}`);
     const active = this.activeRun(ticketId);
     if (active) throw new RunConflictError(`Haley is already working this ticket (run ${active.id}).`);
     const org = this.requireOrg(ticket.org_id);
+    this.assertNotPaused(org);
     const prior = this.store.listRuns({ ticketId }).length;
+    // This run sees the full history, so any queued follow-up is covered by it.
+    if (mode === "live") this.store.setNeedsFollowup(ticketId, false);
     const run = this.store.createRun({
       orgId: org.id,
       ticketId,
       kind: "ticket",
+      mode,
       title: `#${ticket.number} ${ticket.title}`,
-      instruction: prior ? "Follow-up pass on this ticket." : "Work this ticket.",
+      instruction: mode === "plan" ? "Plan this ticket (dry run)." : prior ? "Follow-up pass on this ticket." : "Work this ticket.",
       createdBy,
     });
     const intro = `${this.header(org)}\n\n${ticketContext(ticket, this.store.listTicketEvents(ticketId))}\n\n${
-      prior
-        ? "You have worked this ticket before; the history above shows what happened since. Continue from where things stand."
-        : "Work this ticket."
+      mode === "plan"
+        ? PLAN_MODE_TEXT
+        : prior
+          ? "You have worked this ticket before; the history above shows what happened since. Continue from where things stand."
+          : "Work this ticket."
     }`;
     this.store.saveRunProgress(run.id, { messages: [{ role: "user", content: intro }] });
     this.store.audit({ orgId: org.id, actor: createdBy, action: "run.started", target: run.id, detail: { ticketId } });
@@ -74,14 +84,19 @@ export class AgentService {
     return this.store.getRun(run.id)!;
   }
 
-  startTaskRun(orgId: string, title: string, instruction: string, createdBy: string): Run {
+  startTaskRun(orgId: string, title: string, instruction: string, createdBy: string, mode: RunMode = "live"): Run {
     const org = this.requireOrg(orgId);
-    const run = this.store.createRun({ orgId, kind: "task", title, instruction, createdBy });
-    const intro = `${this.header(org)}\n\n<task requested_by="${createdBy}">\n${instruction}\n</task>`;
+    this.assertNotPaused(org);
+    const run = this.store.createRun({ orgId, kind: "task", mode, title, instruction, createdBy });
+    const intro = `${this.header(org)}\n\n<task requested_by="${createdBy}">\n${instruction}\n</task>${mode === "plan" ? `\n\n${PLAN_MODE_TEXT}` : ""}`;
     this.store.saveRunProgress(run.id, { messages: [{ role: "user", content: intro }] });
     this.store.audit({ orgId, actor: createdBy, action: "run.started", target: run.id, detail: { title } });
     this.kick(run.id, () => this.loop(run.id));
     return this.store.getRun(run.id)!;
+  }
+
+  private assertNotPaused(org: Org) {
+    if (org.settings.paused) throw new RunConflictError(`Haley is paused for ${org.name}. Resume her on the client's page.`);
   }
 
   activeRun(ticketId: string): Run | undefined {
@@ -156,9 +171,18 @@ export class AgentService {
     return org;
   }
 
+  /** Who the run is acting for. Technician-started tasks and dashboard tickets carry technician authority. */
+  private requesterFor(run: Run, org: Org): Requester {
+    const ticket = run.ticket_id ? this.store.getTicket(run.ticket_id) : null;
+    if (!ticket) return { email: null, assurance: "technician", authorized: true };
+    const email = ticket.requester_email.toLowerCase() || null;
+    const listed = Boolean(email) && org.settings.authorizedRequesters.some((a) => a.toLowerCase() === email);
+    return { email, assurance: ticket.assurance, authorized: ticket.assurance === "technician" || listed };
+  }
+
   private toolsFor(run: Run): Map<string, HaleyTool> {
     const tools = new Map<string, HaleyTool>();
-    for (const tool of builtinTools(this.store, run)) tools.set(tool.name, tool);
+    for (const tool of builtinTools(this.store, run, this.delivery)) tools.set(tool.name, tool);
     for (const connector of this.connectorsFor(run.org_id)) {
       for (const tool of connector.tools) tools.set(tool.name, tool);
     }
@@ -204,7 +228,7 @@ export class AgentService {
     const messages = this.store.getRunMessages<MessageParam>(runId);
 
     this.store.saveRunProgress(runId, { status: "running" });
-    if (run.ticket_id) {
+    if (run.ticket_id && run.mode === "live") {
       const ticket = this.store.getTicket(run.ticket_id);
       if (ticket && ["new", "awaiting_approval"].includes(ticket.status)) {
         this.store.setTicketStatus(ticket.id, "in_progress", AGENT);
@@ -213,6 +237,9 @@ export class AgentService {
 
     for (;;) {
       run = this.store.getRun(runId)!;
+      if (this.requireOrg(run.org_id).settings.paused) {
+        return this.fail(runId, "Haley was paused for this client, so she stopped before doing anything else.");
+      }
       if (run.iterations >= this.config.maxAgentIterations) {
         return this.fail(runId, `Stopped after ${run.iterations} model turns without finishing. A technician should review.`);
       }
@@ -278,7 +305,52 @@ export class AgentService {
         pending.results[call.id] = { content: `Invalid input: ${z.prettifyError(parsed.error)}`, is_error: true };
         continue;
       }
-      const decision = decide(org.autonomy, tool.risk);
+      const targets = targetsOf(parsed.data);
+      const protectedList = org.settings.protectedAccounts.map((a) => a.toLowerCase());
+      const requester = this.requesterFor(run, org);
+      const decision = decide({
+        autonomy: org.autonomy,
+        risk: tool.risk,
+        grantsAccess: Boolean(tool.grantsAccess),
+        requester,
+        targets,
+        protectedTargets: targets.filter((t) => protectedList.includes(t)),
+        changesLastHour: this.store.countAgentChangesSince(org.id, new Date(Date.now() - 3_600_000).toISOString()),
+        maxChangesPerHour: org.settings.maxAutoChangesPerHour,
+        selfServiceToday: requester.email
+          ? this.store.countSelfServiceSince(org.id, requester.email, new Date(Date.now() - 86_400_000).toISOString())
+          : 0,
+        maxSelfServicePerDay: org.settings.maxSelfServicePerUserPerDay,
+      });
+      const description = tool.describe?.(parsed.data) ?? tool.name;
+
+      if (run.mode === "plan" && tool.risk !== "read") {
+        const live =
+          decision.outcome === "run"
+            ? "would run automatically"
+            : decision.outcome === "approve"
+              ? `would wait for technician approval (${decision.reason})`
+              : `would be blocked (${decision.reason})`;
+        const planned = this.store.createAction({
+          runId: run.id,
+          orgId: run.org_id,
+          toolUseId: call.id,
+          tool: tool.name,
+          input: parsed.data,
+          risk: tool.risk,
+          description,
+          rationale,
+          status: "planned",
+          policyReason: decision.reason,
+        });
+        this.store.finishAction(planned.id, { status: "planned", result: { planned: true, live: decision.outcome } });
+        pending.results[call.id] = {
+          content: `Plan mode: not executed. In a live run this step ${live}. Assume it succeeds and continue planning.`,
+          is_error: false,
+        };
+        continue;
+      }
+
       const action = this.store.createAction({
         runId: run.id,
         orgId: run.org_id,
@@ -286,15 +358,16 @@ export class AgentService {
         tool: tool.name,
         input: parsed.data,
         risk: tool.risk,
-        description: tool.describe?.(parsed.data) ?? tool.name,
+        description,
         rationale,
-        status: decision === "approve" ? "pending_approval" : decision === "block" ? "blocked" : "approved",
+        status: decision.outcome === "approve" ? "pending_approval" : decision.outcome === "block" ? "blocked" : "approved",
+        policyReason: decision.reason,
       });
-      if (decision === "run") {
+      if (decision.outcome === "run") {
         pending.results[call.id] = await this.execute(run, action, tool, parsed.data);
-      } else if (decision === "block") {
+      } else if (decision.outcome === "block") {
         pending.results[call.id] = {
-          content: `Blocked by policy: ${org.name} is in read-only mode, so changes to customer systems are not allowed. Recommend this step to a technician instead.`,
+          content: `Blocked by policy: ${decision.reason} Recommend this step to a technician instead.`,
           is_error: true,
         };
         this.store.audit({ orgId: run.org_id, actor: AGENT, action: "action.blocked", target: action.id, detail: { tool: tool.name } });
@@ -314,6 +387,13 @@ export class AgentService {
           `Waiting for technician approval on ${awaiting} action${awaiting > 1 ? "s" : ""}.${rationale ? `\n\n${rationale}` : ""}`,
           { runId: run.id },
         );
+        // Chat users would otherwise wait in silence while a technician reviews.
+        const ticket = this.store.getTicket(run.ticket_id);
+        if (ticket && this.delivery && !["portal", "api"].includes(ticket.channel)) {
+          const text = "This needs a quick sign-off from the IT team before I can finish. I'll pick it back up as soon as it's approved.";
+          const delivery = await this.delivery.deliverReply(ticket, text);
+          this.store.addTicketEvent(ticket.id, "reply", AGENT, text, { auto: true, delivery });
+        }
       }
       return true;
     }
@@ -340,6 +420,10 @@ export class AgentService {
       if (output instanceof SensitiveResult) {
         secrets = output.secrets;
         output = output.visible;
+        const note = await this.deliverSecretToRequester(run, action, secrets);
+        if (output && typeof output === "object" && "temporaryPassword" in output) {
+          output = { ...output, temporaryPassword: note };
+        }
       }
       this.store.finishAction(action.id, { status: "executed", result: output ?? { ok: true }, secrets });
       if (changesCustomer) {
@@ -365,13 +449,52 @@ export class AgentService {
     }
   }
 
+  /**
+   * Self-service: when a verified requester changed their own account, send the credential to them
+   * privately on their channel. Otherwise it waits for a technician to reveal and deliver it.
+   */
+  private async deliverSecretToRequester(run: Run, action: Action, secrets: Record<string, string>): Promise<string> {
+    const fallback = "[held for a technician to deliver securely]";
+    const ticket = run.ticket_id ? this.store.getTicket(run.ticket_id) : null;
+    if (!ticket || !this.delivery || ASSURANCE_RANK[ticket.assurance] < ASSURANCE_RANK.chat) return fallback;
+    const targets = targetsOf(action.input);
+    const self = ticket.requester_email.toLowerCase();
+    if (!self || targets.length === 0 || !targets.every((t) => t === self)) return fallback;
+    const result = await this.delivery.deliverSecret(ticket, `Here's the temporary password for ${self}:`, secrets);
+    this.store.addTicketEvent(ticket.id, "action", AGENT, result.delivered ? `Sent the temporary password privately: ${result.detail}` : `Couldn't send the temporary password privately: ${result.detail}`, { actionId: action.id, delivery: result });
+    this.store.audit({
+      orgId: run.org_id,
+      actor: AGENT,
+      action: result.delivered ? "secret.delivered" : "secret.delivery_failed",
+      target: action.id,
+      detail: { to: self, channel: ticket.channel, detail: result.detail },
+    });
+    return result.delivered ? `[sent privately to the requester: ${result.detail}]` : `${fallback} (automatic delivery failed: ${result.detail})`;
+  }
+
   private complete(runId: string, summary: string) {
     const run = this.store.getRun(runId)!;
     this.store.saveRunProgress(runId, { status: "completed", summary });
     if (run.ticket_id && summary) {
-      this.store.addTicketEvent(run.ticket_id, "agent_note", AGENT, summary, { runId, summary: true });
+      const body = run.mode === "plan" ? `**Plan (dry run, nothing was changed)**\n\n${summary}` : summary;
+      this.store.addTicketEvent(run.ticket_id, "agent_note", AGENT, body, { runId, summary: true, plan: run.mode === "plan" });
     }
     this.store.audit({ orgId: run.org_id, actor: AGENT, action: "run.completed", target: runId });
+    if (run.mode === "live") this.startFollowupIfNeeded(run.ticket_id);
+  }
+
+  /** The requester wrote again while Haley was busy: take another pass with the new messages. */
+  private startFollowupIfNeeded(ticketId: string | null) {
+    if (!ticketId) return;
+    const ticket = this.store.getTicket(ticketId);
+    if (!ticket?.needs_followup || ["resolved", "closed", "escalated"].includes(ticket.status)) return;
+    queueMicrotask(() => {
+      try {
+        if (!this.activeRun(ticketId)) this.startTicketRun(ticketId, "follow-up");
+      } catch (err) {
+        this.store.audit({ actor: AGENT, action: "run.followup_failed", target: ticketId, detail: { error: errorMessage(err) } });
+      }
+    });
   }
 
   private fail(runId: string, error: string, escalate = false) {
@@ -382,11 +505,19 @@ export class AgentService {
     for (const action of this.store.listActions({ runId, status: "pending_approval" })) {
       this.store.finishAction(action.id, { status: "rejected", decidedBy: "system", decisionNote: "Run ended" });
     }
-    if (run.ticket_id) {
+    if (run.ticket_id && run.mode === "plan") {
+      this.store.addTicketEvent(run.ticket_id, "agent_note", AGENT, `Plan run stopped: ${error}`, { runId, error: true });
+    } else if (run.ticket_id) {
       this.store.addTicketEvent(run.ticket_id, "agent_note", AGENT, `Haley stopped: ${error}`, { runId, error: true });
       const ticket = this.store.getTicket(run.ticket_id);
       if (escalate || ticket?.status === "awaiting_approval" || ticket?.status === "in_progress") {
         this.store.updateTicket(run.ticket_id, { status: "escalated", assignee: "unassigned" }, AGENT);
+        if (ticket && this.delivery && ticket.channel !== "portal" && ticket.channel !== "api") {
+          const text = "I've passed this to our IT team so a person can take it from here. They'll follow up with you on this ticket.";
+          void this.delivery.deliverReply(ticket, text).then((delivery) => {
+            this.store.addTicketEvent(ticket.id, "reply", AGENT, text, { auto: true, delivery });
+          });
+        }
       }
     }
     this.store.audit({ orgId: run.org_id, actor: AGENT, action: "run.failed", target: runId, detail: { error } });

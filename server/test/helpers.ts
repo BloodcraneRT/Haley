@@ -4,7 +4,8 @@ import { buildApp } from "../src/app.js";
 import { loadConfig, type HaleyConfig } from "../src/config.js";
 
 type Block = Message["content"][number];
-type Step = (req: LlmRequest) => { content: Array<Record<string, unknown>>; stop_reason?: Message["stop_reason"] };
+type StepResult = { content: Array<Record<string, unknown>>; stop_reason?: Message["stop_reason"] };
+type Step = (req: LlmRequest) => StepResult | Promise<StepResult>;
 
 let counter = 0;
 
@@ -30,7 +31,7 @@ export class ScriptedLlm implements LlmClient {
     this.requests.push(structuredClone(req));
     const step = this.steps.shift();
     if (!step) throw new Error("ScriptedLlm ran out of steps");
-    const { content, stop_reason } = step(req);
+    const { content, stop_reason } = await step(req);
     return {
       id: `msg_${++counter}`,
       type: "message",
@@ -56,8 +57,43 @@ export function testConfig(overrides: Partial<HaleyConfig> = {}): HaleyConfig {
   };
 }
 
-export async function makeApp(llm: LlmClient = new ScriptedLlm(), overrides: Partial<HaleyConfig> = {}, fetchImpl?: typeof fetch) {
-  return buildApp({ config: testConfig(overrides), llm, fetchImpl });
+export async function makeApp(
+  llm: LlmClient = new ScriptedLlm(),
+  overrides: Partial<HaleyConfig> = {},
+  fetchImpl?: typeof fetch,
+  mailTransport?: { sendMail(options: Record<string, unknown>): Promise<unknown> },
+) {
+  return buildApp({ config: testConfig(overrides), llm, fetchImpl, mailTransport });
+}
+
+export interface FetchCall {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: string;
+  json: () => any;
+}
+
+/** A fetch stand-in that records calls and answers from a list of URL routes. */
+export function fakeFetch(routes: Array<[RegExp, (call: FetchCall) => unknown]>) {
+  const calls: FetchCall[] = [];
+  const impl = (async (input: string | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    const body = typeof init.body === "string" ? init.body : init.body ? String(init.body) : "";
+    const call: FetchCall = {
+      url,
+      method: init.method ?? "GET",
+      headers: Object.fromEntries(Object.entries((init.headers as Record<string, string>) ?? {}).map(([k, v]) => [k.toLowerCase(), v])),
+      body,
+      json: () => JSON.parse(body),
+    };
+    calls.push(call);
+    const route = routes.find(([re]) => re.test(url));
+    if (!route) return new Response(JSON.stringify({ error: `no route for ${url}` }), { status: 404 });
+    const out = route[1](call);
+    return out instanceof Response ? out : Response.json(out);
+  }) as typeof fetch;
+  return { impl, calls };
 }
 
 /** The tool_result blocks in the most recent user turn the model was sent. */

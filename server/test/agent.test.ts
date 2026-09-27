@@ -72,7 +72,7 @@ describe("agent runner", () => {
 
     const [result] = lastToolResults(llm.requests[1]);
     expect(result.is_error).toBe(false);
-    expect(result.content).toContain("delivered securely");
+    expect(result.content).toContain("held for a technician");
     const everythingSentToModel = JSON.stringify(llm.requests);
     expect(everythingSentToModel).not.toContain(secrets.temporaryPassword);
     expect(JSON.stringify(store.getRunMessages(run.id))).not.toContain(secrets.temporaryPassword);

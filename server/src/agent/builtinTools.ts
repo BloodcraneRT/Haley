@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { defineTool, type HaleyTool } from "../connectors/types.js";
+import type { ReplyDelivery } from "../channels/types.js";
 import type { Store } from "../store.js";
 import type { Run } from "../types.js";
 import { TICKET_PRIORITIES } from "../types.js";
@@ -67,7 +68,7 @@ function knowledgeTools(store: Store, run: Run): HaleyTool[] {
   ];
 }
 
-function ticketTools(store: Store, run: Run, ticketId: string): HaleyTool[] {
+function ticketTools(store: Store, run: Run, ticketId: string, delivery_: ReplyDelivery | null): HaleyTool[] {
   return [
     defineTool({
       name: "get_ticket",
@@ -78,8 +79,9 @@ function ticketTools(store: Store, run: Run, ticketId: string): HaleyTool[] {
     }),
     defineTool({
       name: "update_ticket",
-      description: "Set the ticket's category, priority and/or status.",
+      description: "Set the ticket's title, category, priority and/or status.",
       input: z.object({
+        title: z.string().min(3).max(120).optional().describe("Short summary, useful when the ticket came from a chat message"),
         category: z
           .string()
           .optional()
@@ -106,13 +108,16 @@ function ticketTools(store: Store, run: Run, ticketId: string): HaleyTool[] {
     }),
     defineTool({
       name: "reply_to_requester",
-      description: "Post a public reply to the person who opened the ticket.",
+      description:
+        "Reply to the person who opened the ticket. It is delivered on the channel they used (email, Slack, Teams, chat) and recorded on the ticket. Markdown is fine.",
       input: z.object({ message: z.string().min(1) }),
       risk: "internal",
       describe: (i) => `Reply to requester: ${i.message.slice(0, 80)}`,
       run: async ({ message }) => {
-        store.addTicketEvent(ticketId, "reply", AGENT, message, { runId: run.id });
-        return { ok: true };
+        const ticket = store.getTicket(ticketId)!;
+        const delivery = delivery_ ? await delivery_.deliverReply(ticket, message) : { delivered: false, detail: "Posted on the ticket." };
+        store.addTicketEvent(ticketId, "reply", AGENT, message, { runId: run.id, delivery });
+        return { ok: true, delivered: delivery.delivered, detail: delivery.detail };
       },
     }),
     defineTool({
@@ -130,6 +135,6 @@ function ticketTools(store: Store, run: Run, ticketId: string): HaleyTool[] {
   ];
 }
 
-export function builtinTools(store: Store, run: Run): HaleyTool[] {
-  return [...(run.ticket_id ? ticketTools(store, run, run.ticket_id) : []), ...knowledgeTools(store, run)];
+export function builtinTools(store: Store, run: Run, delivery: ReplyDelivery | null = null): HaleyTool[] {
+  return [...(run.ticket_id ? ticketTools(store, run, run.ticket_id, delivery) : []), ...knowledgeTools(store, run)];
 }
