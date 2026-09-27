@@ -10,6 +10,8 @@ export interface GwsUser {
   isEnrolledIn2Sv: boolean;
   lastLoginTime: string | null;
   aliases: string[];
+  /** Recovery phone on file (E.164), used for SMS verification codes. */
+  recoveryPhone: string | null;
 }
 
 export interface GwsGroup {

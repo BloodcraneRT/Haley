@@ -112,6 +112,7 @@ export class LiveGoogleApi implements GoogleApi {
       isEnrolledIn2Sv: Boolean(u.isEnrolledIn2Sv),
       lastLoginTime: u.lastLoginTime && !u.lastLoginTime.startsWith("1970") ? u.lastLoginTime : null,
       aliases: u.aliases ?? [],
+      recoveryPhone: u.recoveryPhone ?? null,
     };
   }
 

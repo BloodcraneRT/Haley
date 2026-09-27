@@ -7,6 +7,7 @@ import { m365Tools } from "./m365/tools.js";
 import { SandboxGoogleApi, type GoogleSandboxState } from "./sandbox/google.js";
 import { SandboxM365Api, type M365SandboxState } from "./sandbox/m365.js";
 import { ConnectorError, type Connector, type ProviderInfo, type StateStore } from "./types.js";
+import { SmsCodeVerifier, type PhoneLookup } from "./verification/sms.js";
 
 export const PROVIDERS: ProviderInfo[] = [
   {
@@ -60,6 +61,25 @@ export const PROVIDERS: ProviderInfo[] = [
     supportsSandbox: false,
     kind: "channel",
   },
+  {
+    id: "sms_code",
+    name: "SMS verification code (Twilio)",
+    description:
+      "Step-up identity check for any client: Haley texts a one-time code to the phone number already on the user's Microsoft 365 or Google account, and the user replies with it. No MFA vendor needed.",
+    fields: [
+      { key: "accountSid", label: "Twilio Account SID", placeholder: "AC…" },
+      { key: "authToken", label: "Twilio Auth Token", secret: true },
+      { key: "from", label: "Sender number or Messaging Service SID", placeholder: "+15551234567 or MG…" },
+    ],
+    setupSteps: [
+      "Create or reuse a Twilio account with an SMS-capable number or Messaging Service (register it for A2P 10DLC if you text US numbers).",
+      "Paste the Account SID, Auth Token and sender here.",
+      "Make sure the client's Microsoft 365 app has UserAuthenticationMethod.Read.All (to read registered phones), or that Google users have recovery phones set.",
+    ],
+    capabilities: ["Codes only go to the number on file", "10-minute codes, 5 guesses", "Works for Microsoft 365 and Google users"],
+    supportsSandbox: true,
+    kind: "verification",
+  },
 ];
 
 export function providerInfo(id: string): ProviderInfo | undefined {
@@ -78,7 +98,39 @@ function required(config: Record<string, string>, keys: string[]) {
   if (missing.length) throw new ConnectorError(`Missing credentials: ${missing.join(", ")}`);
 }
 
-export function buildConnector(store: Store, integration: Integration, fetchImpl: typeof fetch = fetch): Connector {
+/** Other connectors for the same org, e.g. so a verifier can look up a user's phone number in the directory. */
+export type SiblingConnectors = () => Connector[];
+
+/** The phone number registered on the user's account in the org's directory (Microsoft 365, then Google). */
+export function directoryPhoneLookup(siblings: SiblingConnectors, orgId: string): PhoneLookup {
+  const ctx = { orgId, runId: "", ticketId: null };
+  return async (email) => {
+    for (const connector of siblings()) {
+      for (const tool of connector.tools) {
+        try {
+          if (tool.name === "m365_get_user") {
+            const user = (await tool.run({ user: email }, ctx)) as { mfaMethods?: Array<{ type: string; detail: string }> };
+            const phone = user.mfaMethods?.find((m) => /phone/i.test(m.type) && /\d{6,}/.test(m.detail.replace(/\D/g, "")))?.detail;
+            if (phone) return phone;
+          } else if (tool.name === "gws_get_user") {
+            const user = (await tool.run({ email }, ctx)) as { recoveryPhone?: string | null };
+            if (user.recoveryPhone) return user.recoveryPhone;
+          }
+        } catch {
+          // Not in this directory; try the next one.
+        }
+      }
+    }
+    return null;
+  };
+}
+
+export function buildConnector(
+  store: Store,
+  integration: Integration,
+  fetchImpl: typeof fetch = fetch,
+  siblings: SiblingConnectors = () => [],
+): Connector {
   const config = store.getIntegrationConfig(integration.id);
   const sandbox = integration.mode === "sandbox";
 
@@ -135,6 +187,36 @@ export function buildConnector(store: Store, integration: Integration, fetchImpl
         if (!data.ok) throw new ConnectorError(`Slack rejected the token: ${data.error}`);
         store.setIntegrationState(integration.id, { teamId: data.team_id, team: data.team });
         return `Connected to the ${data.team} workspace as @${data.user}.`;
+      },
+    };
+  }
+
+  if (integration.provider === "sms_code") {
+    const lookup = directoryPhoneLookup(siblings, integration.org_id);
+    let verifier: SmsCodeVerifier;
+    if (sandbox) {
+      verifier = new SmsCodeVerifier(null, lookup, fetchImpl, (email, phone, body) => {
+        const ticket = store.listTickets({ orgId: integration.org_id, status: "open", limit: 500 }).find((t) => t.requester_email.toLowerCase() === email);
+        if (ticket) store.addTicketEvent(ticket.id, "agent_note", "sandbox sms", `[Sandbox text to ${phone}] ${body}`, { sandbox: true });
+      });
+    } else {
+      required(config, ["accountSid", "authToken", "from"]);
+      verifier = new SmsCodeVerifier({ accountSid: config.accountSid, authToken: config.authToken, from: config.from }, lookup, fetchImpl);
+    }
+    return {
+      integrationId: integration.id,
+      provider: "sms_code",
+      label: integration.label,
+      tools: [],
+      verifier,
+      test: async () => {
+        if (sandbox) return "Sandbox: codes appear on the ticket timeline instead of being texted.";
+        const res = await fetchImpl(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.accountSid)}.json`, {
+          headers: { authorization: `Basic ${Buffer.from(`${config.accountSid}:${config.authToken}`).toString("base64")}` },
+        });
+        const data = (await res.json().catch(() => ({}))) as { friendly_name?: string; status?: string; message?: string };
+        if (!res.ok) throw new ConnectorError(`Twilio rejected the credentials: ${data.message ?? res.statusText}`, res.status);
+        return `Twilio account "${data.friendly_name}" (${data.status}). Codes go to the phone on each user's account.`;
       },
     };
   }

@@ -68,7 +68,8 @@ const CHANNEL_TEXT: Record<Ticket["channel"], string> = {
 
 export function ticketContext(ticket: Ticket, events: TicketEvent[]): string {
   const history = events
-    .filter((e) => e.kind !== "created")
+    // Sandbox texts (verification codes) are for the human tester, never for the model.
+    .filter((e) => e.kind !== "created" && !e.meta.sandbox)
     .map((e) => `[${e.created_at}] ${e.kind} by ${e.author}: ${e.body}`)
     .join("\n");
   return `<ticket number="${ticket.number}">

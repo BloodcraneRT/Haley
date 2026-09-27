@@ -9,55 +9,98 @@ import { effectiveAssurance, MFA_WINDOW_MS, TICKET_PRIORITIES } from "../types.j
 export const MAX_PUSHES_PER_TICKET_PER_HOUR = 3;
 export const MAX_PUSHES_PER_PERSON_PER_HOUR = 5;
 
-function verificationTool(store: Store, run: Run, ticketId: string, verifier: Verifier): HaleyTool {
-  return defineTool({
-    name: "verify_requester_identity",
-    description: `Send an MFA push (${verifier.method}) to the requester's own registered device and wait for them to approve it. Use before a security-sensitive change to their own account when their identity isn't strong enough for it. It always targets the ticket's requester, never anyone else. Tell them to expect the push first. Approval counts as step-up verification for ${MFA_WINDOW_MS / 60_000} minutes.`,
-    input: z.object({
-      reason: z.string().min(5).max(120).describe("Shown with the push where the method supports it, e.g. 'Password reset for ticket #1042'"),
-    }),
-    risk: "internal",
-    describe: (i) => `MFA push to the requester: ${i.reason}`,
-    run: async ({ reason }) => {
-      const ticket = store.getTicket(ticketId)!;
-      const email = ticket.requester_email.toLowerCase();
-      if (!email) throw new Error("This ticket has no requester email to verify.");
-      if (effectiveAssurance(ticket) === "mfa") {
-        return { outcome: "approved", alreadyVerified: true, detail: `Already verified with ${ticket.mfa_method} at ${ticket.mfa_verified_at}.` };
-      }
-      if (store.listVerifications({ ticketId }).some((a) => a.outcome === "denied")) {
-        throw new Error("The requester already denied a push on this ticket. Don't send another; a technician has to handle it.");
-      }
-      const since = new Date(Date.now() - 3_600_000).toISOString();
-      if (
-        store.listVerifications({ ticketId, since }).length >= MAX_PUSHES_PER_TICKET_PER_HOUR ||
-        store.listVerifications({ target: email, since }).length >= MAX_PUSHES_PER_PERSON_PER_HOUR
-      ) {
-        throw new Error("Too many verification pushes recently (MFA fatigue protection). Hand this to a technician.");
-      }
-
-      const result = await verifier.verify(email, { reason, ticketNumber: ticket.number });
-      store.recordVerification({ orgId: run.org_id, ticketId, method: verifier.method, target: email, outcome: result.outcome, detail: result.detail });
-      store.audit({ orgId: run.org_id, actor: AGENT, action: `verification.${result.outcome}`, target: ticketId, detail: { method: verifier.method, user: email, detail: result.detail } });
-      store.addTicketEvent(ticketId, "action", AGENT, `${verifier.method} to ${email}: ${result.outcome}. ${result.detail}`.trim(), { runId: run.id, verification: result.outcome });
-
-      if (result.outcome === "approved") {
-        store.markMfaVerified(ticketId, verifier.method, new Date().toISOString());
-        return { outcome: "approved", detail: result.detail, assurance: "mfa", validForMinutes: MFA_WINDOW_MS / 60_000 };
-      }
-      if (result.outcome === "denied") {
-        // Someone asked for changes to this account and its owner said no: treat as impersonation.
-        store.updateTicket(ticketId, { status: "escalated", assignee: "unassigned" }, AGENT);
-        store.addTicketEvent(ticketId, "escalation", AGENT, `The requester denied the ${verifier.method}. Possible impersonation: no changes were made.`, { runId: run.id });
-        return { outcome: "denied", detail: result.detail, instruction: "Make no changes. The ticket was escalated as possible impersonation; tell the requester a technician will contact them." };
-      }
-      return { outcome: result.outcome, detail: result.detail, instruction: "Not verified. You may try once more if the requester asks, otherwise hand off." };
-    },
-  });
-}
-
 const AGENT = "haley";
 const settableStatuses = ["in_progress", "waiting_on_customer", "escalated", "resolved"] as const;
+
+function verificationTools(store: Store, run: Run, ticketId: string, verifier: Verifier): HaleyTool[] {
+  const record = (email: string, outcome: string, detail: string) => {
+    store.recordVerification({ orgId: run.org_id, ticketId, method: verifier.method, target: email, outcome, detail });
+    store.audit({ orgId: run.org_id, actor: AGENT, action: `verification.${outcome}`, target: ticketId, detail: { method: verifier.method, user: email, detail } });
+    store.addTicketEvent(ticketId, "action", AGENT, `${verifier.method} for ${email}: ${outcome.replace("_", " ")}. ${detail}`.trim(), {
+      runId: run.id,
+      verification: outcome,
+    });
+  };
+
+  const settle = (email: string, outcome: string, detail: string) => {
+    if (outcome === "approved") {
+      store.markMfaVerified(ticketId, verifier.method, new Date().toISOString());
+      return { outcome, detail, assurance: "mfa", validForMinutes: MFA_WINDOW_MS / 60_000 };
+    }
+    if (outcome === "denied") {
+      // Someone asked for changes to this account and its owner said no (or kept guessing): treat as impersonation.
+      store.updateTicket(ticketId, { status: "escalated", assignee: "unassigned" }, AGENT);
+      store.addTicketEvent(ticketId, "escalation", AGENT, `Verification failed (${verifier.method}): ${detail} Possible impersonation; no changes were made.`, {
+        runId: run.id,
+      });
+      return { outcome, detail, instruction: "Make no changes. The ticket was escalated as possible impersonation; tell the requester a technician will contact them." };
+    }
+    return { outcome, detail };
+  };
+
+  const tools: HaleyTool[] = [
+    defineTool({
+      name: "verify_requester_identity",
+      description:
+        verifier.kind === "push"
+          ? `Send an MFA push (${verifier.method}) to the requester's own registered device and wait for them to approve it. Use before a security-sensitive change to their own account when their identity isn't strong enough for it. It always targets the ticket's requester, never anyone else. Tell them to expect the push first. Approval counts as step-up verification for ${MFA_WINDOW_MS / 60_000} minutes.`
+          : `Text a one-time code to the phone number already registered on the requester's account (never a number they give you). Use before a security-sensitive change to their own account when their identity isn't strong enough for it. Then ask them to reply with the code and call confirm_verification_code. A confirmed code counts as step-up verification for ${MFA_WINDOW_MS / 60_000} minutes.`,
+      input: z.object({
+        reason: z.string().min(5).max(120).describe("Why, e.g. 'Password reset for ticket #1042'"),
+      }),
+      risk: "internal",
+      describe: (i) => `${verifier.method} to the requester: ${i.reason}`,
+      run: async ({ reason }) => {
+        const ticket = store.getTicket(ticketId)!;
+        const email = ticket.requester_email.toLowerCase();
+        if (!email) throw new Error("This ticket has no requester email to verify.");
+        if (effectiveAssurance(ticket) === "mfa") {
+          return { outcome: "approved", alreadyVerified: true, detail: `Already verified with ${ticket.mfa_method} at ${ticket.mfa_verified_at}.` };
+        }
+        if (store.listVerifications({ ticketId }).some((a) => a.outcome === "denied")) {
+          throw new Error("Verification already failed on this ticket. Don't try again; a technician has to handle it.");
+        }
+        const since = new Date(Date.now() - 3_600_000).toISOString();
+        const sends = (rows: Array<{ outcome: string }>) => rows.filter((r) => r.outcome !== "wrong_code").length;
+        if (
+          sends(store.listVerifications({ ticketId, since })) >= MAX_PUSHES_PER_TICKET_PER_HOUR ||
+          sends(store.listVerifications({ target: email, since })) >= MAX_PUSHES_PER_PERSON_PER_HOUR
+        ) {
+          throw new Error("Too many verification attempts recently (MFA fatigue protection). Hand this to a technician.");
+        }
+        const result = await verifier.verify(email, { reason, ticketNumber: ticket.number });
+        record(email, result.outcome, result.detail);
+        if (result.outcome === "code_sent") {
+          return { outcome: "code_sent", detail: result.detail, instruction: "Ask the requester to reply with the 6-digit code, then call confirm_verification_code." };
+        }
+        const settled = settle(email, result.outcome, result.detail);
+        return result.outcome === "timeout" || result.outcome === "unavailable"
+          ? { ...settled, instruction: "Not verified. You may try once more if the requester asks, otherwise hand off." }
+          : settled;
+      },
+    }),
+  ];
+
+  if (verifier.kind === "code" && verifier.checkCode) {
+    const checkCode = verifier.checkCode.bind(verifier);
+    tools.push(
+      defineTool({
+        name: "confirm_verification_code",
+        description: "Check the one-time code the requester replied with after verify_requester_identity sent it.",
+        input: z.object({ code: z.string().min(4).max(12) }),
+        risk: "internal",
+        describe: () => "Check the requester's verification code",
+        run: async ({ code }) => {
+          const email = store.getTicket(ticketId)!.requester_email.toLowerCase();
+          const result = await checkCode(email, code);
+          record(email, result.outcome, result.detail);
+          return settle(email, result.outcome, result.detail);
+        },
+      }),
+    );
+  }
+  return tools;
+}
 
 function knowledgeTools(store: Store, run: Run): HaleyTool[] {
   return [
@@ -220,7 +263,7 @@ function ticketTools(store: Store, run: Run, ticketId: string, delivery_: ReplyD
 export function builtinTools(store: Store, run: Run, delivery: ReplyDelivery | null = null, verifier: Verifier | null = null): HaleyTool[] {
   return [
     ...(run.ticket_id ? ticketTools(store, run, run.ticket_id, delivery) : []),
-    ...(run.ticket_id && verifier ? [verificationTool(store, run, run.ticket_id, verifier)] : []),
+    ...(run.ticket_id && verifier ? verificationTools(store, run, run.ticket_id, verifier) : []),
     ...knowledgeTools(store, run),
   ];
 }

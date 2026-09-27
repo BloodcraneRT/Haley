@@ -57,16 +57,23 @@ export class ConnectorError extends Error {
 }
 
 export interface VerificationResult {
-  outcome: "approved" | "denied" | "timeout" | "unavailable";
+  /** code_sent: a one-time code went to the user's phone on file; confirm it with checkCode. */
+  outcome: "approved" | "denied" | "timeout" | "unavailable" | "code_sent" | "wrong_code";
   /** Human-readable detail, e.g. "Approved on iPhone 15" or "No push-capable device enrolled". */
   detail: string;
 }
 
-/** Out-of-band identity check: a push to the user's own registered MFA device. */
+/**
+ * Out-of-band identity check against something only the real user has: a push to their registered MFA
+ * device, or a one-time code sent to the phone number already on their account.
+ */
 export interface Verifier {
-  /** Short method name recorded on the ticket, e.g. "Duo push". */
+  /** Short method name recorded on the ticket, e.g. "Duo push" or "SMS code". */
   method: string;
+  kind: "push" | "code";
   verify(userEmail: string, context: { reason: string; ticketNumber: number | null }): Promise<VerificationResult>;
+  /** Code-based methods: check what the user typed back. */
+  checkCode?(userEmail: string, code: string): Promise<VerificationResult>;
 }
 
 export interface Connector {

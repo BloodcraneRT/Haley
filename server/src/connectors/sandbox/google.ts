@@ -27,6 +27,7 @@ function seed(domain: string): GoogleSandboxState {
     isEnrolledIn2Sv: true,
     lastLoginTime: day(1),
     aliases: [],
+    recoveryPhone: null,
     groups: [{ email: `everyone@${domain}`, role: "MEMBER" }],
     passwordChangedAt: null,
     signedOutAt: null,
@@ -48,11 +49,12 @@ function seed(domain: string): GoogleSandboxState {
       { id: randomUUID(), email: `clinical@${domain}`, name: "Clinical Team" },
     ],
     users: [
-      mk("maria", "Lopez", "/Staff", { isAdmin: true }),
+      mk("maria", "Lopez", "/Staff", { isAdmin: true, recoveryPhone: "+15550100101" }),
       mk("sam", "Chen", "/Staff/Clinical", { groups: [{ email: `everyone@${domain}`, role: "MEMBER" }, { email: `clinical@${domain}`, role: "MEMBER" }] }),
       mk("priya", "Nair", "/Staff/Clinical", { isEnrolledIn2Sv: false, groups: [{ email: `everyone@${domain}`, role: "MEMBER" }, { email: `clinical@${domain}`, role: "MEMBER" }] }),
       mk("tom", "Baker", "/Staff", { groups: [{ email: `everyone@${domain}`, role: "MEMBER" }, { email: `billing@${domain}`, role: "OWNER" }] }),
-      mk("jess", "Ortiz", "/Staff", { groups: [{ email: `everyone@${domain}`, role: "MEMBER" }, { email: `frontdesk@${domain}`, role: "MEMBER" }] }),
+      mk("jess", "Ortiz", "/Staff", {
+        recoveryPhone: "+15550100155", groups: [{ email: `everyone@${domain}`, role: "MEMBER" }, { email: `frontdesk@${domain}`, role: "MEMBER" }] }),
       mk("kevin", "Walsh", "/Contractors", { isEnrolledIn2Sv: false, lastLoginTime: day(62) }),
     ],
   };
@@ -132,6 +134,7 @@ export class SandboxGoogleApi implements GoogleApi {
       isEnrolledIn2Sv: false,
       lastLoginTime: null,
       aliases: [],
+      recoveryPhone: null,
       groups: [{ email: `everyone@${this.state.domain}`, role: "MEMBER" }],
       passwordChangedAt: new Date().toISOString(),
       signedOutAt: null,

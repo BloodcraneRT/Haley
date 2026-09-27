@@ -89,7 +89,18 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   const connectorFor = (integration: Integration): Connector => {
     let connector = connectorCache.get(integration.id);
     if (!connector) {
-      connector = buildConnector(store, integration, fetchImpl);
+      connector = buildConnector(store, integration, fetchImpl, () =>
+        store
+          .listIntegrations(integration.org_id)
+          .filter((i) => i.id !== integration.id)
+          .flatMap((i) => {
+            try {
+              return [connectorFor(i)];
+            } catch {
+              return [];
+            }
+          }),
+      );
       connectorCache.set(integration.id, connector);
     }
     return connector;
@@ -308,7 +319,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     if (!org) throw notFound("Organization");
     const input = body(
       z.object({
-        provider: z.enum(["m365", "google", "slack"]),
+        provider: z.enum(["m365", "google", "slack", "sms_code", "duo", "okta"]),
         mode: z.enum(["live", "sandbox"]).default("live"),
         label: z.string().trim().optional(),
         config: z.record(z.string(), z.string()).default({}),
