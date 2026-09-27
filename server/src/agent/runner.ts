@@ -51,7 +51,7 @@ export class AgentService {
   startTicketRun(ticketId: string, createdBy: string): Run {
     const ticket = this.store.getTicket(ticketId);
     if (!ticket) throw new Error(`No ticket ${ticketId}`);
-    const active = this.store.listRuns({ ticketId }).find((r) => ["queued", "running", "awaiting_approval"].includes(r.status));
+    const active = this.activeRun(ticketId);
     if (active) throw new RunConflictError(`Haley is already working this ticket (run ${active.id}).`);
     const org = this.requireOrg(ticket.org_id);
     const prior = this.store.listRuns({ ticketId }).length;
@@ -82,6 +82,10 @@ export class AgentService {
     this.store.audit({ orgId, actor: createdBy, action: "run.started", target: run.id, detail: { title } });
     this.kick(run.id, () => this.loop(run.id));
     return this.store.getRun(run.id)!;
+  }
+
+  activeRun(ticketId: string): Run | undefined {
+    return this.store.listRuns({ ticketId }).find((r) => ["queued", "running", "awaiting_approval"].includes(r.status));
   }
 
   // ------------------------------------------------------------ approval

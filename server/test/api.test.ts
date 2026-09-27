@@ -103,6 +103,19 @@ describe("HTTP API", () => {
     expect(audit.map((a: { action: string }) => a.action)).toEqual(expect.arrayContaining(["action.approved", "action.executed"]));
   });
 
+  it("does not save a comment when Haley can't be started on the ticket", async () => {
+    const llm = new ScriptedLlm(turn(toolUse("m365_reset_password", { user: "isaiah.langer@contoso.example" })));
+    const { app, agent } = await makeApp(llm);
+    await app.inject({ method: "POST", url: "/api/demo" });
+    const [ticket] = (await app.inject({ url: "/api/tickets" })).json();
+    const run = (await app.inject({ method: "POST", url: `/api/tickets/${ticket.id}/run` })).json();
+    await agent.settled(run.id);
+    const before = (await app.inject({ url: `/api/tickets/${ticket.id}` })).json().events.length;
+    const res = await app.inject({ method: "POST", url: `/api/tickets/${ticket.id}/comments`, payload: { body: "More info", runAgent: true } });
+    expect(res.statusCode).toBe(409);
+    expect((await app.inject({ url: `/api/tickets/${ticket.id}` })).json().events).toHaveLength(before);
+  });
+
   it("supports knowledge base CRUD and search", async () => {
     const { app } = await makeApp();
     const a = (await app.inject({ method: "POST", url: "/api/kb", payload: { title: "VPN setup", body: "Install the client", tags: ["vpn"] } })).json();
@@ -110,6 +123,7 @@ describe("HTTP API", () => {
     const found = (await app.inject({ url: "/api/kb?q=globalprotect" })).json();
     expect(found).toHaveLength(1);
     expect(found[0]).toMatchObject({ org_name: "Global", tags: ["vpn"] });
+    expect((await app.inject({ url: "/api/audit" })).json()[0]).toMatchObject({ action: "kb.updated", target: a.id });
     expect((await app.inject({ method: "DELETE", url: `/api/kb/${a.id}` })).statusCode).toBe(200);
     expect((await app.inject({ url: `/api/kb/${a.id}` })).statusCode).toBe(404);
   });

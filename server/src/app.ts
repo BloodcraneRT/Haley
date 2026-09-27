@@ -349,6 +349,9 @@ export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Pro
       }),
       req,
     );
+    // Check before saving so a 409 never leaves a half-applied request behind.
+    const active = input.runAgent ? agent.activeRun(ticket.id) : undefined;
+    if (active) throw new RunConflictError(`Haley is already working this ticket (run ${active.id}).`);
     const event = store.addTicketEvent(ticket.id, input.kind, input.author || actor(req), input.body);
     if (ticket.status === "waiting_on_customer" && input.kind === "comment" && input.author) {
       store.setTicketStatus(ticket.id, "in_progress", "system");
@@ -457,13 +460,15 @@ export async function buildApp({ config, llm, fetchImpl = fetch }: AppDeps): Pro
     if (!existing) throw notFound("Article");
     // Not articleInput.partial(): zod keeps defaults on partial fields, which would blank omitted ones.
     const input = body(z.object({ title: z.string().trim().min(1).optional(), body: z.string().optional(), tags: z.array(z.string()).optional() }), req);
-    return store.saveArticle({
+    const article = store.saveArticle({
       id: existing.id,
       orgId: existing.org_id,
       title: input.title ?? existing.title,
       body: input.body ?? existing.body,
       tags: input.tags ?? existing.tags,
     });
+    store.audit({ orgId: existing.org_id, actor: actor(req), action: "kb.updated", target: existing.id, detail: { title: article.title } });
+    return article;
   });
 
   app.delete<{ Params: { id: string } }>("/api/kb/:id", async (req) => {
