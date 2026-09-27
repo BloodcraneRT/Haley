@@ -39,7 +39,8 @@ export async function sendSms(creds: TwilioCredentials, to: string, body: string
  */
 /** E.164 from directory formats like "+1 555-0142" or "+1 5550142". */
 export const toE164 = (phone: string) => {
-  const digits = phone.replace(/[^\d+]/g, "");
+  // Graph formats numbers as "+1 2065555555" with an optional "x123" extension.
+  const digits = phone.replace(/x\d*$/i, "").replace(/[^\d+]/g, "");
   return digits.startsWith("+") ? digits : `+${digits}`;
 };
 

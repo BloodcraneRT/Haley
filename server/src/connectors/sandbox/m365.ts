@@ -78,7 +78,7 @@ function seed(domain: string, displayName: string): M365SandboxState {
       licenses: [SKU_E3],
       authMethods: [
         { type: "password", detail: "" },
-        { type: "phone", detail: "+1 555-0142" },
+        { type: "phone:mobile", detail: "+1 5550142" },
       ],
     }),
     mk("Grady", "Archie", "IT Coordinator", "Operations", { groups: [all.id, vpn.id], licenses: [SKU_E3] }),

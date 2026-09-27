@@ -189,7 +189,9 @@ export class GraphM365Api implements M365Api {
   async listAuthMethods(userId: string): Promise<M365AuthMethod[]> {
     const methods = await this.list<Json>(`/users/${encodeURIComponent(userId)}/authentication/methods`);
     return methods.map((m) => {
-      const type = String(m["@odata.type"] ?? "").replace("#microsoft.graph.", "").replace("AuthenticationMethod", "");
+      let type = String(m["@odata.type"] ?? "").replace("#microsoft.graph.", "").replace("AuthenticationMethod", "");
+      // Keep the phone type: only "mobile" numbers can receive text messages.
+      if (type === "phone" && m.phoneType) type = `phone:${m.phoneType}`;
       const detail = m.phoneNumber ?? m.displayName ?? m.emailAddress ?? m.deviceTag ?? "";
       return { type, detail: String(detail) };
     });

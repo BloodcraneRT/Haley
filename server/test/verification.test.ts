@@ -107,7 +107,7 @@ describe("step-up verification", () => {
 
   it("only texts the number on file and limits guesses", async () => {
     const twilio = fakeFetch([[/api\.twilio\.com/, () => ({ sid: "SM1", status: "queued" })]]);
-    const v = new SmsCodeVerifier({ accountSid: "AC1", authToken: "t", from: "+15550000000" }, async () => "+1 555-0142", twilio.impl);
+    const v = new SmsCodeVerifier({ accountSid: "AC1", authToken: "t", from: "+15550000000" }, async () => "+1 5550142x99", twilio.impl);
     expect(await v.verify("a@x.example", { reason: "r", ticketNumber: 7 })).toMatchObject({ outcome: "code_sent" });
     const form = new URLSearchParams(twilio.calls[0].body);
     expect(form.get("To")).toBe("+15550142");

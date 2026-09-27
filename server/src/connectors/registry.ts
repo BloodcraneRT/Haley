@@ -148,7 +148,8 @@ export function directoryPhoneLookup(siblings: SiblingConnectors, orgId: string)
         try {
           if (tool.name === "m365_get_user") {
             const user = (await tool.run({ user: email }, ctx)) as { mfaMethods?: Array<{ type: string; detail: string }> };
-            const phone = user.mfaMethods?.find((m) => /phone/i.test(m.type) && /\d{6,}/.test(m.detail.replace(/\D/g, "")))?.detail;
+            // Only a mobile number can receive a text (office and alternate phones may be landlines).
+            const phone = user.mfaMethods?.find((m) => m.type === "phone:mobile" && /\d{6,}/.test(m.detail.replace(/\D/g, "")))?.detail;
             if (phone) return phone;
           } else if (tool.name === "gws_get_user") {
             const user = (await tool.run({ email }, ctx)) as { recoveryPhone?: string | null };
