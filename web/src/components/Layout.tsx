@@ -1,5 +1,7 @@
 import {
+  ArrowLeftRight,
   BookOpen,
+  BrainCircuit,
   Building,
   CircleAlert,
   Inbox,
@@ -15,7 +17,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import { useApp } from "../lib/app-context";
+import { aiReady, useApp } from "../lib/app-context";
 import { Avatar } from "./Avatar";
 
 function NavItem({ to, icon, children, badge, end }: { to: string; icon: ReactNode; children: ReactNode; badge?: number; end?: boolean }) {
@@ -48,6 +50,8 @@ export function Layout() {
   const [navOpen, setNavOpen] = useState(false);
   const location = useLocation();
   const pending = stats?.awaitingApproval ?? 0;
+  const ready = aiReady(health);
+  const defaultName = health.defaultModel?.name ?? health.model;
 
   useEffect(() => setNavOpen(false), [location.pathname]);
 
@@ -94,6 +98,12 @@ export function Layout() {
           <NavItem to="/simulate" icon={<MessagesSquare className="icon" aria-hidden="true" />}>
             Try as end user
           </NavItem>
+          <NavItem to="/psa" icon={<ArrowLeftRight className="icon" aria-hidden="true" />}>
+            PSA sync
+          </NavItem>
+          <NavItem to="/models" icon={<BrainCircuit className="icon" aria-hidden="true" />}>
+            AI models
+          </NavItem>
           <NavItem to="/kb" icon={<BookOpen className="icon" aria-hidden="true" />}>
             Knowledge base
           </NavItem>
@@ -102,10 +112,28 @@ export function Layout() {
           </NavItem>
         </nav>
         <div className="sidebar-footer">
-          <div className="server-status" title={`Model: ${health.model}`}>
-            <span className={`pill pill-dot ${health.claudeCredentials ? "tone-green" : "tone-amber"}`} style={{ padding: 0, background: "none" }} />
-            <span className="truncate">{health.claudeCredentials ? health.model : "Agent offline: no Claude key"}</span>
-          </div>
+          <Link
+            to="/models"
+            className="server-status"
+            title={
+              health.defaultModel
+                ? `Default model: ${health.defaultModel.name} (${health.defaultModel.provider}/${health.defaultModel.model})${ready ? "" : ". No credentials."}`
+                : "No AI model configured"
+            }
+          >
+            <span className={`pill pill-dot ${ready ? "tone-green" : "tone-amber"}`} style={{ padding: 0, background: "none" }} />
+            <span className="truncate">
+              {ready ? (
+                <>
+                  Agent: <span className="server-status-model">{defaultName}</span>
+                </>
+              ) : health.defaultModel ? (
+                `Agent offline: ${defaultName} has no key`
+              ) : (
+                "Agent offline: no AI model"
+              )}
+            </span>
+          </Link>
           <NavLink to="/settings" className={({ isActive }) => `user-chip ${isActive ? "active" : ""}`} style={{ textDecoration: "none" }}>
             <Avatar name={user || "?"} />
             <span className="truncate" style={{ flex: 1 }}>
@@ -134,13 +162,26 @@ export function Layout() {
             </Link>
           )}
         </header>
-        {!health.claudeCredentials && (
+        {!ready && (
           <div className="banner banner-warn global-banner" role="status">
             <CircleAlert className="icon" aria-hidden="true" />
-            <span>
-              <strong>Haley can't run yet.</strong> The server has no Claude credentials. Set <code>ANTHROPIC_API_KEY</code> in the server's
-              environment and restart it; until then, runs will fail immediately. Everything else works.
+            <span className="spacer">
+              <strong>Haley can't run yet.</strong>{" "}
+              {health.defaultModel ? (
+                <>
+                  Haley's default model (<strong>{health.defaultModel.name}</strong>) has no credentials: add a key on the AI models page
+                  {health.defaultModel.provider === "anthropic" ? <> or set <code>ANTHROPIC_API_KEY</code> on the server</> : null}.
+                </>
+              ) : (
+                <>No AI model is configured. Add one on the AI models page.</>
+              )}{" "}
+              Until then, runs fail immediately; everything else works.
             </span>
+            {location.pathname !== "/models" && (
+              <Link to="/models" className="btn btn-sm nowrap">
+                <BrainCircuit className="icon-sm" aria-hidden="true" /> AI models
+              </Link>
+            )}
           </div>
         )}
         <main id="main" className="content" tabIndex={-1}>

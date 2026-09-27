@@ -14,6 +14,8 @@ export type ThemePref = "system" | "light" | "dark";
 
 interface AppContextValue {
   health: Health;
+  /** Re-reads /api/health (e.g. after the default AI model or its key changes). */
+  refreshHealth: () => void;
   user: string;
   setUser: (name: string) => void;
   stats: Stats | undefined;
@@ -50,7 +52,7 @@ export function applyTheme(theme: ThemePref) {
 
 applyTheme(readTheme());
 
-export function AppProvider({ health, onSignOut, children }: { health: Health; onSignOut: () => void; children: ReactNode }) {
+export function AppProvider({ health: initialHealth, onSignOut, children }: { health: Health; onSignOut: () => void; children: ReactNode }) {
   const [user, setUserState] = useState(session.user);
   const [theme, setThemeState] = useState<ThemePref>(readTheme);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -58,6 +60,9 @@ export function AppProvider({ health, onSignOut, children }: { health: Health; o
 
   // Stats drive the approvals badge and dashboard tiles; poll gently in the background.
   const statsPoll = usePoll(() => api.stats(), [], 10_000);
+  // Health says whether the default AI model has credentials; it changes when models are edited.
+  const healthPoll = usePoll(() => api.health(), [], 60_000);
+  const health = healthPoll.data ?? initialHealth;
 
   const toast = useCallback((message: string, kind: ToastKind = "success") => {
     const id = nextId.current++;
@@ -83,10 +88,12 @@ export function AppProvider({ health, onSignOut, children }: { health: Health; o
 
   const { reload: reloadStats } = statsPoll;
   const refreshStats = useCallback(() => void reloadStats(), [reloadStats]);
+  const { reload: reloadHealth } = healthPoll;
+  const refreshHealth = useCallback(() => void reloadHealth(), [reloadHealth]);
 
   const value = useMemo<AppContextValue>(
-    () => ({ health, user, setUser, stats: statsPoll.data, refreshStats, toast, theme, setTheme, signOut: onSignOut }),
-    [health, user, setUser, statsPoll.data, refreshStats, toast, theme, setTheme, onSignOut],
+    () => ({ health, refreshHealth, user, setUser, stats: statsPoll.data, refreshStats, toast, theme, setTheme, signOut: onSignOut }),
+    [health, refreshHealth, user, setUser, statsPoll.data, refreshStats, toast, theme, setTheme, onSignOut],
   );
 
   return (
@@ -106,3 +113,6 @@ export function AppProvider({ health, onSignOut, children }: { health: Health; o
     </AppContext.Provider>
   );
 }
+
+/** Whether the default AI model has credentials (older servers only report claudeCredentials). */
+export const aiReady = (health: Health) => health.aiConfigured ?? health.claudeCredentials;

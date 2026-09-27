@@ -1,3 +1,4 @@
+import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
 import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter } from "./types.js";
@@ -88,7 +89,7 @@ export class DynamicsAdapter implements PsaAdapter {
       }),
     });
     const body = (await res.json().catch(() => ({}))) as Json;
-    if (!res.ok) throw new Error(`Dynamics sign-in failed: ${body.error_description ?? body.error ?? res.statusText}`);
+    if (!res.ok) throw new ConnectorError(`Dynamics sign-in failed: ${body.error_description ?? body.error ?? res.statusText}`);
     this.token = { value: body.access_token, expiresAt: this.nowMs() + Number(body.expires_in ?? 3599) * 1000 };
     return this.token.value;
   }
@@ -120,7 +121,7 @@ export class DynamicsAdapter implements PsaAdapter {
       }
       if (res.status === 204) return { data: {} as T, headers: res.headers };
       const data = (await res.json().catch(() => ({}))) as Json;
-      if (!res.ok) throw new Error(`Dynamics ${method} ${url.replace(this.api, "").split("?")[0]} failed (${res.status}): ${data.error?.message ?? res.statusText}`);
+      if (!res.ok) throw new ConnectorError(`Dynamics ${method} ${url.replace(this.api, "").split("?")[0]} failed (${res.status}): ${data.error?.message ?? res.statusText}`);
       return { data: data as T, headers: res.headers };
     }
   }
@@ -141,7 +142,7 @@ export class DynamicsAdapter implements PsaAdapter {
     if (data[key]) return String(data[key]);
     const entity = headers.get("odata-entityid") ?? "";
     const match = /\(([0-9a-f-]{36})\)$/i.exec(entity);
-    if (!match) throw new Error(`Dynamics didn't return the new ${key}.`);
+    if (!match) throw new ConnectorError(`Dynamics didn't return the new ${key}.`);
     return match[1];
   }
 
@@ -200,7 +201,7 @@ export class DynamicsAdapter implements PsaAdapter {
   }
 
   private async activity(id: string): Promise<[Json[], Json[]]> {
-    if (!GUID.test(id)) throw new Error(`Not a case id: ${id}`);
+    if (!GUID.test(id)) throw new ConnectorError(`Not a case id: ${id}`);
     return Promise.all([
       this.pages<Json>(`/annotations?$select=annotationid,subject,notetext,createdon,_createdby_value&$filter=_objectid_value eq ${id}&$orderby=createdon asc`),
       // Incoming emails regarding the case are the customer's replies.
@@ -211,7 +212,7 @@ export class DynamicsAdapter implements PsaAdapter {
   }
 
   async getTicket(id: string): Promise<ExternalTicket> {
-    if (!GUID.test(id)) throw new Error(`Not a case id: ${id}`);
+    if (!GUID.test(id)) throw new ConnectorError(`Not a case id: ${id}`);
     const [{ data }, [notes, emails]] = await Promise.all([
       this.call<Json>("GET", `/incidents(${id})?$select=${INCIDENT_SELECT}&$expand=${INCIDENT_EXPAND}`),
       this.activity(id),

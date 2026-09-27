@@ -5,7 +5,7 @@ import { RunModeBadge, RunStatusPill } from "./Pill";
 import { RelativeTime } from "./RelativeTime";
 
 /** One run in a list: kind icon, title, context line and status. */
-export function RunRow({ run, showOrg = true }: { run: Run & { org_name?: string }; showOrg?: boolean }) {
+export function RunRow({ run, showOrg = true, showModel }: { run: Run & { org_name?: string }; showOrg?: boolean; showModel?: boolean }) {
   return (
     <Link to={`/runs/${run.id}`} className="list-row">
       <span className="kind-icon" title={run.kind === "ticket" ? "Ticket run" : "Task"}>
@@ -18,6 +18,12 @@ export function RunRow({ run, showOrg = true }: { run: Run & { org_name?: string
         <span className="meta truncate" style={{ display: "block" }}>
           {showOrg && run.org_name ? `${run.org_name} · ` : ""}
           {run.created_by} · <RelativeTime iso={run.created_at} />
+          {showModel && run.model && (
+            <span title={`Served by ${run.model}`}>
+              {" "}
+              · served by <span className="run-model">{run.model}</span>
+            </span>
+          )}
         </span>
       </span>
       <RunModeBadge mode={run.mode} />

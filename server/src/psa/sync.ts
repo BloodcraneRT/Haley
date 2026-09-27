@@ -12,6 +12,8 @@ export interface SyncResult {
   statusUpdates: number;
   unmappedCustomers: string[];
   errors: string[];
+  /** Set when the sync didn't run, with the reason. */
+  skipped?: string;
 }
 
 /** Statuses both sides can agree on; finer-grained Haley statuses collapse to these for comparison. */
@@ -120,7 +122,9 @@ export class PsaSync {
   async sync(connectionId: string): Promise<SyncResult> {
     const result: SyncResult = { imported: 0, commentsImported: 0, exported: 0, pushed: 0, statusUpdates: 0, unmappedCustomers: [], errors: [] };
     const connection = this.store.getPsaConnection(connectionId);
-    if (!connection || this.running.has(connectionId)) return result;
+    if (!connection) return { ...result, skipped: "The connection no longer exists." };
+    if (!connection.enabled) return { ...result, skipped: "Sync is paused for this connection." };
+    if (this.running.has(connectionId)) return { ...result, skipped: "A sync is already running for this connection." };
     this.running.add(connectionId);
     const startedAt = new Date().toISOString();
     try {

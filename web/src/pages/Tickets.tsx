@@ -6,10 +6,10 @@ import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedbac
 import { Modal } from "../components/Modal";
 import { OrgSelect } from "../components/OrgSelect";
 import { PageHeader } from "../components/PageHeader";
-import { AssuranceBadge, ChannelBadge, Priority, SlaIndicator, TicketStatusPill } from "../components/Pill";
+import { ChannelBadge, IdentityBadge, Priority, psaRef, psaShortRef, SlaIndicator, TicketStatusPill } from "../components/Pill";
 import { RelativeTime } from "../components/RelativeTime";
 import { usePoll } from "../hooks/usePoll";
-import { useApp } from "../lib/app-context";
+import { aiReady, useApp } from "../lib/app-context";
 import { PRIORITY_META, TICKET_STATUS_META } from "../lib/format";
 
 export function TicketsPage() {
@@ -195,10 +195,15 @@ export function TicketsPage() {
                     <td className="col-num">{t.number}</td>
                     <td className="cell-title">
                       <div className="row title-cell" style={{ gap: 8 }}>
-                        <ChannelBadge channel={t.channel} iconOnly />
+                        <ChannelBadge channel={t.channel} iconOnly externalNumber={psaRef(t) ? t.channel_ref.externalNumber : undefined} />
                         <Link to={`/tickets/${t.id}`} className="truncate" style={{ display: "block" }} title={t.title}>
                           {t.title}
                         </Link>
+                        {psaRef(t) && (
+                          <span className="psa-ref" title={psaRef(t) ?? undefined}>
+                            {psaShortRef(t)}
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="hide-sm nowrap secondary">{t.org_name}</td>
@@ -207,7 +212,7 @@ export function TicketsPage() {
                         <span className="truncate" title={t.requester_email}>
                           {t.requester_name || t.requester_email || <span className="muted">—</span>}
                         </span>
-                        {t.assurance && <AssuranceBadge assurance={t.assurance} verification={t.verification} short />}
+                        {t.assurance && <IdentityBadge ticket={t} short />}
                       </span>
                     </td>
                     <td>
@@ -342,9 +347,9 @@ function NewTicketModal({ open, orgs, defaultOrgId, onClose }: { open: boolean; 
             <input id="nt-remail" className="input" type="email" value={requesterEmail} onChange={(e) => setRequesterEmail(e.target.value)} autoComplete="off" />
           </div>
         </div>
-        {autoRun && !health.claudeCredentials && (
+        {autoRun && !aiReady(health) && (
           <p className="muted" style={{ fontSize: "var(--text-sm)" }}>
-            Note: the server has no Claude credentials, so Haley's run will fail right away. The ticket is still created.
+            Note: Haley's AI model has no credentials, so her run will fail right away. The ticket is still created.
           </p>
         )}
         {error && (

@@ -7,15 +7,21 @@
 
 export type Autonomy = "read_only" | "supervised" | "autonomous" | "unattended";
 export const AUTONOMY_LEVELS: Autonomy[] = ["read_only", "supervised", "autonomous", "unattended"];
-export type ProviderId = "m365" | "google" | "slack";
-export type ProviderKind = "directory" | "channel";
+export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code";
+/** directory: tools Haley acts with; channel: how end users reach Haley; verification: step-up MFA. */
+export type ProviderKind = "directory" | "channel" | "verification";
 
-/** How strongly the requester's identity is established, weakest first (server/src/types.ts). */
-export type Assurance = "none" | "email" | "chat" | "directory" | "technician";
-export const ASSURANCE_LEVELS: Assurance[] = ["none", "email", "chat", "directory", "technician"];
+/**
+ * How strongly the requester's identity is established, weakest first (server/src/types.ts).
+ * "mfa" is never stored: a ticket counts as MFA verified for MFA_WINDOW_MINUTES after mfa_verified_at.
+ */
+export type Assurance = "none" | "email" | "chat" | "directory" | "mfa" | "technician";
+export const ASSURANCE_LEVELS: Assurance[] = ["none", "email", "chat", "directory", "mfa", "technician"];
+/** How long an approved step-up verification counts for its ticket (server MFA_WINDOW_MS). */
+export const MFA_WINDOW_MINUTES = 30;
 
 /** Where a ticket came from; replies go back the same way. */
-export type TicketChannel = "portal" | "api" | "email" | "slack" | "teams" | "chat";
+export type TicketChannel = "portal" | "api" | "email" | "slack" | "teams" | "chat" | "syncro" | "dynamics";
 export type RunMode = "live" | "plan";
 export type Cadence = "once" | "daily" | "weekly" | "monthly";
 export const CADENCES: Cadence[] = ["once", "daily", "weekly", "monthly"];
@@ -67,6 +73,8 @@ export interface OrgSettings {
   /** Kill switch: Haley stops acting on this client's tickets. */
   paused: boolean;
   sla: Record<TicketPriority, SlaTarget>;
+  /** AI model profile for this client; empty uses the workspace default. */
+  modelProfileId: string;
 }
 
 export interface Org {
@@ -123,6 +131,9 @@ export interface Ticket {
   first_response_at: string | null;
   resolved_at: string | null;
   sla_escalated: boolean;
+  /** Last approved step-up verification (MFA push or SMS code) and the method used. */
+  mfa_verified_at: string | null;
+  mfa_method: string;
   created_at: string;
   updated_at: string;
 }
@@ -177,6 +188,8 @@ export interface Run {
   iterations: number;
   input_tokens: number;
   output_tokens: number;
+  /** provider/model that served the latest turn (empty before the first turn). */
+  model: string;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -275,6 +288,7 @@ export interface ProviderField {
   secret?: boolean;
   multiline?: boolean;
   placeholder?: string;
+  optional?: boolean;
 }
 
 export interface ProviderInfo {
@@ -285,8 +299,9 @@ export interface ProviderInfo {
   setupSteps: string[];
   capabilities: string[];
   supportsSandbox: boolean;
-  /** directory: tools Haley acts with; channel: how end users reach Haley. */
   kind: ProviderKind;
+  /** Shown prominently in the connect dialog (e.g. undocumented APIs). */
+  warning?: string;
 }
 
 export interface ChannelInfo {
@@ -304,7 +319,7 @@ export interface SimulateInput {
   email: string;
   name?: string;
   text: string;
-  assurance?: Exclude<Assurance, "technician">;
+  assurance?: Exclude<Assurance, "technician" | "mfa">;
   threadId?: string;
 }
 
@@ -371,9 +386,186 @@ export interface ToolInfo {
 
 export interface Health {
   ok: boolean;
+  /** Model id of the default profile. */
   model: string;
   authRequired: boolean;
+  /** Legacy alias of aiConfigured. */
   claudeCredentials: boolean;
+  /** Whether the default model plausibly has credentials (stored key, server environment, or none needed). */
+  aiConfigured?: boolean;
+  defaultModel?: { id: string; name: string; provider: ModelProviderKind; model: string } | null;
+}
+
+// ------------------------------------------------------------------ AI models (server/src/ai/providers.ts)
+
+export type ModelProviderKind =
+  | "anthropic"
+  | "openai"
+  | "azure_openai"
+  | "google_gemini"
+  | "mistral"
+  | "groq"
+  | "together"
+  | "openrouter"
+  | "deepseek"
+  | "xai"
+  | "ollama"
+  | "vllm"
+  | "lmstudio"
+  | "openai_compatible";
+
+export type ModelLicense = "closed" | "open" | "both";
+
+export interface ModelProviderPreset {
+  id: ModelProviderKind;
+  name: string;
+  /** closed: hosted proprietary models; open: open-weight models (hosted or self-hosted). */
+  license: ModelLicense;
+  /** Default base URL; empty means the user must supply one. */
+  baseUrl: string;
+  needsKey: boolean;
+  exampleModels: string[];
+  notes: string;
+}
+
+export type ModelEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export const MODEL_EFFORTS: ModelEffort[] = ["low", "medium", "high", "xhigh", "max"];
+
+export interface ModelOptions {
+  maxTokens?: number;
+  effort?: ModelEffort;
+  refusalFallbacks?: boolean;
+  temperature?: number;
+  tokenParam?: "max_tokens" | "max_completion_tokens";
+  reasoningEffort?: string;
+  apiVersion?: string;
+  extraHeaders?: Record<string, string>;
+}
+
+export interface ModelProfile {
+  id: string;
+  name: string;
+  provider: ModelProviderKind;
+  model: string;
+  base_url: string;
+  options: ModelOptions;
+  fallback_id: string | null;
+  is_default: boolean;
+  has_key: boolean;
+  created_at: string;
+}
+
+export interface ModelProfileListItem extends ModelProfile {
+  /** Names of clients pinned to this profile. */
+  usedBy: string[];
+}
+
+export interface ModelInput {
+  name: string;
+  provider: ModelProviderKind;
+  model: string;
+  baseUrl?: string;
+  apiKey?: string;
+  options?: ModelOptions;
+  fallbackId?: string | null;
+  isDefault?: boolean;
+}
+
+export interface ModelPatch {
+  name?: string;
+  model?: string;
+  baseUrl?: string;
+  /** Omit to keep the stored key; "" clears it. */
+  apiKey?: string;
+  options?: ModelOptions;
+  fallbackId?: string | null;
+  isDefault?: true;
+}
+
+export interface ModelTestResult {
+  ok: boolean;
+  toolCalling: boolean;
+  latencyMs: number;
+  servedBy: string | null;
+  detail: string;
+}
+
+// ------------------------------------------------------------------ PSA sync (server/src/psa)
+
+export type PsaKind = "syncro" | "dynamics";
+
+export interface PsaProviderInfo {
+  id: PsaKind;
+  name: string;
+  description: string;
+  fields: Array<{ key: string; label: string; secret?: boolean; placeholder?: string; help?: string; optional?: boolean }>;
+  setupSteps: string[];
+}
+
+export interface PsaOptions {
+  /** Import new PSA tickets for mapped customers and let Haley work them. */
+  importTickets: boolean;
+  /** Create PSA tickets for tickets that start in Haley (email, Slack, Teams…). */
+  exportTickets: boolean;
+  /** Mirror Haley's notes and actions as internal PSA comments. */
+  mirrorNotes: boolean;
+  /** Identity level given to requesters of imported tickets. */
+  requesterAssurance: "none" | "email";
+}
+
+export interface PsaConnection {
+  id: string;
+  kind: PsaKind;
+  name: string;
+  /** External customer id → Haley org id. */
+  customer_map: Record<string, string>;
+  options: PsaOptions;
+  cursor: string | null;
+  enabled: boolean;
+  status: IntegrationStatus;
+  status_detail: string;
+  last_sync_at: string | null;
+  created_at: string;
+}
+
+export interface PsaConnectionListItem extends PsaConnection {
+  linkedTickets: number;
+}
+
+export interface PsaCustomer {
+  id: string;
+  name: string;
+  domains: string[];
+  /** Currently mapped Haley client. */
+  orgId: string | null;
+  /** Client matched by domain or name. */
+  suggestedOrgId: string | null;
+}
+
+/** server/src/psa/sync.ts */
+export interface SyncResult {
+  imported: number;
+  commentsImported: number;
+  exported: number;
+  pushed: number;
+  statusUpdates: number;
+  unmappedCustomers: string[];
+  errors: string[];
+}
+
+export interface PsaInput {
+  kind: PsaKind;
+  name?: string;
+  config: Record<string, string>;
+  options?: Partial<PsaOptions>;
+}
+
+export interface PsaPatch {
+  name?: string;
+  /** Blank values keep the stored value. */
+  config?: Record<string, string>;
+  options?: Partial<PsaOptions>;
+  enabled?: boolean;
 }
 
 export interface Stats {
@@ -402,6 +594,8 @@ export interface TicketDetail {
   ticket: TicketWithOrg;
   /** Follow-ups Haley scheduled on this ticket. */
   schedules: Schedule[];
+  /** PSA tickets this ticket is synced with (imported or exported). */
+  psaLinks?: Array<{ connectionId: string; name: string; kind: string | null; externalId: string; externalNumber: string }>;
   events: TicketEvent[];
   runs: Run[];
   actions: Action[];
@@ -633,6 +827,23 @@ export const api = {
   deleteArticle: (id: string) => del<{ ok: true }>(`/api/kb/${enc(id)}`),
 
   audit: (q: { orgId?: string; limit?: number } = {}) => get<AuditEntry[]>("/api/audit", q),
+
+  modelProviders: () => get<ModelProviderPreset[]>("/api/models/providers"),
+  models: () => get<ModelProfileListItem[]>("/api/models"),
+  createModel: (input: ModelInput) => post<ModelProfile>("/api/models", input),
+  updateModel: (id: string, input: ModelPatch) => patch<ModelProfile>(`/api/models/${enc(id)}`, input),
+  deleteModel: (id: string) => del<{ ok: true }>(`/api/models/${enc(id)}`),
+  testModel: (id: string) => post<ModelTestResult>(`/api/models/${enc(id)}/test`),
+
+  psaProviders: () => get<PsaProviderInfo[]>("/api/psa/providers"),
+  psaConnections: () => get<PsaConnectionListItem[]>("/api/psa"),
+  createPsa: (input: PsaInput) => post<PsaConnection>("/api/psa", input),
+  updatePsa: (id: string, input: PsaPatch) => patch<PsaConnection>(`/api/psa/${enc(id)}`, input),
+  deletePsa: (id: string) => del<{ ok: true }>(`/api/psa/${enc(id)}`),
+  testPsa: (id: string) => post<PsaConnection>(`/api/psa/${enc(id)}/test`),
+  psaCustomers: (id: string) => get<PsaCustomer[]>(`/api/psa/${enc(id)}/customers`),
+  setPsaMapping: (id: string, map: Record<string, string>) => put<PsaConnection>(`/api/psa/${enc(id)}/mapping`, map),
+  syncPsa: (id: string) => post<SyncResult>(`/api/psa/${enc(id)}/sync`),
 };
 
 export function errorMessage(err: unknown): string {

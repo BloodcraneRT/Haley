@@ -84,7 +84,7 @@ export function RunsPage() {
           <ul className="list">
             {list.map((r) => (
               <li key={r.id}>
-                <RunRow run={r} />
+                <RunRow run={r} showModel />
               </li>
             ))}
           </ul>

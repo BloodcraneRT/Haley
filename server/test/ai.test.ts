@@ -136,6 +136,12 @@ describe("model profiles", () => {
     const raw = store.db.prepare("SELECT api_key_sealed FROM model_profiles WHERE name = 'GPT'").get() as { api_key_sealed: string };
     expect(raw.api_key_sealed).not.toContain("sk-secret-123");
     expect((await app.inject({ method: "DELETE", url: `/api/models/${bootstrap.id}` })).statusCode).toBe(409);
+    const gpt = created.json();
+    await app.inject({ method: "PATCH", url: `/api/models/${gpt.id}`, payload: { options: { maxTokens: 4000, temperature: 0.2 } } });
+    await app.inject({ method: "PATCH", url: `/api/models/${gpt.id}`, payload: { options: { temperature: null, tokenParam: "max_completion_tokens" } } });
+    expect(store.getModelProfile(gpt.id)!.options).toEqual({ maxTokens: 4000, tokenParam: "max_completion_tokens" });
+    const badOption = await app.inject({ method: "PATCH", url: `/api/models/${gpt.id}`, payload: { options: { temperature: 9 } } });
+    expect(badOption.statusCode).toBe(400);
     const needsUrl = await app.inject({ method: "POST", url: "/api/models", payload: { name: "Azure", provider: "azure_openai", model: "dep" } });
     expect(needsUrl.statusCode).toBe(400);
   });

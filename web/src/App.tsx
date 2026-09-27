@@ -14,7 +14,9 @@ import { ClientsPage } from "./pages/Clients";
 import { DashboardPage } from "./pages/Dashboard";
 import { KbArticlePage, KbNewPage } from "./pages/KbArticle";
 import { KbPage } from "./pages/Kb";
+import { ModelsPage } from "./pages/Models";
 import { NotFoundPage } from "./pages/NotFound";
+import { PsaMappingPage, PsaPage } from "./pages/Psa";
 import { RunDetailPage } from "./pages/RunDetail";
 import { RunsPage } from "./pages/Runs";
 import { SettingsPage } from "./pages/Settings";
@@ -113,6 +115,9 @@ export function App() {
             <Route path="clients/:id/report" element={<Keyed><ClientReportPage /></Keyed>} />
             <Route path="channels" element={<ChannelsPage />} />
             <Route path="simulate" element={<SimulatorPage />} />
+            <Route path="psa" element={<PsaPage />} />
+            <Route path="psa/:id/customers" element={<Keyed><PsaMappingPage /></Keyed>} />
+            <Route path="models" element={<ModelsPage />} />
             <Route path="tickets" element={<TicketsPage />} />
             <Route path="tickets/:id" element={<Keyed><TicketDetailPage /></Keyed>} />
             <Route path="tasks" element={<TasksPage />} />

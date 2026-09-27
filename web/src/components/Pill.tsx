@@ -1,5 +1,6 @@
-import { ClipboardList, Code, Hash, Mail, MessageCircle, Monitor, Users } from "lucide-react";
+import { ClipboardList, Code, Hash, Headset, Mail, MessageCircle, Monitor, RefreshCw, Users } from "lucide-react";
 import type { ReactNode } from "react";
+import { useNow } from "../hooks/useNow";
 import type {
   ActionStatus,
   Assurance,
@@ -11,6 +12,7 @@ import type {
   RunStatus,
   SlaState,
   SlaStatus,
+  Ticket,
   TicketChannel,
   TicketPriority,
   TicketStatus,
@@ -21,7 +23,9 @@ import {
   ASSURANCE_META,
   AUTONOMY_META,
   CHANNEL_META,
+  effectiveAssurance,
   INTEGRATION_STATUS_META,
+  mfaExpiresAt,
   PRIORITY_META,
   RISK_META,
   RUN_STATUS_META,
@@ -138,6 +142,8 @@ const CHANNEL_ICONS: Record<TicketChannel, typeof Mail> = {
   slack: Hash,
   teams: Users,
   chat: MessageCircle,
+  syncro: RefreshCw,
+  dynamics: Headset,
 };
 
 export function ChannelIcon({ channel, className = "icon-sm" }: { channel: TicketChannel; className?: string }) {
@@ -145,20 +151,35 @@ export function ChannelIcon({ channel, className = "icon-sm" }: { channel: Ticke
   return <Icon className={className} aria-hidden="true" />;
 }
 
-/** Where the ticket came from (portal, email, Slack…). */
-export function ChannelBadge({ channel, iconOnly }: { channel: TicketChannel; iconOnly?: boolean }) {
+/** The PSA ticket/case number for tickets imported from a PSA ("Syncro #1234"), or null. */
+export function psaRef(ticket: Pick<Ticket, "channel" | "channel_ref">): string | null {
+  const n = ticket.channel_ref?.externalNumber;
+  if (!n || (ticket.channel !== "syncro" && ticket.channel !== "dynamics")) return null;
+  return `${CHANNEL_META[ticket.channel].label} #${n}`;
+}
+
+/** Compact PSA reference for lists: Dynamics case numbers are self-describing ("CAS-01042-K7P2"). */
+export function psaShortRef(ticket: Pick<Ticket, "channel" | "channel_ref">): string | null {
+  const full = psaRef(ticket);
+  if (!full) return null;
+  return ticket.channel === "dynamics" ? ticket.channel_ref.externalNumber : full;
+}
+
+/** Where the ticket came from (portal, email, Slack…); PSA tickets show their PSA number. */
+export function ChannelBadge({ channel, iconOnly, externalNumber }: { channel: TicketChannel; iconOnly?: boolean; externalNumber?: string }) {
   const meta = CHANNEL_META[channel] ?? { label: channel, help: "" };
+  const label = externalNumber ? `${meta.label} #${externalNumber}` : meta.label;
   if (iconOnly) {
     return (
-      <span className="channel-icon" title={`${meta.label}: ${meta.help}`} aria-label={`Channel: ${meta.label}`} role="img">
+      <span className="channel-icon" title={`${label}: ${meta.help}`} aria-label={`Channel: ${label}`} role="img">
         <ChannelIcon channel={channel} />
       </span>
     );
   }
   return (
-    <span className="pill pill-outline channel-badge" title={meta.help}>
+    <span className={`pill pill-outline channel-badge ${externalNumber ? "is-psa" : ""}`} title={meta.help}>
       <ChannelIcon channel={channel} className="icon-xs" />
-      {meta.label}
+      {label}
     </span>
   );
 }
@@ -168,6 +189,32 @@ export function AssuranceBadge({ assurance, verification, short }: { assurance: 
   const meta = ASSURANCE_META[assurance] ?? { label: assurance, tone: "neutral" as Tone, short: assurance, how: "" };
   return (
     <Pill tone={meta.tone} title={verification ? `${meta.label}: ${verification}` : `${meta.label}. ${meta.how}`}>
+      {short ? meta.short : meta.label}
+    </Pill>
+  );
+}
+
+const timeFmt = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+
+/**
+ * The requester's identity right now: shows "MFA verified" while a step-up verification is fresh
+ * (30 minutes after mfa_verified_at), otherwise the channel's assurance.
+ */
+export function IdentityBadge({
+  ticket,
+  short,
+}: {
+  ticket: Pick<Ticket, "assurance" | "verification" | "mfa_verified_at" | "mfa_method">;
+  short?: boolean;
+}) {
+  const now = useNow();
+  const level = effectiveAssurance(ticket, now);
+  if (level !== "mfa" || !ticket.mfa_verified_at) return <AssuranceBadge assurance={ticket.assurance} verification={ticket.verification} short={short} />;
+  const meta = ASSURANCE_META.mfa;
+  const expires = mfaExpiresAt(ticket)!;
+  const tip = `${meta.label} with ${ticket.mfa_method || "step-up verification"} at ${absoluteTime(ticket.mfa_verified_at)}. Counts until ${timeFmt.format(expires)} (30 minutes after approval), then falls back to ${ASSURANCE_META[ticket.assurance]?.label.toLowerCase() ?? ticket.assurance}.`;
+  return (
+    <Pill tone={meta.tone} title={tip}>
       {short ? meta.short : meta.label}
     </Pill>
   );

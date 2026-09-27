@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  BrainCircuit,
   ChevronRight,
   CircleCheck,
   FileChartColumn,
@@ -12,6 +13,8 @@ import {
   Plus,
   RefreshCw,
   ScrollText,
+  ShieldCheck,
+  TriangleAlert,
   Ticket as TicketIcon,
   Trash,
   Wrench,
@@ -26,6 +29,7 @@ import {
   type Autonomy,
   type Integration,
   type IntegrationMode,
+  type ModelProfileListItem,
   type OrgDetail,
   type ProviderId,
   type ProviderInfo,
@@ -55,6 +59,7 @@ export function ClientDetailPage() {
   const runs = usePoll(() => api.runs({ orgId: id }), [id], (d) => (d?.some((r) => isRunActive(r.status)) ? 3000 : null));
   const openTickets = usePoll(() => api.tickets({ orgId: id, status: "open" }), [id]);
   const providers = usePoll(() => api.providers(), []);
+  const models = usePoll(() => api.models(), []);
   const pause = usePauseControl(org.data, () => void org.reload());
   const [savingAutonomy, setSavingAutonomy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -110,7 +115,10 @@ export function ClientDetailPage() {
   };
 
   const connected = new Set(o.integrations.map((i) => i.provider));
-  const allConnected = providers.data ? providers.data.every((p) => connected.has(p.id)) : false;
+  const kindOf = (id: string) => providers.data?.find((p) => p.id === id)?.kind;
+  const verifier = o.integrations.find((i) => kindOf(i.provider) === "verification");
+  // Every provider is connected, counting a verification method as covering its whole group (one per client).
+  const allConnected = providers.data ? providers.data.every((p) => connected.has(p.id) || (p.kind === "verification" && verifier)) : false;
 
   return (
     <>
@@ -206,10 +214,11 @@ export function ClientDetailPage() {
             ) : (
               <div className="integrations">
                 {o.integrations.map((i) => (
-                  <IntegrationCard key={i.id} integration={i} onChanged={() => void org.reload()} />
+                  <IntegrationCard key={i.id} integration={i} kind={kindOf(i.provider)} onChanged={() => void org.reload()} />
                 ))}
               </div>
             )}
+            {providers.data && <VerificationStrip integration={verifier} onConnect={() => setConnectOpen(true)} />}
           </section>
 
           <section aria-labelledby="aut-title">
@@ -250,7 +259,7 @@ export function ClientDetailPage() {
                 <ul className="list">
                   {runs.data.slice(0, 8).map((r) => (
                     <li key={r.id}>
-                      <RunRow run={r} showOrg={false} />
+                      <RunRow run={r} showOrg={false} showModel />
                     </li>
                   ))}
                 </ul>
@@ -260,6 +269,7 @@ export function ClientDetailPage() {
         </div>
 
         <aside className="stack">
+          <ModelPicker org={o} models={models.data} error={models.error} onSaved={() => void org.reload()} />
           <OrgDetailsForm org={o} onSaved={() => void org.reload()} />
           <section className="card card-pad stack-sm">
             <h2 style={{ fontSize: "var(--text-md)" }}>Danger zone</h2>
@@ -386,14 +396,15 @@ function OrgDetailsForm({ org, onSaved }: { org: OrgDetail; onSaved: () => void 
   );
 }
 
-function IntegrationCard({ integration: i, onChanged }: { integration: Integration; onChanged: () => void }) {
+function IntegrationCard({ integration: i, kind, onChanged }: { integration: Integration; kind: ProviderInfo["kind"] | undefined; onChanged: () => void }) {
   const { toast } = useApp();
   const [testing, setTesting] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
-  // Slack is how end users reach Haley, not a set of tools she acts with.
-  const isChannel = i.provider === "slack";
+  // Slack is how end users reach Haley, and verifiers check who's asking; neither is a set of tools she acts with.
+  const isChannel = (kind ?? (i.provider === "slack" ? "channel" : "directory")) === "channel";
+  const isVerifier = kind === "verification";
 
   const test = async () => {
     setTesting(true);
@@ -438,14 +449,29 @@ function IntegrationCard({ integration: i, onChanged }: { integration: Integrati
       </div>
       <div className="row row-wrap">
         <IntegrationStatusPill status={i.status} />
-        {isChannel ? <Pill tone="blue">End-user channel</Pill> : <ModePill mode={i.mode} />}
+        {isChannel ? (
+          <Pill tone="blue">End-user channel</Pill>
+        ) : isVerifier ? (
+          <>
+            <Pill tone="green" title="Haley can verify requesters with this before security-sensitive changes">
+              Step-up verification
+            </Pill>
+            {i.mode === "sandbox" && (
+              <Pill tone="violet" title="Codes appear on the ticket timeline instead of being texted">
+                Sandbox
+              </Pill>
+            )}
+          </>
+        ) : (
+          <ModePill mode={i.mode} />
+        )}
       </div>
       {i.status_detail && <p className={`status-detail ${i.status === "error" ? "error" : ""}`}>{i.status_detail}</p>}
       <div className="integration-actions">
         <button className="btn btn-sm" onClick={test} disabled={testing}>
           {testing ? <Spinner /> : <RefreshCw className="icon-sm" aria-hidden="true" />} Test
         </button>
-        {!isChannel && (
+        {!isChannel && !isVerifier && (
           <button className="btn btn-sm" onClick={() => setToolsOpen(true)}>
             <Wrench className="icon-sm" aria-hidden="true" /> View tools
           </button>
@@ -464,8 +490,13 @@ function IntegrationCard({ integration: i, onChanged }: { integration: Integrati
         onConfirm={remove}
         onClose={() => setConfirmRemove(false)}
       >
-        {isChannel ? "Employees will no longer be able to message Haley from this workspace." : "Haley will lose access to this tenant immediately."} Stored credentials are deleted; you can reconnect at any time.
-        {i.mode === "sandbox" && " The simulated tenant's state is discarded."}
+        {isChannel
+          ? "Employees will no longer be able to message Haley from this workspace."
+          : isVerifier
+            ? "Haley will no longer be able to verify requesters herself; security-sensitive requests from weaker identities go to the approval queue."
+            : "Haley will lose access to this tenant immediately."}{" "}
+        Stored credentials are deleted; you can reconnect at any time.
+        {i.mode === "sandbox" && !isVerifier && " The simulated tenant's state is discarded."}
       </ConfirmModal>
     </article>
   );
@@ -540,6 +571,9 @@ function ConnectModal({
   const { toast } = useApp();
   const providers = usePoll(() => (open ? api.providers() : Promise.resolve(undefined)), [open]);
   const taken = new Set(org.integrations.map((i) => i.provider));
+  const currentVerifier = org.integrations.find((i) => providers.data?.find((p) => p.id === i.provider)?.kind === "verification");
+  // Only one verification method per client (the server answers 409 otherwise).
+  const unavailable = (p: ProviderInfo) => taken.has(p.id) || (p.kind === "verification" && Boolean(currentVerifier));
   const [provider, setProvider] = useState<ProviderId | null>(null);
   const [mode, setMode] = useState<IntegrationMode>("sandbox");
   const [config, setConfig] = useState<Record<string, string>>({});
@@ -558,7 +592,7 @@ function ConnectModal({
   }, [open]);
   useEffect(() => {
     if (open && !provider && providers.data) {
-      const first = providers.data.find((p) => !taken.has(p.id));
+      const first = providers.data.find((p) => !unavailable(p));
       if (first) choose(first);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -577,13 +611,18 @@ function ConnectModal({
   const groups: Array<{ kind: ProviderInfo["kind"]; title: string; help: string }> = [
     { kind: "directory", title: "Directories (tools for Haley)", help: "Where Haley looks things up and makes changes." },
     { kind: "channel", title: "Channels (how end users reach Haley)", help: "Employees message Haley here; she answers in the same place." },
+    {
+      kind: "verification",
+      title: "Identity verification (step-up MFA)",
+      help: "Lets Haley confirm a requester on their own registered device before security-sensitive changes. One method per client.",
+    },
   ];
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!info) return;
     if (mode === "live") {
-      const missing = info.fields.filter((f) => !config[f.key]?.trim()).map((f) => f.label);
+      const missing = info.fields.filter((f) => !f.optional && !config[f.key]?.trim()).map((f) => f.label);
       if (missing.length) return setError(`Missing: ${missing.join(", ")}`);
     }
     setBusy(true);
@@ -618,7 +657,7 @@ function ConnectModal({
           </button>
           <button className="btn btn-primary" type="submit" form="connect-form" disabled={!info || busy}>
             {busy ? <Spinner /> : <Plug className="icon-sm" aria-hidden="true" />}
-            {mode === "sandbox" && info?.supportsSandbox ? "Create sandbox" : "Connect & test"}
+            {mode === "sandbox" && info?.supportsSandbox ? (info.kind === "verification" ? "Connect sandbox" : "Create sandbox") : "Connect & test"}
           </button>
         </>
       }
@@ -639,7 +678,7 @@ function ConnectModal({
                 </span>
                 <div className="choice-grid" role="radiogroup" aria-label={g.title}>
                   {items.map((p) => {
-                    const isTaken = taken.has(p.id);
+                    const isTaken = unavailable(p);
                     return (
                       <button
                         key={p.id}
@@ -655,7 +694,13 @@ function ConnectModal({
                           <ProviderLogo provider={p.id} />
                           {p.name}
                         </span>
-                        <span className="choice-desc">{isTaken ? "Already connected for this client. Remove it first to reconnect." : p.description}</span>
+                        <span className="choice-desc">
+                          {taken.has(p.id)
+                            ? "Already connected for this client. Remove it first to reconnect."
+                            : isTaken
+                              ? `${currentVerifier?.label ?? "Another method"} is this client's verification method. Remove it first to switch.`
+                              : p.description}
+                        </span>
                       </button>
                     );
                   })}
@@ -674,20 +719,35 @@ function ConnectModal({
                     <span className="choice-title">
                       <FlaskConical className="icon-sm" aria-hidden="true" /> Sandbox
                     </span>
-                    <span className="choice-desc">A simulated {info.name} tenant with realistic users and data. No credentials needed.</span>
+                    <span className="choice-desc">
+                      {info.kind === "verification"
+                        ? "No texts are sent: codes appear on the ticket timeline, so testers can type them back. No credentials needed."
+                        : `A simulated ${info.name} tenant with realistic users and data. No credentials needed.`}
+                    </span>
                   </button>
                   <button type="button" role="radio" aria-checked={mode === "live"} className="choice" onClick={() => setMode("live")}>
                     <span className="choice-title">
                       <Plug className="icon-sm" aria-hidden="true" /> Live
                     </span>
-                    <span className="choice-desc">Connect the customer's real tenant with an app registration or service account.</span>
+                    <span className="choice-desc">
+                      {info.kind === "verification"
+                        ? `Send real codes through your ${info.name.includes("Twilio") ? "Twilio" : info.name} account.`
+                        : "Connect the customer's real tenant with an app registration or service account."}
+                    </span>
                   </button>
                 </div>
               </div>
               )}
 
+              {info.warning && (
+                <div className="banner banner-warn" role="note">
+                  <TriangleAlert className="icon" aria-hidden="true" />
+                  <span>{info.warning}</span>
+                </div>
+              )}
+
               <div className="field">
-                <span className="field-label">What Haley can do</span>
+                <span className="field-label">{info.kind === "verification" ? "How it works" : "What Haley can do"}</span>
                 <div className="row row-wrap" style={{ gap: 6 }}>
                   {info.capabilities.map((c) => (
                     <span key={c} className="chip">
@@ -697,7 +757,16 @@ function ConnectModal({
                 </div>
               </div>
 
-              {mode === "sandbox" ? (
+              {mode === "sandbox" && info.kind === "verification" ? (
+                <div className="banner banner-info">
+                  <FlaskConical className="icon" aria-hidden="true" />
+                  <span>
+                    Sandbox verification is for testing Haley end to end. When she verifies a requester, the "text message" with the code appears on
+                    the ticket timeline (and in the <strong>Try as end user</strong> chat) instead of going to a phone. Codes go to the number on the
+                    user's directory account, so connect a Microsoft 365 or Google sandbox too.
+                  </span>
+                </div>
+              ) : mode === "sandbox" ? (
                 <div className="banner banner-info">
                   <FlaskConical className="icon" aria-hidden="true" />
                   <span>
@@ -715,7 +784,9 @@ function ConnectModal({
               ) : (
                 <div className="grid-2" style={{ alignItems: "start" }}>
                   <div className="stack-sm">
-                    <span className="field-label">{info.kind === "channel" ? `Setup in ${org.name}'s ${info.name}` : "Setup in the customer's tenant"}</span>
+                    <span className="field-label">
+                      {info.kind === "channel" ? `Setup in ${org.name}'s ${info.name}` : info.kind === "verification" ? "Setup" : "Setup in the customer's tenant"}
+                    </span>
                     <ol className="steps">
                       {info.setupSteps.map((s, n) => (
                         <li key={n}>
@@ -727,7 +798,9 @@ function ConnectModal({
                   <div className="stack">
                     {info.fields.map((f) => (
                       <div className="field" key={f.key}>
-                        <label htmlFor={`cf-${f.key}`}>{f.label}</label>
+                        <label htmlFor={`cf-${f.key}`}>
+                          {f.label} {f.optional && <span className="muted">(optional)</span>}
+                        </label>
                         {f.multiline ? (
                           <textarea
                             id={`cf-${f.key}`}
@@ -773,7 +846,7 @@ function ConnectModal({
               </div>
             </>
           )}
-          {providers.data.every((p) => taken.has(p.id)) && (
+          {providers.data.every((p) => unavailable(p)) && (
             <div className="banner banner-success">
               <CircleCheck className="icon" aria-hidden="true" />
               <span>Every supported provider is already connected for this client.</span>
@@ -787,5 +860,112 @@ function ConnectModal({
         </form>
       )}
     </Modal>
+  );
+}
+
+/** Which step-up verification method the client has, or a nudge to add one. */
+function VerificationStrip({ integration, onConnect }: { integration: Integration | undefined; onConnect: () => void }) {
+  if (!integration) {
+    return (
+      <div className="verify-strip">
+        <ShieldCheck className="icon-sm muted" aria-hidden="true" />
+        <span className="spacer">
+          <strong>No step-up verification.</strong> Connect Duo, Okta Verify or SMS codes so Haley can confirm who's asking before a password reset
+          instead of sending it to the approval queue.
+        </span>
+        <button className="btn btn-sm" onClick={onConnect}>
+          <Plug className="icon-sm" aria-hidden="true" /> Add
+        </button>
+      </div>
+    );
+  }
+  const name = PROVIDER_NAMES[integration.provider] ?? integration.provider;
+  return (
+    <div className={`verify-strip is-on ${integration.status === "error" ? "is-error" : ""}`}>
+      <ShieldCheck className="icon-sm" aria-hidden="true" />
+      <span className="spacer">
+        <strong>Step-up verification: {name}</strong>
+        {integration.mode === "sandbox" ? " (sandbox: codes appear on the ticket timeline)" : ""}.{" "}
+        {integration.status === "error"
+          ? "The last connection test failed, so verification requests will fail."
+          : `Haley can verify requesters on their own device; a verified requester counts as MFA verified for 30 minutes.`}
+      </span>
+    </div>
+  );
+}
+
+/** Which AI model works this client's tickets: the workspace default or a pinned profile. */
+function ModelPicker({
+  org,
+  models,
+  error,
+  onSaved,
+}: {
+  org: OrgDetail;
+  models: ModelProfileListItem[] | undefined;
+  error: Error | undefined;
+  onSaved: () => void;
+}) {
+  const { toast } = useApp();
+  const [busy, setBusy] = useState(false);
+  const current = org.settings.modelProfileId ?? "";
+  const def = models?.find((m) => m.is_default);
+  const pinned = models?.find((m) => m.id === current);
+  const effective = pinned ?? def;
+  const missing = Boolean(current && models && !pinned);
+
+  const change = async (value: string) => {
+    setBusy(true);
+    try {
+      await api.updateOrg(org.id, { settings: { modelProfileId: value } });
+      const name = value ? models?.find((m) => m.id === value)?.name : `the workspace default${def ? ` (${def.name})` : ""}`;
+      toast(`${org.name} now uses ${name}.`);
+    } catch (err) {
+      toast(errorMessage(err), "error");
+    } finally {
+      setBusy(false);
+      onSaved();
+    }
+  };
+
+  return (
+    <section className="card" aria-labelledby="model-title">
+      <div className="card-header">
+        <BrainCircuit className="icon-sm" style={{ color: "var(--tone-violet-fg)" }} aria-hidden="true" />
+        <h2 id="model-title">AI model</h2>
+        {busy && <Spinner />}
+        <span className="spacer" />
+        <Link to="/models" style={{ fontSize: "var(--text-sm)" }}>
+          Manage models
+        </Link>
+      </div>
+      <div className="card-body stack-sm">
+        {error && !models ? (
+          <p className="error-text">{error.message}</p>
+        ) : (
+          <>
+            <label htmlFor="org-model" className="sr-only">
+              AI model for {org.name}
+            </label>
+            <select id="org-model" className="select" value={missing ? "" : current} onChange={(e) => void change(e.target.value)} disabled={!models || busy}>
+              <option value="">Workspace default{def ? ` (${def.name})` : ""}</option>
+              {(models ?? []).map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+            {effective && (
+              <span className="muted mono truncate" style={{ fontSize: "var(--text-sm)" }} title={`${effective.provider}/${effective.model}`}>
+                {effective.provider}/{effective.model}
+              </span>
+            )}
+            <span className="help" style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+              The model only proposes; {org.name}'s autonomy policy decides what runs, whichever model you pick.
+            </span>
+          </>
+        )}
+      </div>
+    </section>
   );
 }

@@ -12,12 +12,19 @@ import { RelativeTime } from "../components/RelativeTime";
 import { usePoll } from "../hooks/usePoll";
 import { absoluteTime, type Tone } from "../lib/format";
 
-const TARGET_ROUTES: Record<string, string> = { org: "/clients/", tkt: "/tickets/", run: "/runs/", kb: "/kb/" };
+const TARGET_ROUTES: Record<string, (id: string) => string> = {
+  org: (id) => `/clients/${id}`,
+  tkt: (id) => `/tickets/${id}`,
+  run: (id) => `/runs/${id}`,
+  kb: (id) => `/kb/${id}`,
+  psa: (id) => `/psa/${id}/customers`,
+  mdl: () => "/models",
+};
 
 function targetLink(target: string) {
   const prefix = target.split("_")[0];
   const route = TARGET_ROUTES[prefix];
-  return route ? <Link to={`${route}${target}`} className="mono">{target}</Link> : <span className="mono muted">{target || "—"}</span>;
+  return route ? <Link to={route(target)} className="mono">{target}</Link> : <span className="mono muted">{target || "—"}</span>;
 }
 
 function actionTone(action: string): Tone {

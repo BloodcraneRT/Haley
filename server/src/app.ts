@@ -504,6 +504,10 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     return {
       ticket: { ...withSla(ticket, org), org_name: org?.name ?? "" },
       schedules: store.listSchedules({ ticketId: ticket.id }),
+      psaLinks: store.listTicketLinks({ ticketId: ticket.id }).map((l) => {
+        const connection = store.getPsaConnection(l.connection_id);
+        return { connectionId: l.connection_id, name: connection?.name ?? "PSA", kind: connection?.kind ?? null, externalId: l.external_id, externalNumber: l.external_number };
+      }),
       events: store.listTicketEvents(ticket.id),
       runs,
       actions: runs.flatMap((r) => store.listActions({ runId: r.id })),
@@ -651,14 +655,23 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
         baseUrl: z.string().trim().url().or(z.literal("")).optional(),
         /** Omit to keep the stored key; "" to clear it. */
         apiKey: z.string().optional(),
-        options: modelOptions.optional(),
+        /** Merged into the stored options; a null value removes that option. */
+        options: z.record(z.string(), z.unknown()).optional(),
         fallbackId: z.string().nullable().optional(),
         isDefault: z.literal(true).optional(),
       }),
       req,
     );
     assertFallback(patch.fallbackId, req.params.id);
-    const profile = store.updateModelProfile(req.params.id, { ...patch, apiKey: patch.apiKey === undefined ? undefined : patch.apiKey || null });
+    const current = store.getModelProfile(req.params.id)!;
+    let options: Record<string, unknown> | undefined;
+    if (patch.options) {
+      const merged = Object.fromEntries(Object.entries({ ...current.options, ...patch.options }).filter(([, v]) => v !== null && v !== undefined));
+      const valid = modelOptions.safeParse(merged);
+      if (!valid.success) throw new HttpError(400, z.prettifyError(valid.error));
+      options = valid.data;
+    }
+    const profile = store.updateModelProfile(req.params.id, { ...patch, options, apiKey: patch.apiKey === undefined ? undefined : patch.apiKey || null });
     models.invalidate();
     store.audit({ actor: actor(req), action: "model.updated", target: req.params.id, detail: { fields: Object.keys(patch).filter((k) => k !== "apiKey"), keyChanged: patch.apiKey !== undefined } });
     return profile;

@@ -1,4 +1,19 @@
-import type { ActionStatus, Assurance, Autonomy, Cadence, IntegrationStatus, Risk, RunStatus, SlaState, TicketChannel, TicketPriority, TicketStatus } from "../api";
+import {
+  MFA_WINDOW_MINUTES,
+  type ActionStatus,
+  type Assurance,
+  type Autonomy,
+  type Cadence,
+  type IntegrationStatus,
+  type ModelLicense,
+  type Risk,
+  type RunStatus,
+  type SlaState,
+  type Ticket,
+  type TicketChannel,
+  type TicketPriority,
+  type TicketStatus,
+} from "../api";
 
 export type Tone = "neutral" | "blue" | "green" | "amber" | "red" | "violet" | "teal";
 
@@ -136,7 +151,16 @@ export const AUTONOMY_META: Record<Autonomy, { label: string; tone: Tone; summar
   },
 };
 
-export const PROVIDER_NAMES: Record<string, string> = { m365: "Microsoft 365", google: "Google Workspace", slack: "Slack" };
+export const PROVIDER_NAMES: Record<string, string> = {
+  m365: "Microsoft 365",
+  google: "Google Workspace",
+  slack: "Slack",
+  duo: "Duo push",
+  okta: "Okta Verify push",
+  sms_code: "SMS verification code",
+};
+
+export const PSA_NAMES: Record<string, string> = { syncro: "Syncro", dynamics: "Dynamics 365" };
 
 export const CHANNEL_META: Record<TicketChannel, { label: string; help: string }> = {
   portal: { label: "Portal", help: "Entered in the Haley dashboard by a technician" },
@@ -145,6 +169,8 @@ export const CHANNEL_META: Record<TicketChannel, { label: string; help: string }
   slack: { label: "Slack", help: "Direct message or @mention in Slack" },
   teams: { label: "Teams", help: "Message to the Haley bot in Microsoft Teams" },
   chat: { label: "Chat", help: "Chat bridge (web widget, SMS, Google Chat) or the end-user simulator" },
+  syncro: { label: "Syncro", help: "Imported from SyncroMSP; replies go back as public ticket comments" },
+  dynamics: { label: "Dynamics 365", help: "Imported from a Dynamics 365 Customer Service case; replies go to the case timeline" },
 };
 
 export const ASSURANCE_META: Record<Assurance, { label: string; tone: Tone; short: string; how: string }> = {
@@ -152,6 +178,12 @@ export const ASSURANCE_META: Record<Assurance, { label: string; tone: Tone; shor
   email: { label: "Email verified", tone: "blue", short: "Email", how: "DMARC-aligned email. The domain vouches for the sender, but mailboxes get phished and spoofed." },
   chat: { label: "Chat verified", tone: "violet", short: "Chat", how: "A signed-in chat identity: a Slack workspace member, or a chat bridge that authenticated the user." },
   directory: { label: "Directory verified", tone: "green", short: "Directory", how: "Matched to an active directory account through SSO (Teams with Entra ID)." },
+  mfa: {
+    label: "MFA verified",
+    tone: "green",
+    short: "MFA",
+    how: `Approved a push or confirmed a texted code on their own registered device (step-up verification). Counts for ${MFA_WINDOW_MINUTES} minutes.`,
+  },
   technician: { label: "Technician", tone: "teal", short: "Technician", how: "Entered or confirmed by a technician." },
 };
 
@@ -184,4 +216,46 @@ export function prettyJson(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+// ------------------------------------------------------------------ step-up verification
+
+/** When a ticket's step-up verification stops counting, or null if it was never verified. */
+export function mfaExpiresAt(ticket: Pick<Ticket, "mfa_verified_at">): number | null {
+  if (!ticket.mfa_verified_at) return null;
+  const t = Date.parse(ticket.mfa_verified_at);
+  return Number.isNaN(t) ? null : t + MFA_WINDOW_MINUTES * 60_000;
+}
+
+/** The requester's identity right now: a fresh step-up verification lifts it to "mfa" (server effectiveAssurance). */
+export function effectiveAssurance(ticket: Pick<Ticket, "assurance" | "mfa_verified_at">, now = Date.now()): Assurance {
+  const expires = mfaExpiresAt(ticket);
+  const rank = ASSURANCE_RANK[ticket.assurance] ?? 0;
+  return expires !== null && now < expires && ASSURANCE_RANK.mfa > rank ? "mfa" : ticket.assurance;
+}
+
+export const ASSURANCE_RANK: Record<Assurance, number> = { none: 0, email: 1, chat: 2, directory: 3, mfa: 4, technician: 5 };
+
+/** Outcomes recorded on `action` events by verify_requester_identity / confirm_verification_code (meta.verification). */
+export const VERIFICATION_META: Record<string, { label: string; tone: Tone }> = {
+  code_sent: { label: "Code sent", tone: "amber" },
+  approved: { label: "Verified", tone: "green" },
+  denied: { label: "Denied", tone: "red" },
+  timeout: { label: "Timed out", tone: "amber" },
+  unavailable: { label: "Unavailable", tone: "amber" },
+  wrong_code: { label: "Wrong code", tone: "amber" },
+};
+
+// ------------------------------------------------------------------ AI models
+
+export const LICENSE_META: Record<ModelLicense, { label: string; tone: Tone; help: string }> = {
+  closed: { label: "Closed", tone: "blue", help: "Hosted proprietary models" },
+  open: { label: "Open-weight", tone: "teal", help: "Open-weight models, hosted or on your own hardware" },
+  both: { label: "Open & closed", tone: "violet", help: "Serves both open-weight and proprietary models" },
+};
+
+/** "anthropic/claude-x" → provider and model parts for display. */
+export function splitServedBy(value: string): { provider: string; model: string } {
+  const i = value.indexOf("/");
+  return i < 0 ? { provider: "", model: value } : { provider: value.slice(0, i), model: value.slice(i + 1) };
 }

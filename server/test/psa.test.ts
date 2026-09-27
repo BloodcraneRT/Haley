@@ -183,6 +183,10 @@ describe("PSA sync", () => {
     await psa.sync(connection.id);
     expect(upstream.comments.every((c) => !c.public)).toBe(true);
     expect(upstream.comments.map((c) => c.body).join("\n")).toContain("Reset done.");
+    const detail = (await app.inject({ url: `/api/tickets/${sim.ticketId}` })).json();
+    expect(detail.psaLinks).toEqual([expect.objectContaining({ kind: "syncro", externalId: link.external_id, externalNumber: link.external_number })]);
+    await app.inject({ method: "PATCH", url: `/api/psa/${connection.id}`, payload: { enabled: false } });
+    expect(await psa.sync(connection.id)).toMatchObject({ skipped: expect.stringContaining("paused") });
     // Demo tickets created before the connection existed are not exported.
     const demoTicket = store.listTickets({ orgId: contoso.id }).find((t) => t.title.startsWith("Isaiah"))!;
     expect(store.listTicketLinks({ ticketId: demoTicket.id })).toHaveLength(0);
@@ -390,5 +394,17 @@ describe("Dynamics 365 adapter", () => {
       "customerid_account@odata.bind": `/accounts(${ACCOUNT})`,
       "primarycontactid@odata.bind": "/contacts(c0ffee00-0000-0000-0000-000000000001)",
     });
+  });
+});
+
+describe("PSA errors", () => {
+  it("returns a readable 502 when the PSA can't be reached", async () => {
+    const net = fakeFetch([[/syncromsp\.com/, () => new Response(JSON.stringify({ error: "Not authorized." }), { status: 401 })]]);
+    const { app } = await makeApp(new ScriptedLlm(), {}, net.impl);
+    const connection = (await app.inject({ method: "POST", url: "/api/psa", payload: { kind: "syncro", config: { subdomain: "msp", apiKey: "bad" } } })).json();
+    expect(connection).toMatchObject({ status: "error", status_detail: expect.stringContaining("Not authorized") });
+    const customers = await app.inject({ url: `/api/psa/${connection.id}/customers` });
+    expect(customers.statusCode).toBe(502);
+    expect(customers.json().error).toContain("Not authorized");
   });
 });

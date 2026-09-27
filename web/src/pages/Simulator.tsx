@@ -1,4 +1,4 @@
-import { ArrowUp, ExternalLink, Info, MessageCircleDashed, OctagonPause, RotateCcw, ShieldCheck } from "lucide-react";
+import { ArrowUp, CornerDownLeft, ExternalLink, Info, MessageCircleDashed, MessageSquareText, OctagonPause, RotateCcw, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, errorMessage, type Assurance, type Delivery, type TicketDetail, type TicketEvent } from "../api";
@@ -12,9 +12,11 @@ import { AssuranceBadge, RunModeBadge, RunStatusPill, TicketStatusPill } from ".
 import { RelativeTime } from "../components/RelativeTime";
 import { usePoll } from "../hooks/usePoll";
 import { useApp } from "../lib/app-context";
-import { ASSURANCE_META, isRunActive } from "../lib/format";
+import { ASSURANCE_META, isRunActive, PROVIDER_NAMES } from "../lib/format";
 
-type SimAssurance = Exclude<Assurance, "technician">;
+const VERIFIERS = new Set(["duo", "okta", "sms_code"]);
+
+type SimAssurance = Exclude<Assurance, "technician" | "mfa">;
 const LEVELS: SimAssurance[] = ["none", "email", "chat", "directory"];
 const LEVEL_AS: Record<SimAssurance, string> = {
   none: "an unverified user",
@@ -32,7 +34,8 @@ const SUGGESTIONS = [
 
 interface Bubble {
   id: string;
-  side: "me" | "them";
+  /** "sms": a sandbox verification text, shown like a phone notification. */
+  side: "me" | "them" | "sms";
   author: string;
   text: string;
   at: string | null;
@@ -49,6 +52,8 @@ function toBubbles(events: TicketEvent[], requesterEmail: string): Bubble[] {
     } else if (e.kind === "comment" && (e.meta.channel || e.meta.fromRequester)) {
       const mine = e.meta.fromRequester === true || (typeof e.meta.senderEmail === "string" && e.meta.senderEmail.toLowerCase() === requesterEmail.toLowerCase());
       out.push({ id: e.id, side: mine ? "me" : "them", author: e.author, text: e.body, at: e.created_at });
+    } else if (e.kind === "agent_note" && e.meta.sandbox === true) {
+      out.push({ id: e.id, side: "sms", author: "IT verification", text: e.body.replace(/^\[Sandbox text to [^\]]+\]\s*/, ""), at: e.created_at });
     } else if (e.kind === "reply") {
       const d = e.meta.delivery as Delivery | undefined;
       out.push({ id: e.id, side: "them", author: e.author, text: e.body, at: e.created_at, delivery: d && typeof d === "object" ? d : undefined });
@@ -95,6 +100,7 @@ export function SimulatorPage() {
   const pending = d?.actions.filter((a) => a.status === "pending_approval") ?? [];
 
   const mine = bubbles.filter((b) => b.side === "me").length;
+  const verifier = org?.integrations.find((i) => VERIFIERS.has(i.provider));
   const echoed = Boolean(outbox && d && outbox.ticketId === d.ticket.id && mine > outbox.mineBefore);
   const shown: Bubble[] =
     outbox && !echoed ? [...bubbles, { id: "sending", side: "me", author: name, text: outbox.text, at: null, pending: true }] : bubbles;
@@ -244,6 +250,21 @@ export function SimulatorPage() {
                   </span>
                 </div>
               )}
+              {org && verifier && (
+                <div className="sim-policy sim-verify">
+                  <ShieldCheck className="icon-sm" aria-hidden="true" />
+                  <span>
+                    Haley can verify you with <strong>{PROVIDER_NAMES[verifier.provider] ?? verifier.provider}</strong>
+                    {verifier.mode === "sandbox" ? " (sandbox)" : ""} before security-sensitive changes, e.g. a password reset for an email-verified
+                    requester.
+                    {verifier.provider === "sms_code" &&
+                      (verifier.mode === "sandbox"
+                        ? " The code arrives right in this conversation as a text; type it back to her."
+                        : " The code goes to the real phone on the user's account.")}
+                    {verifier.provider !== "sms_code" && " The push goes to the user's real enrolled device."}
+                  </span>
+                </div>
+              )}
               {started && <p className="muted" style={{ fontSize: "var(--text-sm)" }}>Start a new conversation to change who's asking.</p>}
             </div>
           </aside>
@@ -273,6 +294,12 @@ export function SimulatorPage() {
               )}
             </header>
 
+            {verifier && !org?.settings?.paused && (
+              <div className="chat-notice tone-green">
+                <ShieldCheck className="icon-sm" aria-hidden="true" /> Haley can verify you with {PROVIDER_NAMES[verifier.provider] ?? verifier.provider}
+                {verifier.mode === "sandbox" ? " (sandbox: codes appear here)" : ""}.
+              </div>
+            )}
             {org?.settings?.paused && (
               <div className="chat-notice tone-red">
                 <OctagonPause className="icon-sm" aria-hidden="true" /> Haley is paused for {org.name}: requests are acknowledged and left for technicians.
@@ -296,6 +323,45 @@ export function SimulatorPage() {
                 </li>
               )}
               {shown.map((b, i) => {
+                if (b.side === "sms") {
+                  const code = /\b\d{6}\b/.exec(b.text)?.[0];
+                  return (
+                    <li key={b.id} className="sms-notification" aria-label="Text message on the requester's phone">
+                      <div className="sms-notification-card">
+                        <div className="sms-notification-head">
+                          <span className="sms-notification-app">
+                            <MessageSquareText className="icon-xs" aria-hidden="true" />
+                          </span>
+                          <span className="sms-notification-title">Messages · IT verification</span>
+                          <span className="spacer" />
+                          <span className="sms-notification-time">
+                            <RelativeTime iso={b.at} />
+                          </span>
+                        </div>
+                        <p className="sms-notification-body">
+                          {code
+                            ? b.text.split(code).flatMap((part, n) => (n === 0 ? [part] : [<mark key={n} className="sms-code">{code}</mark>, part]))
+                            : b.text}
+                        </p>
+                        <div className="sms-notification-foot">
+                          <span>Sandbox text: arrives on the requester's phone in live mode</span>
+                          {code && (
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              onClick={() => {
+                                setDraft(code);
+                                inputRef.current?.focus();
+                              }}
+                            >
+                              <CornerDownLeft className="icon-sm" aria-hidden="true" /> Reply with {code}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </li>
+                  );
+                }
                 const prev = shown[i - 1];
                 const grouped = prev && prev.side === b.side && prev.author === b.author;
                 const them = b.side === "them";

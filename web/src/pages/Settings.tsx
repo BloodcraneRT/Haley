@@ -1,9 +1,10 @@
 import { LogOut, Monitor, Moon, Sun } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { Link } from "react-router-dom";
 import { session } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { Pill } from "../components/Pill";
-import { useApp, type ThemePref } from "../lib/app-context";
+import { aiReady, useApp, type ThemePref } from "../lib/app-context";
 
 export function SettingsPage() {
   const { user, setUser, toast, health, theme, setTheme, signOut } = useApp();
@@ -67,17 +68,25 @@ export function SettingsPage() {
           </div>
           <div className="card-body">
             <dl className="props" style={{ gridTemplateColumns: "150px minmax(0,1fr)" }}>
-              <dt>Model</dt>
-              <dd className="mono">{health.model}</dd>
-              <dt>Claude credentials</dt>
+              <dt>Default AI model</dt>
+              <dd className="row row-wrap" style={{ gap: 8 }}>
+                <span>{health.defaultModel?.name ?? "None"}</span>
+                <span className="mono muted" style={{ fontSize: "var(--text-sm)" }}>
+                  {health.defaultModel ? `${health.defaultModel.provider}/${health.defaultModel.model}` : health.model}
+                </span>
+                <Link to="/models" style={{ fontSize: "var(--text-sm)" }}>
+                  Manage
+                </Link>
+              </dd>
+              <dt>AI credentials</dt>
               <dd>
-                {health.claudeCredentials ? (
+                {aiReady(health) ? (
                   <Pill tone="green" dot>
                     Configured
                   </Pill>
                 ) : (
                   <Pill tone="amber" dot>
-                    Missing: set ANTHROPIC_API_KEY
+                    Missing: add a key on the AI models page
                   </Pill>
                 )}
               </dd>

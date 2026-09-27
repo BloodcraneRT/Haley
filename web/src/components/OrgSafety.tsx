@@ -194,7 +194,8 @@ export function ListEditor({
 
 // ------------------------------------------------------------------ settings form
 
-type Draft = Omit<OrgSettings, "paused">;
+// The kill switch and AI model are saved on their own, outside this form.
+type Draft = Omit<OrgSettings, "paused" | "modelProfileId">;
 
 const toDraft = (s: OrgSettings): Draft => ({
   emailDomains: s.emailDomains,

@@ -1,4 +1,4 @@
-import { ArrowDownToLine, ArrowRight, ArrowUpFromLine, CircleCheck, CircleDashed, Hash, Mail, MessageCircle, MessagesSquare, Users } from "lucide-react";
+import { ArrowDownToLine, ArrowLeftRight, ArrowRight, ArrowUpFromLine, CircleCheck, CircleDashed, Hash, Mail, MessageCircle, MessagesSquare, Users } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { api, ASSURANCE_LEVELS, type Assurance, type ChannelInfo } from "../api";
@@ -6,7 +6,8 @@ import { CopyButton } from "../components/CopyButton";
 import { CodeBlock, Disclosure } from "../components/Disclosure";
 import { ErrorBanner, Loading } from "../components/Feedback";
 import { PageHeader } from "../components/PageHeader";
-import { AssuranceBadge, Pill } from "../components/Pill";
+import { ProviderLogo } from "../components/ProviderLogo";
+import { AssuranceBadge, IntegrationStatusPill, Pill } from "../components/Pill";
 import { usePoll } from "../hooks/usePoll";
 import { ASSURANCE_META } from "../lib/format";
 
@@ -240,6 +241,7 @@ const LADDER: Record<Assurance, { write: Can; sensitive: Can; approver: Can; app
   email: { write: "run", sensitive: "approve", approver: "run", approverNote: "except security-sensitive" },
   chat: { write: "run", sensitive: "limit", approver: "run" },
   directory: { write: "run", sensitive: "limit", approver: "run" },
+  mfa: { write: "run", sensitive: "limit", approver: "run" },
   technician: { write: "run", sensitive: "run", approver: "run", approverNote: "technician authority" },
 };
 
@@ -257,6 +259,51 @@ function Outcome({ can, note }: { can: Can; note?: string }) {
       )}
       {note && <span className="muted">{note}</span>}
     </span>
+  );
+}
+
+function PsaSources() {
+  const psa = usePoll(() => api.psaConnections(), []);
+  const list = psa.data ?? [];
+  return (
+    <section className="card psa-sources" aria-labelledby="psa-src-title">
+      <div className="card-header">
+        <ArrowLeftRight className="icon-sm" aria-hidden="true" />
+        <h2 id="psa-src-title">Tickets from your PSA</h2>
+        <span className="spacer" />
+        <Link to="/psa" className="row" style={{ gap: 4, fontSize: "var(--text-sm)" }}>
+          PSA sync <ArrowRight className="icon-sm" aria-hidden="true" />
+        </Link>
+      </div>
+      <div className="card-body psa-sources-body">
+        <p className="secondary" style={{ fontSize: "var(--text-sm)" }}>
+          Customers who already email or call your service desk don't need a new channel. Connect <strong>SyncroMSP</strong> or{" "}
+          <strong>Dynamics 365 Customer Service</strong> and their tickets reach Haley automatically; she replies as a public comment (Syncro emails
+          the customer) or on the case timeline, and status stays in sync. These tickets show the PSA number, e.g. <em>Syncro #1234</em>.
+        </p>
+        <div className="row row-wrap" style={{ gap: 8 }}>
+          {list.length === 0 ? (
+            <>
+              <span className="chip">
+                <ProviderLogo provider="syncro" /> SyncroMSP
+              </span>
+              <span className="chip">
+                <ProviderLogo provider="dynamics" /> Dynamics 365
+              </span>
+              <Link to="/psa?connect=1" className="btn btn-sm">
+                Connect a PSA
+              </Link>
+            </>
+          ) : (
+            list.map((c) => (
+              <Link key={c.id} to="/psa" className="chip psa-source-chip">
+                <ProviderLogo provider={c.kind} /> {c.name} <IntegrationStatusPill status={c.status} />
+              </Link>
+            ))
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -285,6 +332,8 @@ export function ChannelsPage() {
               <ChannelCard key={c.id} channel={c} />
             ))}
           </div>
+
+          <PsaSources />
 
           <section aria-labelledby="ladder-title" className="card">
             <div className="card-header">

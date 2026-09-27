@@ -7,6 +7,7 @@ import {
   CircleDot,
   CircleX,
   Flag,
+  Hourglass,
   Lock,
   Mail,
   MessageCircle,
@@ -14,7 +15,10 @@ import {
   Play,
   Reply,
   Send,
+  ShieldAlert,
   ShieldCheck,
+  ShieldX,
+  Smartphone,
   Sparkles,
   TriangleAlert,
   Undo2,
@@ -45,12 +49,25 @@ import { Avatar, displayName, isHaley } from "../components/Avatar";
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
 import { Markdown } from "../components/Markdown";
 import { PageHeader } from "../components/PageHeader";
-import { AssuranceBadge, ChannelBadge, Pill, RunModeBadge, RunStatusPill, SlaStatePill, TicketStatusPill } from "../components/Pill";
+import { ChannelBadge, IdentityBadge, Pill, psaRef, RunModeBadge, RunStatusPill, SlaStatePill, TicketStatusPill } from "../components/Pill";
 import { RelativeTime } from "../components/RelativeTime";
 import { RevealSecretButton } from "../components/RevealSecret";
 import { usePoll } from "../hooks/usePoll";
 import { useApp } from "../lib/app-context";
-import { absoluteTime, ASSURANCE_META, CADENCE_META, CHANNEL_META, humanize, isRunActive, PRIORITY_META, TICKET_STATUS_META } from "../lib/format";
+import { CopyButton } from "../components/CopyButton";
+import { useNow } from "../hooks/useNow";
+import {
+  absoluteTime,
+  ASSURANCE_META,
+  CADENCE_META,
+  CHANNEL_META,
+  humanize,
+  isRunActive,
+  mfaExpiresAt,
+  PRIORITY_META,
+  TICKET_STATUS_META,
+  VERIFICATION_META,
+} from "../lib/format";
 
 const runBusy = (r: Run) => r.status === "queued" || r.status === "running" || r.status === "awaiting_approval";
 
@@ -127,8 +144,8 @@ export function TicketDetailPage() {
         subtitle={
           <span className="row row-wrap" style={{ gap: 8 }}>
             <TicketStatusPill status={ticket.status} />
-            {ticket.channel && <ChannelBadge channel={ticket.channel} />}
-            {ticket.assurance && <AssuranceBadge assurance={ticket.assurance} verification={ticket.verification} />}
+            {ticket.channel && <ChannelBadge channel={ticket.channel} externalNumber={psaRef(ticket) ? ticket.channel_ref.externalNumber : undefined} />}
+            {ticket.assurance && <IdentityBadge ticket={ticket} />}
             <span>
               {ticket.requester_name || ticket.requester_email || "Unknown requester"} · opened <RelativeTime iso={ticket.created_at} />
             </span>
@@ -427,8 +444,22 @@ function TicketProps({ detail, onPatch }: { detail: TicketDetail; onPatch: (p: T
               <dt>Channel</dt>
               <dd>
                 <span title={CHANNEL_META[t.channel]?.help}>
-                  <ChannelBadge channel={t.channel} />
+                  <ChannelBadge channel={t.channel} externalNumber={psaRef(t) ? t.channel_ref.externalNumber : undefined} />
                 </span>
+              </dd>
+            </>
+          )}
+          {(detail.psaLinks ?? []).filter((l) => !(psaRef(t) && l.externalId === t.channel_ref.externalId)).length > 0 && (
+            <>
+              <dt>Synced to</dt>
+              <dd className="stack-sm" style={{ gap: 4 }}>
+                {(detail.psaLinks ?? [])
+                  .filter((l) => !(psaRef(t) && l.externalId === t.channel_ref.externalId))
+                  .map((l) => (
+                    <span key={l.connectionId}>
+                      {l.name} #{l.externalNumber || l.externalId}
+                    </span>
+                  ))}
               </dd>
             </>
           )}
@@ -437,11 +468,12 @@ function TicketProps({ detail, onPatch }: { detail: TicketDetail; onPatch: (p: T
               <dt>Identity</dt>
               <dd className="stack-sm" style={{ gap: 4 }}>
                 <span>
-                  <AssuranceBadge assurance={t.assurance} verification={t.verification} />
+                  <IdentityBadge ticket={t} />
                 </span>
                 <span className="muted" style={{ fontSize: "var(--text-sm)", overflowWrap: "anywhere" }}>
                   {t.verification || ASSURANCE_META[t.assurance]?.how}
                 </span>
+                {t.mfa_verified_at && <MfaLine ticket={t} />}
               </dd>
             </>
           )}
@@ -497,6 +529,14 @@ function TimelineItem({ event: e, action }: { event: TicketEvent; action: Action
         </div>
       </li>
     );
+  }
+
+  if (e.kind === "action" && typeof e.meta.verification === "string") {
+    return <VerificationItem event={e} outcome={e.meta.verification} time={time} runLink={runLink} />;
+  }
+
+  if (e.kind === "agent_note" && e.meta.sandbox === true) {
+    return <SandboxSmsItem event={e} time={time} />;
   }
 
   if (e.kind === "action") {
@@ -615,6 +655,108 @@ function TimelineItem({ event: e, action }: { event: TicketEvent; action: Action
         {e.kind === "reply" && isDelivery(e.meta.delivery) && <DeliveryLine delivery={e.meta.delivery} />}
       </article>
     </li>
+  );
+}
+
+const VERIFY_ICONS: Record<string, typeof Check> = {
+  code_sent: Smartphone,
+  approved: ShieldCheck,
+  denied: ShieldX,
+  timeout: Hourglass,
+  unavailable: ShieldAlert,
+  wrong_code: ShieldAlert,
+};
+
+/** verify_requester_identity / confirm_verification_code outcomes: "<method> for <email>: <outcome>. <detail>". */
+function VerificationItem({ event: e, outcome, time, runLink }: { event: TicketEvent; outcome: string; time: ReactNode; runLink: ReactNode }) {
+  const meta = VERIFICATION_META[outcome] ?? { label: humanize(outcome), tone: "neutral" as const };
+  const Icon = VERIFY_ICONS[outcome] ?? ShieldCheck;
+  const m = /^(.*?) for (\S+): [a-z ]+\.\s*([\s\S]*)$/.exec(e.body);
+  const method = m?.[1] ?? "";
+  const who = m?.[2] ?? "";
+  const detail = m ? m[3] : e.body;
+  return (
+    <li className="tl-item">
+      <div className="tl-gutter">
+        <span className={`tl-icon tone-${meta.tone}`}>
+          <Icon className="icon-sm" aria-hidden="true" />
+        </span>
+      </div>
+      <div className={`tl-verify tone-${meta.tone}`}>
+        <div className="tl-verify-head">
+          <strong>Identity verification</strong>
+          <Pill tone={meta.tone} dot>
+            {meta.label}
+          </Pill>
+          {method && <span className="secondary">{method}</span>}
+          {who && <span className="muted truncate">to {who}</span>}
+          <span className="muted">· by Haley · {time}</span>
+          <span className="spacer" />
+          {runLink && <span style={{ fontSize: "var(--text-sm)" }}>{runLink}</span>}
+        </div>
+        {detail && <div className="tl-verify-body">{detail}</div>}
+        {outcome === "approved" && (
+          <div className="tl-verify-foot">Counts as MFA verified for 30 minutes: Haley may now make security-sensitive changes to this requester's own account.</div>
+        )}
+      </div>
+    </li>
+  );
+}
+
+/** A sandbox "text message": the SMS verifier's outbox. The code is shown on purpose so testers can reply with it. */
+function SandboxSmsItem({ event: e, time }: { event: TicketEvent; time: ReactNode }) {
+  const m = /^\[Sandbox text to ([^\]]+)\]\s*([\s\S]*)$/.exec(e.body);
+  const phone = m?.[1] ?? "";
+  const text = m ? m[2] : e.body;
+  const code = /\b\d{6}\b/.exec(text)?.[0];
+  return (
+    <li className="tl-item">
+      <div className="tl-gutter">
+        <span className="tl-icon tone-violet">
+          <Smartphone className="icon-sm" aria-hidden="true" />
+        </span>
+      </div>
+      <article className="tl-card sms-card">
+        <header className="tl-card-head">
+          <span className="author">Sandbox text message</span>
+          <Pill tone="violet">Not sent</Pill>
+          {phone && <span className="mono">to {phone}</span>}
+          <span>· {time}</span>
+        </header>
+        <div className="tl-card-body stack-sm">
+          <div className="sms-bubble">
+            {code
+              ? text.split(code).flatMap((part, i) => (i === 0 ? [part] : [<mark key={i} className="sms-code">{code}</mark>, part]))
+              : text}
+          </div>
+          <div className="row row-wrap" style={{ gap: 8 }}>
+            <span className="muted" style={{ fontSize: "var(--text-sm)" }}>
+              For testers: the SMS verifier is in sandbox mode, so this text went to the timeline instead of a phone. Reply with the code as the
+              requester.
+            </span>
+            {code && <CopyButton value={code} label="Copy code" />}
+          </div>
+        </div>
+      </article>
+    </li>
+  );
+}
+
+const shortTime = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+
+function MfaLine({ ticket }: { ticket: TicketDetail["ticket"] }) {
+  const now = useNow();
+  const expires = mfaExpiresAt(ticket);
+  if (!ticket.mfa_verified_at || expires === null) return null;
+  const fresh = now < expires;
+  return (
+    <span className={`mfa-line ${fresh ? "is-fresh" : ""}`} title={`Verified ${absoluteTime(ticket.mfa_verified_at)}`}>
+      <ShieldCheck className="icon-xs" aria-hidden="true" />
+      <span>
+        {ticket.mfa_method || "Step-up verification"} <RelativeTime iso={ticket.mfa_verified_at} />
+        {fresh ? <> · valid until {shortTime.format(expires)}</> : " · expired (30 min window)"}
+      </span>
+    </span>
   );
 }
 

@@ -1,4 +1,4 @@
-import { ArrowDown, ChevronRight, CircleAlert, ClipboardList, Coins, FileText, Play, Repeat, RotateCcw, ShieldCheck, Sparkles, Ticket as TicketIcon, User, Zap } from "lucide-react";
+import { ArrowDown, BrainCircuit, ChevronRight, CircleAlert, ClipboardList, Coins, FileText, Play, Repeat, RotateCcw, ShieldCheck, Sparkles, Ticket as TicketIcon, User, Zap } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError, errorMessage, type Action, type RunDetail, type RunMode, type TranscriptStep } from "../api";
@@ -114,6 +114,11 @@ export function RunDetailPage() {
         <span>
           <Zap className="icon-sm" aria-hidden="true" /> <strong>{actions.length}</strong> tool call{actions.length === 1 ? "" : "s"}
         </span>
+        {run.model && (
+          <span title="The provider and model that served Haley's latest turn (a fallback model if the primary failed)">
+            <BrainCircuit className="icon-sm" aria-hidden="true" /> served by <strong className="mono run-model-strong">{run.model}</strong>
+          </span>
+        )}
         <span>
           <User className="icon-sm" aria-hidden="true" /> {run.created_by}
         </span>

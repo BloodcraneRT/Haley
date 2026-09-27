@@ -1,3 +1,4 @@
+import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
 import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter } from "./types.js";
@@ -73,8 +74,8 @@ export class SyncroAdapter implements PsaAdapter {
     const data = (await res.json().catch(() => ({}))) as Json;
     if (!res.ok) {
       const detail = Array.isArray(data.message) ? data.message.join("; ") : (data.error ?? data.message ?? res.statusText);
-      if (res.status === 429) throw new Error("SyncroMSP rate limit reached (180 requests/minute); the next sync will continue.");
-      throw new Error(`SyncroMSP ${method} ${path.split("?")[0]} failed (${res.status}): ${detail}`);
+      if (res.status === 429) throw new ConnectorError("SyncroMSP rate limit reached (180 requests/minute); the next sync will continue.");
+      throw new ConnectorError(`SyncroMSP ${method} ${path.split("?")[0]} failed (${res.status}): ${detail}`);
     }
     return data as T;
   }

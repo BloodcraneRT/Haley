@@ -8,7 +8,7 @@ import { PageHeader } from "../components/PageHeader";
 import { RunRow } from "../components/RunRow";
 import { CadenceFields, defaultStartLocal, localInputToIso, ModeToggle } from "../components/Schedules";
 import { usePoll } from "../hooks/usePoll";
-import { useApp } from "../lib/app-context";
+import { aiReady, useApp } from "../lib/app-context";
 import { CADENCE_META, isRunActive } from "../lib/format";
 
 const TEMPLATE_ICONS: Record<string, typeof Zap> = {
@@ -198,13 +198,13 @@ export function TasksPage() {
             </div>
             <div className="card-footer">
               <span className="muted" style={{ fontSize: "var(--text-sm)" }}>
-                {health.claudeCredentials
+                {aiReady(health)
                   ? when === "schedule"
                     ? "Scheduled runs are skipped while Haley is paused for the client."
                     : mode === "plan"
                       ? "Haley plans right away; nothing is changed."
                       : "Haley starts right away; you'll see her work live."
-                  : "The server has no Claude credentials, so runs will fail."}
+                  : "Haley's AI model has no credentials, so runs will fail."}
               </span>
               <span className="spacer" />
               <button className="btn btn-primary" type="submit" disabled={busy}>
