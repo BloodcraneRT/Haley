@@ -83,9 +83,16 @@ export class PsaSync {
         const { connectionId, externalId, externalNumber } = ticket.channel_ref;
         const connection = connectionId ? this.store.getPsaConnection(connectionId) : null;
         if (!connection || !externalId) return { delivered: false, detail: "The PSA connection for this ticket no longer exists." };
-        const commentId = await this.adapterFor(connection).addComment(externalId, { body: text, public: true });
+        const adapter = this.adapterFor(connection);
+        const commentId = await adapter.addComment(externalId, { body: text, public: true });
         this.markSeen(ticket.id, connection.id, externalId, [commentId]);
-        return { delivered: true, detail: `${connection.name} ticket #${externalNumber || externalId}` };
+        const recorded = `${connection.name} ticket #${externalNumber || externalId}`;
+        if (adapter.notifiesCustomer === false) {
+          // The PSA won't tell the customer, so email them too.
+          const emailed = await this.hub.deliverByEmail(ticket, text);
+          return emailed.delivered ? { delivered: true, detail: `${recorded} and ${emailed.detail}` } : { delivered: false, detail: `Recorded on ${recorded}, but ${emailed.detail}` };
+        }
+        return { delivered: true, detail: recorded };
       },
     };
   }

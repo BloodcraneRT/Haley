@@ -69,6 +69,16 @@ export class ChannelHub implements ReplyDelivery {
     }
   }
 
+  async deliverByEmail(ticket: Ticket, text: string): Promise<DeliveryResult> {
+    const email = this.adapters.get("email");
+    if (!email || !ticket.requester_email) return { delivered: false, detail: "no email is configured to reach the requester." };
+    try {
+      return await email.send(ticket, text);
+    } catch (err) {
+      return { delivered: false, detail: `emailing the requester failed: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
   async deliverSecret(ticket: Ticket, heading: string, secrets: Record<string, string>, actionId: string): Promise<DeliveryResult> {
     const assurance = effectiveAssurance(ticket);
     if (ASSURANCE_RANK[assurance] < ASSURANCE_RANK.chat) {

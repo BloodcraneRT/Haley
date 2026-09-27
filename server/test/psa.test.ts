@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ExternalComment, ExternalTicket, PsaAdapter, PsaConnection } from "../src/psa/types.js";
 import type { TicketStatus } from "../src/types.js";
+import { DynamicsAdapter } from "../src/psa/dynamics.js";
 import { SyncroAdapter } from "../src/psa/syncro.js";
 import { fakeFetch, makeApp, ScriptedLlm, text, toolUse, turn } from "./helpers.js";
 
@@ -198,6 +199,26 @@ describe("PSA sync", () => {
   });
 });
 
+describe("PSAs that don't notify customers", () => {
+  it("records the reply on the PSA ticket and also emails the requester", async () => {
+    const fake = Object.assign(new FakePsa(), { notifiesCustomer: false });
+    const sent: Array<Record<string, unknown>> = [];
+    const { app, store, psa, agent } = await makeApp(new ScriptedLlm(turn(text("On it."))), {}, undefined, { sendMail: async (m) => void sent.push(m) }, () => fake);
+    await app.inject({ method: "POST", url: "/api/demo" });
+    const contoso = store.listOrgs().find((o) => o.name === "Contoso Ltd")!;
+    const connection = (await app.inject({ method: "POST", url: "/api/psa", payload: { kind: "dynamics", config: { orgUrl: "https://x.crm.dynamics.com", tenantId: "t", clientId: "c", clientSecret: "s" } } })).json();
+    await app.inject({ method: "PUT", url: `/api/psa/${connection.id}/mapping`, payload: { c1: contoso.id } });
+    fake.open("t1", "c1", "Teams crashing", "Every morning", "megan.bowen@contoso.example");
+    await psa.sync(connection.id);
+    const ticket = store.listTickets({ search: "Teams crashing" })[0];
+    await agent.settled(store.listRuns({ ticketId: ticket.id })[0].id);
+    expect(fake.tickets.get("t1")!.comments.some((c) => c.public && c.body.includes("I'm Haley"))).toBe(true);
+    expect(sent[0]).toMatchObject({ to: expect.stringContaining("megan.bowen@contoso.example") });
+    const ack = store.listTicketEvents(ticket.id).find((e) => e.kind === "reply")!;
+    expect((ack.meta.delivery as { detail: string }).detail).toMatch(/ticket #.* and Emailed/);
+  });
+});
+
 describe("SyncroMSP adapter", () => {
   const syncro = () => {
     const posted: Array<{ url: string; body: any }> = [];
@@ -260,5 +281,114 @@ describe("SyncroMSP adapter", () => {
     const created = await adapter.createTicket({ customerId: "7", subject: "[Haley #1] Hi", description: "d", requesterEmail: "megan@contoso.example", priority: "urgent" });
     expect(created).toEqual({ id: "77", number: "1300" });
     expect(posted[3].body).toMatchObject({ customer_id: 7, contact_id: 41, status: "New", priority: "0 Urgent", problem_type: "Other" });
+  });
+});
+
+describe("Dynamics 365 adapter", () => {
+  const CASE = "11111111-2222-3333-4444-555555555555";
+  const ACCOUNT = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const incident = {
+    incidentid: CASE,
+    ticketnumber: "CAS-01042",
+    title: "VPN drops",
+    description: "<p>VPN disconnects&nbsp;every hour</p>",
+    statecode: 0,
+    statuscode: 3,
+    "statuscode@OData.Community.Display.V1.FormattedValue": "Waiting for Details",
+    prioritycode: 1,
+    modifiedon: "2026-09-27T10:00:00Z",
+    _customerid_value: "cccccccc-0000-0000-0000-000000000001",
+    "_customerid_value@Microsoft.Dynamics.CRM.lookuplogicalname": "contact",
+    customerid_contact: { fullname: "Sam Chen", emailaddress1: "Sam@Acme.example", _parentcustomerid_value: ACCOUNT },
+    primarycontactid: null,
+    customerid_account: null,
+  };
+
+  function dynamics() {
+    let throttled = false;
+    const net = fakeFetch([
+      [/login\.microsoftonline\.com\/tenant-1/, () => ({ access_token: "dyn-token", expires_in: 3599 })],
+      [/\/WhoAmI/, () => ({ UserId: "app-user" })],
+      [/\/accounts\?/, () => ({ value: [{ accountid: ACCOUNT, name: "Acme", websiteurl: "https://www.acme.example/", emailaddress1: "info@acme.example" }] })],
+      [/\/incidents\?\$select=.*modifiedon gt/, (c) => {
+        if (!throttled) {
+          throttled = true;
+          return new Response(JSON.stringify({ error: { message: "slow down" } }), { status: 429, headers: { "retry-after": "1" } });
+        }
+        expect(c.headers.prefer).toContain("odata.maxpagesize=100");
+        return { value: [incident] };
+      }],
+      [/\/annotations\?\$select=annotationid,subject/, () => ({ value: [{ annotationid: "n1", subject: "Called user", notetext: "Asked for logs", createdon: "2026-09-27T09:00:00Z", "_createdby_value@OData.Community.Display.V1.FormattedValue": "Jordan" }] })],
+      [/\/emails\?/, () => ({ value: [{ activityid: "e1", subject: "RE: VPN", description: "<div>It happened again</div>", createdon: "2026-09-27T09:30:00Z", sender: "sam@acme.example" }] })],
+      [/\/annotations\?\$select=annotationid$/, () => ({ annotationid: "n2" })],
+      [/\/incidents\(.*\)\?\$select=statecode$/, () => ({ statecode: 0 })],
+      [/\/CloseIncident/, () => new Response(null, { status: 204 })],
+      [/\/incidents\([0-9a-f-]+\)$/, () => new Response(null, { status: 204 })],
+      [/\/contacts\?/, () => ({ value: [{ contactid: "c0ffee00-0000-0000-0000-000000000001" }] })],
+      [/\/incidents\?\$select=incidentid,ticketnumber/, () =>
+        new Response(null, { status: 204, headers: { "OData-EntityId": `https://acme.crm.dynamics.com/api/data/v9.2/incidents(${CASE})` } })],
+    ]);
+    const adapter = new DynamicsAdapter(
+      { orgUrl: "https://acme.crm.dynamics.com/", tenantId: "tenant-1", clientId: "app", clientSecret: "s" },
+      net.impl,
+      () => Date.parse("2026-09-27T12:00:00Z"),
+      async () => {},
+    );
+    return { adapter, net };
+  }
+
+  it("authenticates as an application user with the environment scope", async () => {
+    const { adapter, net } = dynamics();
+    expect(await adapter.test()).toContain("app-user");
+    expect(new URLSearchParams(net.calls[0].body).get("scope")).toBe("https://acme.crm.dynamics.com/.default");
+    expect(net.calls[1].headers).toMatchObject({ authorization: "Bearer dyn-token", "odata-version": "4.0", "odata-maxversion": "4.0" });
+    expect(await adapter.listCustomers()).toEqual([{ id: ACCOUNT, name: "Acme", domains: ["acme.example"] }]);
+  });
+
+  it("maps cases, notes and incoming emails, retrying once when throttled", async () => {
+    const { adapter, net } = dynamics();
+    const [t] = await adapter.listUpdatedTickets(null);
+    expect(net.calls.filter((c) => c.url.includes("modifiedon gt")).length).toBe(2);
+    expect(t).toMatchObject({
+      id: CASE,
+      number: "CAS-01042",
+      description: "VPN disconnects every hour",
+      customerId: ACCOUNT,
+      requesterEmail: "sam@acme.example",
+      status: "waiting_on_customer",
+      priority: "high",
+    });
+    expect(t.comments).toEqual([
+      expect.objectContaining({ id: "note:n1", fromCustomer: false, public: false, author: "Jordan" }),
+      expect.objectContaining({ id: "email:e1", fromCustomer: true, body: "It happened again" }),
+    ]);
+  });
+
+  it("adds notes, resolves and reactivates cases, and creates cases bound to the account", async () => {
+    const { adapter, net } = dynamics();
+    expect(await adapter.addComment(CASE, { body: "Fixed", public: true })).toBe("note:n2");
+    const note = net.calls.find((c) => c.url.endsWith("/annotations?$select=annotationid"))!;
+    expect(note.json()).toMatchObject({ notetext: "Fixed", "objectid_incident@odata.bind": `/incidents(${CASE})` });
+    expect(note.headers.prefer).toBe("return=representation");
+
+    await adapter.setStatus(CASE, "resolved");
+    const close = net.calls.find((c) => c.url.endsWith("/CloseIncident"))!.json();
+    expect(close).toEqual({
+      IncidentResolution: { "@odata.type": "Microsoft.Dynamics.CRM.incidentresolution", subject: "Resolved by Haley", "incidentid@odata.bind": `/incidents(${CASE})` },
+      Status: 5,
+    });
+    await adapter.setStatus(CASE, "waiting_on_customer");
+    const patch = net.calls.find((c) => c.method === "PATCH")!;
+    expect(patch.json()).toEqual({ statecode: 0, statuscode: 3 });
+    expect(patch.headers["if-match"]).toBe("*");
+
+    const created = await adapter.createTicket({ customerId: ACCOUNT, subject: "[Haley #9] Printer", description: "d", requesterEmail: "o'neil@acme.example", priority: "urgent" });
+    expect(created).toEqual({ id: CASE, number: CASE });
+    expect(net.calls.find((c) => c.url.includes("/contacts?"))!.url).toContain("o''neil@acme.example");
+    expect(net.calls.find((c) => c.url.includes("/incidents?$select=incidentid,ticketnumber"))!.json()).toMatchObject({
+      prioritycode: 1,
+      "customerid_account@odata.bind": `/accounts(${ACCOUNT})`,
+      "primarycontactid@odata.bind": "/contacts(c0ffee00-0000-0000-0000-000000000001)",
+    });
   });
 });

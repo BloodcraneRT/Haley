@@ -40,6 +40,8 @@ export interface ExternalCustomer {
 /** What Haley needs from a PSA or service desk to keep tickets in sync both ways. */
 export interface PsaAdapter {
   kind: PsaKind;
+  /** Whether a public comment reaches the customer (Syncro emails them; a Dynamics note doesn't). Default true. */
+  notifiesCustomer?: boolean;
   test(): Promise<string>;
   listCustomers(): Promise<ExternalCustomer[]>;
   /** Tickets changed since the cursor (ISO time), oldest first; null means a first sync. */

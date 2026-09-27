@@ -23,6 +23,7 @@ import { SlackChannel } from "./channels/slack.js";
 import { TeamsChannel } from "./channels/teams.js";
 import { clientReport } from "./report.js";
 import { PSA_PROVIDERS, buildPsaAdapter } from "./psa/registry.js";
+import "./psa/dynamics.js";
 import "./psa/syncro.js";
 import { PsaSync } from "./psa/sync.js";
 import type { PsaAdapter, PsaConnection } from "./psa/types.js";
