@@ -99,6 +99,7 @@ export interface ProviderField {
   secret?: boolean;
   multiline?: boolean;
   placeholder?: string;
+  optional?: boolean;
 }
 
 export interface ProviderInfo {

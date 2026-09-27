@@ -7,6 +7,7 @@ import { m365Tools } from "./m365/tools.js";
 import { SandboxGoogleApi, type GoogleSandboxState } from "./sandbox/google.js";
 import { SandboxM365Api, type M365SandboxState } from "./sandbox/m365.js";
 import { ConnectorError, type Connector, type ProviderInfo, type StateStore } from "./types.js";
+import { DuoVerifier } from "./verification/duo.js";
 import { SmsCodeVerifier, type PhoneLookup } from "./verification/sms.js";
 
 export const PROVIDERS: ProviderInfo[] = [
@@ -60,6 +61,25 @@ export const PROVIDERS: ProviderInfo[] = [
     capabilities: ["DMs and @mentions become tickets", "Replies in thread", "Private credential delivery", "Verified identity from Slack profile"],
     supportsSandbox: false,
     kind: "channel",
+  },
+  {
+    id: "duo",
+    name: "Duo push",
+    description: "Step-up identity check: Haley sends a Duo Push to the requester's own enrolled device (Auth API) and continues only if they approve it.",
+    fields: [
+      { key: "integrationKey", label: "Integration key", placeholder: "DI…" },
+      { key: "secretKey", label: "Secret key", secret: true },
+      { key: "apiHostname", label: "API hostname", placeholder: "api-XXXXXXXX.duosecurity.com" },
+      { key: "usernameFormat", label: "Duo usernames are", optional: true, placeholder: "email (default) or local", help: "\"local\" if Duo usernames are the part before the @." },
+    ],
+    setupSteps: [
+      "In the client's Duo Admin Panel go to Applications → Application Catalog → Auth API → Protect.",
+      "Copy the integration key, secret key and API hostname here.",
+      "Make sure the Auth API application's user access includes the client's users.",
+    ],
+    capabilities: ["Push to the user's own device", "Denials and fraud reports escalate", "Bypass-mode users can't be 'verified'"],
+    supportsSandbox: false,
+    kind: "verification",
   },
   {
     id: "sms_code",
@@ -189,6 +209,20 @@ export function buildConnector(
         return `Connected to the ${data.team} workspace as @${data.user}.`;
       },
     };
+  }
+
+  if (integration.provider === "duo") {
+    required(config, ["integrationKey", "secretKey", "apiHostname"]);
+    const verifier = new DuoVerifier(
+      {
+        integrationKey: config.integrationKey,
+        secretKey: config.secretKey,
+        apiHostname: config.apiHostname,
+        usernameFormat: config.usernameFormat?.trim().toLowerCase() === "local" ? "local" : "email",
+      },
+      fetchImpl,
+    );
+    return { integrationId: integration.id, provider: "duo", label: integration.label, tools: [], verifier, test: () => verifier.check() };
   }
 
   if (integration.provider === "sms_code") {

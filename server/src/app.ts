@@ -331,8 +331,11 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     const info = providerInfo(input.provider)!;
     if (input.mode === "sandbox" && !info.supportsSandbox) throw new HttpError(400, `${info.name} has no sandbox mode.`);
     if (input.mode === "live") {
-      const missing = info.fields.filter((f) => !input.config[f.key]?.trim()).map((f) => f.label);
+      const missing = info.fields.filter((f) => !f.optional && !input.config[f.key]?.trim()).map((f) => f.label);
       if (missing.length) throw new HttpError(400, `Missing: ${missing.join(", ")}`);
+    }
+    if (info.kind === "verification" && store.listIntegrations(org.id).some((i) => providerInfo(i.provider)?.kind === "verification")) {
+      throw new HttpError(409, `${org.name} already has an identity verification method. Remove it first to switch.`);
     }
     if (store.listIntegrations(org.id).some((i) => i.provider === input.provider)) {
       throw new HttpError(409, `${org.name} already has a ${info.name} integration. Remove it first to reconnect.`);

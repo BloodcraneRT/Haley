@@ -326,6 +326,15 @@ export class AgentService {
         maxSelfServicePerDay: org.settings.maxSelfServicePerUserPerDay,
       });
       const description = tool.describe?.(parsed.data) ?? tool.name;
+      // After the account owner rejected identity verification, Haley makes no customer changes on this ticket at all.
+      if (
+        run.ticket_id &&
+        (tool.risk === "write" || tool.risk === "destructive") &&
+        this.store.listVerifications({ ticketId: run.ticket_id }).some((v) => v.outcome === "denied")
+      ) {
+        decision.outcome = "block";
+        decision.reason = "Identity verification failed on this ticket (possible impersonation), so Haley can't change anything here.";
+      }
 
       if (run.mode === "plan" && tool.risk !== "read") {
         const live =
@@ -381,7 +390,9 @@ export class AgentService {
 
     if (awaiting > 0) {
       this.store.saveRunProgress(run.id, { pending, status: "awaiting_approval" });
-      if (run.ticket_id) {
+      const current = run.ticket_id ? this.store.getTicket(run.ticket_id) : null;
+      // An escalated ticket stays with its technician; don't dress it up as a routine approval.
+      if (run.ticket_id && current?.status !== "escalated") {
         this.store.setTicketStatus(run.ticket_id, "awaiting_approval", AGENT);
         this.store.addTicketEvent(
           run.ticket_id,
