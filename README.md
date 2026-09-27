@@ -4,7 +4,7 @@
 
 End users just message Haley by **email, Slack, Microsoft Teams or chat**. When the channel proves who they are, she fixes their problem end to end with no technician involved: password resets, lost-phone sign-in passes, sign-outs, licenses, out-of-office. Anything risky, unverified, or affecting someone else falls back to a technician automatically. The full rules are in [docs/TRUST_MODEL.md](docs/TRUST_MODEL.md).
 
-Haley is powered by Claude through the Anthropic API.
+Haley is **AI-agnostic**. She runs on Claude by default, and any other model with tool calling works too: OpenAI, Azure OpenAI, Gemini, Mistral, Groq, Together, OpenRouter, DeepSeek or xAI. So do open-weight models you host yourself with Ollama, vLLM or LM Studio. Add as many keys and models as you like, set a default, choose a model per client, and chain fallbacks.
 
 ## What it does
 
@@ -17,6 +17,8 @@ Haley is powered by Claude through the Anthropic API.
 | **Human approval where it matters** | Each client has an autonomy policy. Every change to a customer system is checked against it and either runs, waits in the approval queue, or is blocked. |
 | **Keep secrets away from the model** | Temporary passwords and Temporary Access Passes are encrypted. They go straight to a verified requester's private chat or are revealed to a technician on click (audited). The model only ever sees a placeholder. |
 | **Run IT tasks** | "Ask Haley" templates for onboarding, offboarding, license audits, security posture reviews, environment documentation, and service health checks. Run them once or on a schedule; Haley can also schedule her own follow-ups (for example, "remove this temporary access Friday"). |
+| **Verify identity like a pro** | Step-up MFA before sensitive self-service: **Duo push**, **Okta Verify push**, or a **one-time code by SMS** to the mobile number on the user's account. Email requesters who pass get their fix, and their credential arrives as a view-once link. Denials escalate as possible impersonation and lock the ticket. |
+| **Live in your PSA** | Two-way sync with **SyncroMSP** and **Dynamics 365 Customer Service**. PSA tickets for mapped customers are imported and worked by Haley, customer comments continue them, and her replies, notes and status go back. Tickets that start in Haley are created in the PSA, so billing sees them. |
 | **Plan before acting** | Plan mode is a dry run against the real tenant. Every change is simulated and the run reports which steps would run automatically, which need approval, and why. |
 | **Prove value** | A per-client report for QBRs: tickets, % resolved by Haley alone, SLA compliance, changes made, and estimated hours saved. |
 | **Document** | Haley searches the knowledge base before troubleshooting and writes or updates Markdown articles (runbooks, environment overviews, audit reports) as she goes. |
@@ -92,4 +94,4 @@ npm test            # server test suite (policy, connectors, agent loop, API)
 npm run typecheck
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the agent loop, approvals, channels and connectors fit together, and how to add a new platform. For the competitive landscape and where these features came from, see [docs/research/COMPETITIVE_LANDSCAPE.md](docs/research/COMPETITIVE_LANDSCAPE.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the agent loop, approvals, channels, AI providers, PSA sync and connectors fit together, and how to add a new platform. [docs/research/INTEGRATION_API_NOTES.md](docs/research/INTEGRATION_API_NOTES.md) has the source-checked API details behind the Syncro, Dynamics, Duo, Okta and Twilio integrations. For the competitive landscape and where these features came from, see [docs/research/COMPETITIVE_LANDSCAPE.md](docs/research/COMPETITIVE_LANDSCAPE.md).

@@ -35,7 +35,27 @@
 5. When the last pending action of a run is approved or rejected, `resume()` executes the approved ones, turns rejections into error results that carry the technician's note, sends all results back **in the order the model called them**, and continues the loop.
 6. The loop ends on `end_turn` (the final text becomes the technician summary on the ticket), on a refusal, context or iteration limit (the run fails and the ticket is escalated), or on an API error.
 
-Requests use `claude-opus-5` with adaptive thinking, streaming (`finalMessage()`), prompt caching on the system prompt and conversation, eager input streaming for tool inputs (validated before execution), and server-side refusal fallbacks (`fallbacks: "default"`). The model, effort level and fallbacks are configurable (`HALEY_MODEL`, `HALEY_EFFORT`, `HALEY_FALLBACKS`).
+### Any model: `server/src/ai/`
+
+The runner stores conversations in a **provider-neutral format**: text, tool calls and tool results (`ai/types.ts`). Adapters translate to each provider's wire format.
+
+- **`ai/anthropic.ts`, native Claude:**
+  - adaptive thinking;
+  - streaming with `finalMessage()`;
+  - prompt caching of the system prompt and conversation;
+  - eager input streaming;
+  - server-side refusal fallbacks.
+
+  Claude's own turns, thinking blocks included, are replayed untouched when the run continues on the same model.
+- **`ai/openai.ts`, any OpenAI-compatible `/chat/completions` endpoint with function calling.** It handles tool calls without ids, non-JSON arguments and misreported finish reasons.
+- **Model profiles** (`model_profiles` table, `ai/registry.ts`) hold the provider, model, base URL, an encrypted API key, options and a fallback profile.
+  - There is one workspace default, and a client can override it (`settings.modelProfileId`).
+  - `FallbackLlm` walks the fallback chain on errors.
+  - Because the conversation is neutral, a run can continue on a different model: after a fallback, a default change, or a pause for approval.
+  - Runs record which provider/model served them.
+  - `POST /api/models/:id/test` checks that a model can call tools, since Haley can't work with one that can't.
+
+On first start, a Claude profile is created from `HALEY_MODEL`, `HALEY_EFFORT` and `HALEY_FALLBACKS`, using the server's environment credentials.
 
 ### End-user channels
 
@@ -46,6 +66,29 @@ Requests use `claude-opus-5` with adaptive thinking, streaming (`finalMessage()`
 3. **Thread.** A message continues an open ticket if it matches the email subject tag or message ID, the Slack thread or DM, the Teams conversation, or the bridge thread. Otherwise it opens a ticket, sends an acknowledgement and starts Haley.
 4. **Follow-ups.** A message on a busy ticket sets `needs_followup`, and a fresh pass starts when the current run ends. Messages on escalated tickets wait for the technician.
 5. **Replies.** `reply_to_requester`, technician replies and automatic notices ("needs a quick sign-off", "passed to the IT team") all go out on the ticket's channel, and the delivery result is stored on the timeline.
+
+### Step-up verification
+
+- **Providers:** verification providers are ordinary client integrations with `kind: "verification"`: Duo (`verification/duo.ts`, Auth API with v5 HMAC-SHA512 signing), Okta (`verification/okta.ts`, Factors API) and SMS code (`verification/sms.ts`, Twilio).
+- **Phone lookup:** the SMS provider finds the user's mobile number through the client's other connectors (Microsoft 365 phone methods or the Google recovery phone).
+- **Tools:** `verify_requester_identity` and, for codes, `confirm_verification_code` are available on ticket runs when a verifier exists.
+- **Approval:** an approval stamps `mfa_verified_at`, and `effectiveAssurance()` counts it as the `mfa` level for 30 minutes.
+- **Denial:** a denial escalates the ticket, and the runner blocks every customer change on it from then on.
+- **Records:** attempts are stored in `verification_attempts`, which also drives the fatigue limits.
+- **Credential links:** after step-up, email requesters receive credentials via `secret_links`, view-once and hashed (`routes/secretLinks.ts`).
+
+### PSA sync: `server/src/psa/`
+
+- **One interface:** `PsaAdapter` covers customers, changed tickets with comments, adding a comment, setting status and creating a ticket. Implementations are `psa/syncro.ts` (SyncroMSP REST v1) and `psa/dynamics.ts` (Dataverse Web API v9.2, cases and notes).
+- **`PsaSync` pulls** changed tickets for mapped customers:
+  - New tickets go through the channel hub (acknowledgement, then Haley works them).
+  - A customer comment continues the ticket.
+  - A technician comment is recorded without waking Haley.
+  - Closing the ticket upstream resolves it in Haley.
+- **Replies:** PSA-originated tickets are answered through a channel adapter as public PSA comments. Dynamics notes don't notify customers, so those replies are also emailed.
+- **Mirroring:** Haley's notes, actions and conversations from other channels go back upstream as internal comments. Tickets that start in Haley are created in the PSA.
+- **Loop prevention:** `ticket_links` tracks the comment ids Haley posted and the events already mirrored, so nothing echoes back.
+- **Schedule:** the scheduler syncs each connection every 2 minutes, and `POST /api/psa/:id/sync` syncs on demand.
 
 ### Plan mode
 
@@ -96,6 +139,9 @@ The dashboard renders the connect form from `ProviderInfo`, so no UI work is nee
 | `actions` | Every tool call Haley made: input, risk, rationale, decision, result, sealed secrets. |
 | `kb_articles` | Markdown knowledge base, per client or global. |
 | `schedules` | Recurring tasks and Haley's one-off ticket follow-ups. |
+| `model_profiles` | AI models: provider, model, base URL, encrypted key, options, fallback, default flag. |
+| `verification_attempts`, `secret_links` | Step-up verification history (drives fatigue limits) and view-once credential links (hashed tokens). |
+| `psa_connections`, `ticket_links` | PSA credentials (encrypted), customer→client map, sync cursor and options; ticket ↔ PSA ticket links with seen comments and mirrored events. |
 | `audit_log` | Append-only record of security-relevant events. |
 
 Schema changes are forward-only migrations in `db.ts`, tracked with `PRAGMA user_version`. SQLite (built into Node 22) keeps deployment to a single process and a single file. The `Store` class is the only thing that touches SQL, so moving to Postgres later is contained.
@@ -104,11 +150,10 @@ Schema changes are forward-only migrations in `db.ts`, tracked with `PRAGMA user
 
 These are ranked from the [competitive research](research/COMPETITIVE_LANDSCAPE.md).
 
-- **Step-up verification**: a Duo or Okta push, or a one-time code to a second factor already on file, before self-service changes when the channel's assurance is too low. That would let email-only users self-serve too.
 - **Compromised-account playbook**: investigate sign-ins, inbox rules, forwarding and OAuth grants with read-only tools, then contain with approval.
 - **Exchange Online depth**: shared mailbox and calendar permissions, forwarding, message trace, and converting a mailbox to shared on offboarding.
 - **Client onboarding through GDAP or a multi-tenant partner app**, instead of an app registration per tenant.
-- **PSA two-way sync** (HaloPSA first, then ConnectWise and Autotask) and an **RMM connector** for endpoint scripts.
+- **More PSAs** (HaloPSA, ConnectWise, Autotask) on the same `PsaAdapter` interface, and an **RMM connector** for endpoint scripts.
 - **Per-technician accounts** with SSO and roles, replacing the shared API token.
 - **Service catalog** forms feeding deterministic tools; **tenant standards and drift** checks.
 - **Live run streaming** over SSE instead of polling.

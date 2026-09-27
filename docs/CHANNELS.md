@@ -89,6 +89,16 @@ x-haley-signature: sha256=<hex HMAC-SHA256 of the raw body with HALEY_CHAT_WEBHO
 - **`private: true`** means only this user sees replies in the thread, so self-service credentials may be sent there.
 - **Replies** are POSTed to `callbackUrl` as `{ threadId, ticketNumber, text, private }` and signed the same way.
 
+## SyncroMSP and Dynamics 365
+
+PSA tickets are a channel too. Connect a PSA on the dashboard's **PSA sync** page and map its customers to Haley clients; Haley suggests mappings by email and website domains. What happens next:
+- **New tickets** for mapped customers open in Haley, and she works them.
+- **Replies** go back as public PSA comments; Syncro emails the customer, and for Dynamics Haley also emails them.
+- **Customer comments** continue the ticket.
+- **Closing a ticket** in the PSA resolves it in Haley.
+
+Imported requesters get `none` identity by default, because the PSA doesn't tell Haley how they were authenticated. Step-up verification covers that gap. The API details are in [research/INTEGRATION_API_NOTES.md](research/INTEGRATION_API_NOTES.md).
+
 ## PSA / API intake
 
 `POST /api/intake` with the technician API token. The body is `{ from, fromName, subject, body, verified?, autoRun? }`. Use `verified: true` only when the PSA authenticated the requester, which gives `email` assurance.
