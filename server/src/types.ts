@@ -78,6 +78,8 @@ export interface OrgSettings {
   paused: boolean;
   /** Response and resolution targets per priority, in minutes (24x7). */
   sla: Record<TicketPriority, SlaTarget>;
+  /** AI model profile for this client; empty uses the workspace default. */
+  modelProfileId: string;
 }
 
 export interface SlaTarget {
@@ -93,6 +95,7 @@ export const DEFAULT_ORG_SETTINGS: OrgSettings = {
   maxAutoChangesPerHour: 20,
   maxSelfServicePerUserPerDay: 3,
   paused: false,
+  modelProfileId: "",
   sla: {
     urgent: { responseMinutes: 15, resolutionMinutes: 240 },
     high: { responseMinutes: 60, resolutionMinutes: 480 },
@@ -176,6 +179,8 @@ export interface Run {
   iterations: number;
   input_tokens: number;
   output_tokens: number;
+  /** Provider/model that served the latest turn. */
+  model: string;
   created_by: string;
   created_at: string;
   updated_at: string;

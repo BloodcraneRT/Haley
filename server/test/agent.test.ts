@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lastToolResults, makeApp, ScriptedLlm, text, toolUse, turn } from "./helpers.js";
+import { lastToolResults, makeApp, ScriptedLlm, text, toolUse, turn, firstUserText } from "./helpers.js";
 
 async function setup(llm: ScriptedLlm, autonomy: "read_only" | "supervised" | "autonomous" = "supervised") {
   const haley = await makeApp(llm);
@@ -31,8 +31,8 @@ describe("agent runner", () => {
     // The model saw its tools and the org/ticket context.
     const first = llm.requests[0];
     expect(first.tools.map((t) => t.name)).toEqual(expect.arrayContaining(["m365_get_user", "reply_to_requester", "search_knowledge_base"]));
-    expect(first.messages[0].content).toContain("Isaiah locked out");
-    expect(first.messages[0].content).toContain("supervised");
+    expect(firstUserText(first)).toContain("Isaiah locked out");
+    expect(firstUserText(first)).toContain("supervised");
     // Tool results flowed back.
     const [userResult] = lastToolResults(llm.requests[1]);
     expect(JSON.parse(userResult.content).userPrincipalName).toBe("isaiah.langer@contoso.example");
@@ -167,7 +167,7 @@ describe("agent runner", () => {
   });
 
   it("escalates the ticket when the model declines", async () => {
-    const llm = new ScriptedLlm(() => ({ content: [], stop_reason: "refusal" }));
+    const llm = new ScriptedLlm(() => ({ content: [], stop_reason: "refusal" as const }));
     const { agent, store, ticket } = await setup(llm);
     const run = agent.startTicketRun(ticket.id, "tech");
     await agent.settled(run.id);
@@ -186,7 +186,7 @@ describe("agent runner", () => {
     const again = agent.startTicketRun(ticket.id, "tech");
     await agent.settled(again.id);
     expect(store.getRun(again.id)!.status).toBe("completed");
-    expect(llm.requests[1].messages[0].content).toContain("worked this ticket before");
+    expect(firstUserText(llm.requests[1])).toContain("worked this ticket before");
   });
 
   it("refuses to start a second concurrent run on the same ticket", async () => {

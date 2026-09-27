@@ -5,7 +5,9 @@ import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { z } from "zod";
-import { AnthropicLlm, type LlmClient, type MessageParam } from "./agent/llm.js";
+import { PROVIDER_PRESETS, presetFor } from "./ai/providers.js";
+import { ModelRegistry } from "./ai/registry.js";
+import type { ChatMessage, LlmClient } from "./ai/types.js";
 import { AgentService, RunConflictError } from "./agent/runner.js";
 import { TASK_TEMPLATES } from "./agent/templates.js";
 import type { HaleyConfig } from "./config.js";
@@ -108,7 +110,9 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
       : null;
   if (teams) hub.register(teams);
 
-  const agent = new AgentService(store, llm ?? new AnthropicLlm(config), config, connectorsFor, hub);
+  const models = new ModelRegistry(store, fetchImpl);
+  models.ensureDefault({ model: config.model, effort: config.effort, fallbacks: config.fallbacks });
+  const agent = new AgentService(store, llm ? () => llm : (orgId) => models.clientFor(orgId), config, connectorsFor, hub);
   hub.attach(agent);
   agent.recoverInterrupted();
   const scheduler = new Scheduler(store, agent);
@@ -155,9 +159,15 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
 
   app.get("/api/health", async () => ({
     ok: true,
-    model: config.model,
+    model: store.getDefaultModelProfile()?.model ?? config.model,
     authRequired: Boolean(config.apiToken),
-    claudeCredentials: Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_PROFILE),
+    // Kept for older dashboards; aiConfigured covers every provider.
+    claudeCredentials: models.defaultConfigured(),
+    aiConfigured: models.defaultConfigured(),
+    defaultModel: (() => {
+      const p = store.getDefaultModelProfile();
+      return p ? { id: p.id, name: p.name, provider: p.provider, model: p.model } : null;
+    })(),
   }));
 
   app.get("/api/stats", async () => {
@@ -191,6 +201,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
       maxAutoChangesPerHour: z.number().int().min(0).max(1000),
       maxSelfServicePerUserPerDay: z.number().int().min(0).max(50),
       paused: z.boolean(),
+      modelProfileId: z.string(),
       sla: z.record(
         z.enum(["urgent", "high", "normal", "low"]),
         z.object({ responseMinutes: z.number().int().min(1).max(100_000), resolutionMinutes: z.number().int().min(1).max(100_000) }),
@@ -240,6 +251,9 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
       req,
     );
     const before = store.getOrg(req.params.id);
+    if (patch.settings?.modelProfileId && !store.getModelProfile(patch.settings.modelProfileId)) {
+      throw new HttpError(400, "That AI model doesn't exist.");
+    }
     const org = store.updateOrg(req.params.id, patch as never);
     if (!before || !org) throw notFound("Organization");
     const who = actor(req);
@@ -544,8 +558,125 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
     return {
       run: { ...run, org_name: store.getOrg(run.org_id)?.name ?? "" },
       actions,
-      transcript: buildTranscript(store.getRunMessages<MessageParam>(run.id), actions),
+      transcript: buildTranscript(store.getRunMessages<ChatMessage>(run.id), actions),
     };
+  });
+
+  // ---------------------------------------------------------- AI models
+
+  app.get("/api/models/providers", async () => PROVIDER_PRESETS);
+
+  app.get("/api/models", async () => {
+    const orgs = store.listOrgs();
+    return store.listModelProfiles().map((p) => ({ ...p, usedBy: orgs.filter((o) => o.settings.modelProfileId === p.id).map((o) => o.name) }));
+  });
+
+  const modelOptions = z
+    .object({
+      maxTokens: z.number().int().min(256).max(200_000),
+      effort: z.enum(["low", "medium", "high", "xhigh", "max"]),
+      refusalFallbacks: z.boolean(),
+      temperature: z.number().min(0).max(2),
+      tokenParam: z.enum(["max_tokens", "max_completion_tokens"]),
+      reasoningEffort: z.string().max(20),
+      apiVersion: z.string().max(40),
+      extraHeaders: z.record(z.string(), z.string()),
+    })
+    .partial();
+  const providerIds = PROVIDER_PRESETS.map((p) => p.id) as [string, ...string[]];
+
+  const assertFallback = (id: string | null | undefined, self?: string) => {
+    if (!id) return;
+    if (id === self) throw new HttpError(400, "A model can't fall back to itself.");
+    if (!store.getModelProfile(id)) throw new HttpError(400, "Fallback model not found.");
+  };
+
+  app.post("/api/models", async (req) => {
+    const input = body(
+      z.object({
+        name: z.string().trim().min(1),
+        provider: z.enum(providerIds),
+        model: z.string().trim().min(1),
+        baseUrl: z.string().trim().url().or(z.literal("")).default(""),
+        apiKey: z.string().default(""),
+        options: modelOptions.default({}),
+        fallbackId: z.string().nullable().default(null),
+        isDefault: z.boolean().default(false),
+      }),
+      req,
+    );
+    const preset = presetFor(input.provider)!;
+    if (!preset.baseUrl && !input.baseUrl) throw new HttpError(400, `${preset.name} needs a base URL.`);
+    assertFallback(input.fallbackId);
+    const profile = store.createModelProfile({ ...input, isDefault: input.isDefault || !store.getDefaultModelProfile() });
+    models.invalidate();
+    store.audit({ actor: actor(req), action: "model.created", target: profile.id, detail: { name: profile.name, provider: profile.provider, model: profile.model } });
+    return profile;
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/models/:id", async (req) => {
+    if (!store.getModelProfile(req.params.id)) throw notFound("Model");
+    const patch = body(
+      z.object({
+        name: z.string().trim().min(1).optional(),
+        model: z.string().trim().min(1).optional(),
+        baseUrl: z.string().trim().url().or(z.literal("")).optional(),
+        /** Omit to keep the stored key; "" to clear it. */
+        apiKey: z.string().optional(),
+        options: modelOptions.optional(),
+        fallbackId: z.string().nullable().optional(),
+        isDefault: z.literal(true).optional(),
+      }),
+      req,
+    );
+    assertFallback(patch.fallbackId, req.params.id);
+    const profile = store.updateModelProfile(req.params.id, { ...patch, apiKey: patch.apiKey === undefined ? undefined : patch.apiKey || null });
+    models.invalidate();
+    store.audit({ actor: actor(req), action: "model.updated", target: req.params.id, detail: { fields: Object.keys(patch).filter((k) => k !== "apiKey"), keyChanged: patch.apiKey !== undefined } });
+    return profile;
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/models/:id", async (req) => {
+    const profile = store.getModelProfile(req.params.id);
+    if (!profile) throw notFound("Model");
+    if (profile.is_default) throw new HttpError(409, "Make another model the default before deleting this one.");
+    for (const org of store.listOrgs().filter((o) => o.settings.modelProfileId === profile.id)) {
+      store.updateOrg(org.id, { settings: { modelProfileId: "" } });
+    }
+    store.deleteModelProfile(profile.id);
+    models.invalidate();
+    store.audit({ actor: actor(req), action: "model.deleted", target: profile.id, detail: { name: profile.name } });
+    return { ok: true };
+  });
+
+  /** Checks the model answers and can call tools, which Haley can't work without. */
+  app.post<{ Params: { id: string } }>("/api/models/:id/test", async (req) => {
+    const profile = store.getModelProfile(req.params.id);
+    if (!profile) throw notFound("Model");
+    const started = Date.now();
+    try {
+      const response = await models.clientForProfile(profile, false).create({
+        system: "You are a connectivity check. Call the tool exactly once.",
+        messages: [{ role: "user", parts: [{ type: "text", text: "Call the ping tool with message set to \"pong\"." }] }],
+        tools: [
+          {
+            name: "ping",
+            description: "Returns the message it is given.",
+            inputSchema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+          },
+        ],
+      });
+      const call = response.parts.find((p) => p.type === "tool_call");
+      return {
+        ok: true,
+        toolCalling: Boolean(call),
+        latencyMs: Date.now() - started,
+        servedBy: `${response.provider}/${response.model}`,
+        detail: call ? "Responded and called a tool: ready for Haley." : "Responded but did not call the tool. Haley needs a model with tool calling.",
+      };
+    } catch (err) {
+      return { ok: false, toolCalling: false, latencyMs: Date.now() - started, servedBy: null, detail: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   // ---------------------------------------------------------- schedules

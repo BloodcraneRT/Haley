@@ -154,6 +154,20 @@ const MIGRATIONS: string[] = [
    ALTER TABLE tickets ADD COLUMN first_response_at TEXT;
    ALTER TABLE tickets ADD COLUMN resolved_at TEXT;
    ALTER TABLE tickets ADD COLUMN sla_escalated INTEGER NOT NULL DEFAULT 0;`,
+  // 3: provider-agnostic AI models
+  `CREATE TABLE IF NOT EXISTS model_profiles (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL,
+     provider TEXT NOT NULL,
+     model TEXT NOT NULL,
+     base_url TEXT NOT NULL DEFAULT '',
+     api_key_sealed TEXT,
+     options TEXT NOT NULL DEFAULT '{}',
+     fallback_id TEXT,
+     is_default INTEGER NOT NULL DEFAULT 0,
+     created_at TEXT NOT NULL
+   );
+   ALTER TABLE runs ADD COLUMN model TEXT NOT NULL DEFAULT '';`,
 ];
 
 export function openDb(path: string): Db {

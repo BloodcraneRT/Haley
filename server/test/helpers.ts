@@ -1,24 +1,24 @@
 import { randomBytes } from "node:crypto";
-import type { LlmClient, LlmRequest, Message } from "../src/agent/llm.js";
+import type { LlmClient, LlmRequest, ModelResponse, Part, StopReason } from "../src/ai/types.js";
 import { buildApp } from "../src/app.js";
 import { loadConfig, type HaleyConfig } from "../src/config.js";
 
-type Block = Message["content"][number];
-type StepResult = { content: Array<Record<string, unknown>>; stop_reason?: Message["stop_reason"] };
+type StepResult = { content: Part[]; stop_reason?: StopReason };
 type Step = (req: LlmRequest) => StepResult | Promise<StepResult>;
 
 let counter = 0;
 
-export function toolUse(name: string, input: unknown, id = `toolu_${++counter}`) {
-  return { type: "tool_use", id, name, input };
+export function toolUse(name: string, input: unknown, id = `toolu_${++counter}`): Part {
+  return { type: "tool_call", id, name, input };
 }
 
-export function text(t: string) {
-  return { type: "text", text: t, citations: null };
+export function text(t: string): Part {
+  return { type: "text", text: t };
 }
 
 /** A fake model that replays scripted turns and records every request it received. */
 export class ScriptedLlm implements LlmClient {
+  readonly label = "scripted";
   readonly requests: LlmRequest[] = [];
   private readonly steps: Step[];
 
@@ -26,27 +26,24 @@ export class ScriptedLlm implements LlmClient {
     this.steps = steps;
   }
 
-  async create(req: LlmRequest): Promise<Message> {
+  async create(req: LlmRequest): Promise<ModelResponse> {
     // Snapshot: the runner keeps appending to the same array.
     this.requests.push(structuredClone(req));
     const step = this.steps.shift();
     if (!step) throw new Error("ScriptedLlm ran out of steps");
     const { content, stop_reason } = await step(req);
     return {
-      id: `msg_${++counter}`,
-      type: "message",
-      role: "assistant",
+      parts: content,
+      stopReason: stop_reason ?? (content.some((b) => b.type === "tool_call") ? "tool_use" : "end_turn"),
       model: "scripted",
-      content: content as unknown as Block[],
-      stop_reason: stop_reason ?? (content.some((b) => b.type === "tool_use") ? "tool_use" : "end_turn"),
-      stop_sequence: null,
-      usage: { input_tokens: 100, output_tokens: 20 },
-    } as unknown as Message;
+      provider: "test",
+      usage: { inputTokens: 100, outputTokens: 20 },
+    };
   }
 }
 
 export const turn =
-  (...content: Array<Record<string, unknown>>): Step =>
+  (...content: Part[]): Step =>
   () => ({ content });
 
 export function testConfig(overrides: Partial<HaleyConfig> = {}): HaleyConfig {
@@ -58,12 +55,13 @@ export function testConfig(overrides: Partial<HaleyConfig> = {}): HaleyConfig {
 }
 
 export async function makeApp(
-  llm: LlmClient = new ScriptedLlm(),
+  /** null: use the real model registry (profiles), as production does. */
+  llm: LlmClient | null = new ScriptedLlm(),
   overrides: Partial<HaleyConfig> = {},
   fetchImpl?: typeof fetch,
   mailTransport?: { sendMail(options: Record<string, unknown>): Promise<unknown> },
 ) {
-  return buildApp({ config: testConfig(overrides), llm, fetchImpl, mailTransport });
+  return buildApp({ config: testConfig(overrides), llm: llm ?? undefined, fetchImpl, mailTransport });
 }
 
 export interface FetchCall {
@@ -96,9 +94,15 @@ export function fakeFetch(routes: Array<[RegExp, (call: FetchCall) => unknown]>)
   return { impl, calls };
 }
 
-/** The tool_result blocks in the most recent user turn the model was sent. */
+/** The tool results in the most recent user turn the model was sent. */
 export function lastToolResults(req: LlmRequest) {
   const last = req.messages[req.messages.length - 1];
-  if (typeof last.content === "string") return [];
-  return last.content.filter((b) => b.type === "tool_result") as Array<{ tool_use_id: string; content: string; is_error?: boolean }>;
+  return last.parts
+    .filter((p): p is Extract<Part, { type: "tool_result" }> => p.type === "tool_result")
+    .map((p) => ({ tool_use_id: p.toolCallId, content: p.content, is_error: p.isError }));
+}
+
+/** The first user message's text: the context Haley was given. */
+export function firstUserText(req: LlmRequest): string {
+  return req.messages[0].parts.map((p) => (p.type === "text" ? p.text : "")).join("\n");
 }

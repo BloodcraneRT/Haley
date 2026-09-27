@@ -5,7 +5,7 @@ import type { PendingState, Store } from "../store.js";
 import type { ReplyDelivery } from "../channels/types.js";
 import { ASSURANCE_RANK, type Action, type Org, type Run, type RunMode } from "../types.js";
 import { builtinTools } from "./builtinTools.js";
-import { describeLlmError, type LlmClient, type Message, type MessageParam, type ToolParam } from "./llm.js";
+import { textOf, toolCallsOf, type ChatMessage, type LlmClient, type ModelResponse, type Part, type ToolSpec } from "../ai/types.js";
 import { decide, targetsOf, type Requester } from "./policy.js";
 import { orgContext, SYSTEM_PROMPT, ticketContext } from "./prompts.js";
 
@@ -15,18 +15,15 @@ const PLAN_MODE_TEXT = `PLAN MODE (dry run): nothing you do in this run takes ef
 const MAX_RESULT_CHARS = 40_000;
 
 type ToolResult = { content: string; is_error: boolean };
-type ToolResultBlock = Extract<Exclude<MessageParam["content"], string>[number], { type: "tool_result" }>;
 
 export class RunConflictError extends Error {}
 
-export function toApiTool(tool: HaleyTool): ToolParam {
+export function toToolSpec(tool: HaleyTool): ToolSpec {
   const { $schema: _ignored, ...schema } = z.toJSONSchema(tool.input, { io: "input" }) as Record<string, unknown>;
-  return {
-    name: tool.name,
-    description: tool.description,
-    input_schema: { ...schema, type: "object" } as ToolParam["input_schema"],
-  };
+  return { name: tool.name, description: tool.description, inputSchema: { ...schema, type: "object" } };
 }
+
+const userText = (text: string): ChatMessage => ({ role: "user", parts: [{ type: "text", text }] });
 
 function truncate(text: string): string {
   return text.length > MAX_RESULT_CHARS ? `${text.slice(0, MAX_RESULT_CHARS)}\n…[truncated ${text.length - MAX_RESULT_CHARS} chars]` : text;
@@ -44,7 +41,8 @@ export class AgentService {
 
   constructor(
     private readonly store: Store,
-    private readonly llm: LlmClient,
+    /** The model (or fallback chain) serving a client; resolved per run so model changes apply immediately. */
+    private readonly llmFor: (orgId: string) => LlmClient,
     private readonly config: Pick<HaleyConfig, "maxAgentIterations">,
     private readonly connectorsFor: (orgId: string) => Connector[],
     private readonly delivery: ReplyDelivery | null = null,
@@ -86,7 +84,7 @@ export class AgentService {
           ? "You have worked this ticket before; the history above shows what happened since. Continue from where things stand."
           : "Work this ticket."
     }`;
-    this.store.saveRunProgress(run.id, { messages: [{ role: "user", content: intro }] });
+    this.store.saveRunProgress(run.id, { messages: [userText(intro)] });
     this.store.audit({ orgId: org.id, actor: createdBy, action: "run.started", target: run.id, detail: { ticketId } });
     this.kick(run.id, () => this.loop(run.id));
     return this.store.getRun(run.id)!;
@@ -97,7 +95,7 @@ export class AgentService {
     this.assertNotPaused(org);
     const run = this.store.createRun({ orgId, kind: "task", mode, title, instruction, createdBy });
     const intro = `${this.header(org)}\n\n<task requested_by="${createdBy}">\n${instruction}\n</task>${mode === "plan" ? `\n\n${PLAN_MODE_TEXT}` : ""}`;
-    this.store.saveRunProgress(run.id, { messages: [{ role: "user", content: intro }] });
+    this.store.saveRunProgress(run.id, { messages: [userText(intro)] });
     this.store.audit({ orgId, actor: createdBy, action: "run.started", target: run.id, detail: { title } });
     this.kick(run.id, () => this.loop(run.id));
     return this.store.getRun(run.id)!;
@@ -161,7 +159,7 @@ export class AgentService {
     const previous = this.inflight.get(runId) ?? Promise.resolve();
     const next = previous
       .then(work)
-      .catch((err) => this.fail(runId, describeLlmError(err)))
+      .catch((err) => this.fail(runId, errorMessage(err)))
       .finally(() => {
         if (this.inflight.get(runId) === next) this.inflight.delete(runId);
       });
@@ -203,7 +201,7 @@ export class AgentService {
     const run = this.store.getRun(runId)!;
     const tools = this.toolsFor(run);
     const actions = new Map(this.store.listActions({ runId }).map((a) => [a.tool_use_id, a]));
-    const blocks: ToolResultBlock[] = [];
+    const blocks: Part[] = [];
     for (const toolUseId of pending.order) {
       let result = pending.results[toolUseId];
       if (!result) {
@@ -220,10 +218,10 @@ export class AgentService {
           };
         }
       }
-      blocks.push({ type: "tool_result", tool_use_id: toolUseId, content: result.content, is_error: result.is_error });
+      blocks.push({ type: "tool_result", toolCallId: toolUseId, content: result.content, isError: result.is_error });
     }
-    const messages = this.store.getRunMessages<MessageParam>(runId);
-    messages.push({ role: "user", content: blocks });
+    const messages = this.store.getRunMessages<ChatMessage>(runId);
+    messages.push({ role: "user", parts: blocks });
     this.store.saveRunProgress(runId, { messages, pending: null, status: "running" });
     await this.loop(runId);
   }
@@ -232,8 +230,9 @@ export class AgentService {
     let run = this.store.getRun(runId)!;
     const org = this.requireOrg(run.org_id);
     const tools = this.toolsFor(run);
-    const apiTools = [...tools.values()].map(toApiTool);
-    const messages = this.store.getRunMessages<MessageParam>(runId);
+    const toolSpecs = [...tools.values()].map(toToolSpec);
+    const messages = this.store.getRunMessages<ChatMessage>(runId);
+    const llm = this.llmFor(run.org_id);
 
     this.store.saveRunProgress(runId, { status: "running" });
     if (run.ticket_id && run.mode === "live") {
@@ -252,32 +251,26 @@ export class AgentService {
         return this.fail(runId, `Stopped after ${run.iterations} model turns without finishing. A technician should review.`);
       }
 
-      const response: Message = await this.llm.create({ system: SYSTEM_PROMPT, messages, tools: apiTools });
-      messages.push({ role: "assistant", content: response.content } as MessageParam);
+      const response: ModelResponse = await llm.create({ system: SYSTEM_PROMPT, messages, tools: toolSpecs });
+      messages.push({ role: "assistant", parts: response.parts, ...(response.native ? { native: response.native } : {}) });
       this.store.saveRunProgress(runId, {
         messages,
         addIterations: 1,
-        addInputTokens:
-          (response.usage?.input_tokens ?? 0) +
-          (response.usage?.cache_read_input_tokens ?? 0) +
-          (response.usage?.cache_creation_input_tokens ?? 0),
-        addOutputTokens: response.usage?.output_tokens ?? 0,
+        addInputTokens: response.usage.inputTokens,
+        addOutputTokens: response.usage.outputTokens,
+        model: `${response.provider}/${response.model}`,
       });
 
-      const text = response.content
-        .filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")
-        .map((b) => b.text)
-        .join("\n")
-        .trim();
+      const text = textOf(response.parts);
 
-      switch (response.stop_reason) {
+      switch (response.stopReason) {
         case "refusal":
           return this.fail(runId, "The model declined to continue this request. A technician needs to handle it.", true);
         case "pause_turn":
           continue;
         case "max_tokens":
-        case "model_context_window_exceeded":
-          return this.fail(runId, `The model ran out of room (${response.stop_reason}). A technician should review.`, true);
+        case "context_exceeded":
+          return this.fail(runId, `The model ran out of room (${response.stopReason}). A technician should review.`, true);
         case "tool_use": {
           const paused = await this.handleToolUse(run, org, tools, response, text, messages);
           if (paused) return;
@@ -294,11 +287,11 @@ export class AgentService {
     run: Run,
     org: Org,
     tools: Map<string, HaleyTool>,
-    response: Message,
+    response: ModelResponse,
     rationale: string,
-    messages: MessageParam[],
+    messages: ChatMessage[],
   ): Promise<boolean> {
-    const calls = response.content.filter((b): b is Extract<typeof b, { type: "tool_use" }> => b.type === "tool_use");
+    const calls = toolCallsOf(response.parts);
     const pending: PendingState = { order: calls.map((c) => c.id), results: {} };
     let awaiting = 0;
 
@@ -408,11 +401,11 @@ export class AgentService {
 
     messages.push({
       role: "user",
-      content: pending.order.map((id) => ({
+      parts: pending.order.map((id) => ({
         type: "tool_result" as const,
-        tool_use_id: id,
+        toolCallId: id,
         content: pending.results[id].content,
-        is_error: pending.results[id].is_error,
+        isError: pending.results[id].is_error,
       })),
     });
     this.store.saveRunProgress(run.id, { messages });

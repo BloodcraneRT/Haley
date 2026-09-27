@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { nextOccurrence } from "../src/scheduler.js";
 import { slaFor } from "../src/sla.js";
 import { DEFAULT_ORG_SETTINGS, type Ticket } from "../src/types.js";
-import { lastToolResults, makeApp, ScriptedLlm, text, toolUse, turn } from "./helpers.js";
+import { lastToolResults, makeApp, ScriptedLlm, text, toolUse, turn, firstUserText } from "./helpers.js";
 
 const HOUR = 3_600_000;
 
@@ -110,7 +110,7 @@ describe("scheduler", () => {
     const followUp = store.getRun(tick.started[0].runId)!;
     expect(followUp).toMatchObject({ ticket_id: ticket.id, instruction: expect.stringContaining("Remove Alex") });
     await agent.settled(followUp.id);
-    expect(llm.requests[2].messages[0].content).toContain("follow-up you scheduled earlier");
+    expect(firstUserText(llm.requests[2])).toContain("follow-up you scheduled earlier");
     // Contoso is supervised, and the dashboard-entered ticket carries technician authority: still needs approval.
     expect(store.listActions({ runId: followUp.id })[0].status).toBe("pending_approval");
     expect(store.getSchedule(schedule.id)!.enabled).toBe(false);

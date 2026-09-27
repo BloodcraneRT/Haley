@@ -28,6 +28,7 @@ import type {
   TicketStatus,
 } from "./types.js";
 import { DEFAULT_ORG_SETTINGS } from "./types.js";
+import type { ModelProfile } from "./ai/providers.js";
 
 type Row = Record<string, unknown>;
 
@@ -429,7 +430,7 @@ export class Store {
     const row = this.db
       .prepare(
         `SELECT id, org_id, ticket_id, kind, mode, title, instruction, status, summary, error, iterations,
-                input_tokens, output_tokens, created_by, created_at, updated_at FROM runs WHERE id = ?`,
+                input_tokens, output_tokens, model, created_by, created_at, updated_at FROM runs WHERE id = ?`,
       )
       .get(id);
     return (row as unknown as Run) ?? null;
@@ -454,7 +455,7 @@ export class Store {
     return this.db
       .prepare(
         `SELECT id, org_id, ticket_id, kind, mode, title, instruction, status, summary, error, iterations,
-                input_tokens, output_tokens, created_by, created_at, updated_at
+                input_tokens, output_tokens, model, created_by, created_at, updated_at
          FROM runs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT ?`,
       )
       .all(...args) as unknown as Run[];
@@ -481,6 +482,7 @@ export class Store {
       addIterations?: number;
       addInputTokens?: number;
       addOutputTokens?: number;
+      model?: string;
     },
   ): void {
     const sets: string[] = ["updated_at = ?"];
@@ -504,6 +506,10 @@ export class Store {
     if (patch.error !== undefined) {
       sets.push("error = ?");
       args.push(patch.error);
+    }
+    if (patch.model !== undefined) {
+      sets.push("model = ?");
+      args.push(patch.model);
     }
     if (patch.addIterations) {
       sets.push("iterations = iterations + ?");
@@ -732,6 +738,112 @@ export class Store {
 
   private toArticle(row: Row): KbArticle {
     return { ...(row as unknown as KbArticle), tags: parse(row.tags, []) };
+  }
+
+  // -------------------------------------------------------------- models
+
+  createModelProfile(input: {
+    name: string;
+    provider: string;
+    model: string;
+    baseUrl?: string;
+    apiKey?: string;
+    options?: Record<string, unknown>;
+    fallbackId?: string | null;
+    isDefault?: boolean;
+  }): ModelProfile {
+    const id = newId("mdl");
+    tx(this.db, () => {
+      if (input.isDefault) this.db.exec("UPDATE model_profiles SET is_default = 0");
+      this.db
+        .prepare(
+          `INSERT INTO model_profiles (id, name, provider, model, base_url, api_key_sealed, options, fallback_id, is_default, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          input.name,
+          input.provider,
+          input.model,
+          input.baseUrl ?? "",
+          input.apiKey ? seal(this.secretKey, input.apiKey) : null,
+          json(input.options ?? {}),
+          input.fallbackId ?? null,
+          input.isDefault ? 1 : 0,
+          now(),
+        );
+    });
+    return this.getModelProfile(id)!;
+  }
+
+  listModelProfiles(): ModelProfile[] {
+    return (this.db.prepare("SELECT * FROM model_profiles ORDER BY is_default DESC, name COLLATE NOCASE").all() as Row[]).map((r) =>
+      this.toModelProfile(r),
+    );
+  }
+
+  getModelProfile(id: string): ModelProfile | null {
+    const row = this.db.prepare("SELECT * FROM model_profiles WHERE id = ?").get(id) as Row | undefined;
+    return row ? this.toModelProfile(row) : null;
+  }
+
+  getDefaultModelProfile(): ModelProfile | null {
+    const row = this.db.prepare("SELECT * FROM model_profiles ORDER BY is_default DESC, created_at LIMIT 1").get() as Row | undefined;
+    return row ? this.toModelProfile(row) : null;
+  }
+
+  /** Decrypted API key. Never return this from an API route. */
+  getModelApiKey(id: string): string {
+    const row = this.db.prepare("SELECT api_key_sealed FROM model_profiles WHERE id = ?").get(id) as Row | undefined;
+    return row?.api_key_sealed ? unseal(this.secretKey, row.api_key_sealed as string) : "";
+  }
+
+  updateModelProfile(
+    id: string,
+    patch: { name?: string; model?: string; baseUrl?: string; apiKey?: string | null; options?: Record<string, unknown>; fallbackId?: string | null; isDefault?: boolean },
+  ): ModelProfile | null {
+    const current = this.getModelProfile(id);
+    if (!current) return null;
+    tx(this.db, () => {
+      if (patch.isDefault) this.db.exec("UPDATE model_profiles SET is_default = 0");
+      const sets: string[] = [];
+      const args: SQLInputValue[] = [];
+      const set = (col: string, value: SQLInputValue) => {
+        sets.push(`${col} = ?`);
+        args.push(value);
+      };
+      if (patch.name !== undefined) set("name", patch.name);
+      if (patch.model !== undefined) set("model", patch.model);
+      if (patch.baseUrl !== undefined) set("base_url", patch.baseUrl);
+      if (patch.apiKey !== undefined) set("api_key_sealed", patch.apiKey ? seal(this.secretKey, patch.apiKey) : null);
+      if (patch.options !== undefined) set("options", json(patch.options));
+      if (patch.fallbackId !== undefined) set("fallback_id", patch.fallbackId);
+      if (patch.isDefault !== undefined) set("is_default", patch.isDefault ? 1 : 0);
+      if (sets.length) this.db.prepare(`UPDATE model_profiles SET ${sets.join(", ")} WHERE id = ?`).run(...args, id);
+    });
+    return this.getModelProfile(id);
+  }
+
+  deleteModelProfile(id: string): boolean {
+    return tx(this.db, () => {
+      this.db.prepare("UPDATE model_profiles SET fallback_id = NULL WHERE fallback_id = ?").run(id);
+      return this.db.prepare("DELETE FROM model_profiles WHERE id = ?").run(id).changes > 0;
+    });
+  }
+
+  private toModelProfile(row: Row): ModelProfile {
+    return {
+      id: row.id as string,
+      name: row.name as string,
+      provider: row.provider as ModelProfile["provider"],
+      model: row.model as string,
+      base_url: row.base_url as string,
+      options: parse(row.options, {}),
+      fallback_id: (row.fallback_id as string) ?? null,
+      is_default: Boolean(row.is_default),
+      has_key: Boolean(row.api_key_sealed),
+      created_at: row.created_at as string,
+    };
   }
 
   // ----------------------------------------------------------- schedules

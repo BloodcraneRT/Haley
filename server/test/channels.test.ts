@@ -4,7 +4,7 @@ import { sign } from "../src/channels/chat.js";
 import { stripQuotedReply, ticketNumberFromSubject, verifyEmailSender } from "../src/channels/email.js";
 import { verifySlackSignature } from "../src/channels/slack.js";
 import type { ChannelConfig } from "../src/config.js";
-import { fakeFetch, makeApp, ScriptedLlm, testConfig, text, toolUse, turn, type FetchCall } from "./helpers.js";
+import { fakeFetch, makeApp, ScriptedLlm, testConfig, text, toolUse, turn, type FetchCall, firstUserText, lastToolResults } from "./helpers.js";
 
 const channels = (patch: Partial<ChannelConfig>): ChannelConfig => ({ ...testConfig().channels, ...patch });
 
@@ -147,7 +147,7 @@ describe("Slack", () => {
     await agent.settled(runs[0].id);
     expect(store.listTickets()).toHaveLength(1);
     expect(store.listTicketEvents(ticket.id).some((e) => e.kind === "comment" && e.body === "Also my Drive is empty")).toBe(true);
-    expect(llm.requests[1].messages[0].content).toContain("Also my Drive is empty");
+    expect(firstUserText(llm.requests[1])).toContain("Also my Drive is empty");
     expect(store.getTicket(ticket.id)!.needs_followup).toBe(false);
   });
 
@@ -387,7 +387,7 @@ describe("chat bridge, simulator and controls", () => {
     ]);
     expect(store.listTicketEvents(ticket.id).some((e) => e.kind === "reply")).toBe(false);
     expect(store.getTicket(ticket.id)!.status).toBe("new");
-    const results = llm.requests[1].messages.at(-1)!.content as Array<{ content: string }>;
+    const results = lastToolResults(llm.requests[1]);
     expect(results[1].content).toContain("would wait for technician approval");
   });
 });

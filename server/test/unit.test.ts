@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { decide, targetsOf, type PolicyInput } from "../src/agent/policy.js";
-import { toApiTool } from "../src/agent/runner.js";
+import { toToolSpec } from "../src/agent/runner.js";
 import { m365Tools } from "../src/connectors/m365/tools.js";
 import { googleTools } from "../src/connectors/google/tools.js";
 import { SandboxM365Api, type M365SandboxState } from "../src/connectors/sandbox/m365.js";
@@ -226,11 +226,11 @@ describe("tool schemas", () => {
   it("produce object JSON schemas where defaulted fields are optional", () => {
     const api = new SandboxM365Api(memoryState<M365SandboxState>());
     for (const tool of m365Tools(api)) {
-      const schema = toApiTool(tool).input_schema as Record<string, unknown>;
+      const schema = toToolSpec(tool).inputSchema;
       expect(schema.type).toBe("object");
       expect(schema).not.toHaveProperty("$schema");
     }
-    const reset = toApiTool(m365Tools(api).find((t) => t.name === "m365_reset_password")!).input_schema as { required?: string[] };
+    const reset = toToolSpec(m365Tools(api).find((t) => t.name === "m365_reset_password")!).inputSchema as { required?: string[] };
     expect(reset.required).toEqual(["user"]);
   });
 });
