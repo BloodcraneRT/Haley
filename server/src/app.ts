@@ -19,9 +19,12 @@ import { EmailAdapter } from "./channels/email.js";
 import { ChannelHub } from "./channels/hub.js";
 import { SlackChannel } from "./channels/slack.js";
 import { TeamsChannel } from "./channels/teams.js";
+import { clientReport } from "./report.js";
 import { registerHooks } from "./routes/hooks.js";
+import { Scheduler } from "./scheduler.js";
+import { slaFor } from "./sla.js";
 import { buildTranscript } from "./transcript.js";
-import { AUTONOMY_LEVELS, TICKET_PRIORITIES, TICKET_STATUSES, type Integration } from "./types.js";
+import { AUTONOMY_LEVELS, TICKET_PRIORITIES, TICKET_STATUSES, type Integration, type Org, type Ticket } from "./types.js";
 
 export interface AppDeps {
   config: HaleyConfig;
@@ -65,6 +68,7 @@ export interface HaleyApp {
   app: FastifyInstance;
   store: Store;
   agent: AgentService;
+  scheduler: Scheduler;
 }
 
 export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }: AppDeps): Promise<HaleyApp> {
@@ -107,6 +111,9 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
   const agent = new AgentService(store, llm ?? new AnthropicLlm(config), config, connectorsFor, hub);
   hub.attach(agent);
   agent.recoverInterrupted();
+  const scheduler = new Scheduler(store, agent);
+
+  const withSla = (ticket: Ticket, org: Org | null | undefined) => ({ ...ticket, sla: org ? slaFor(ticket, org.settings.sla) : null });
 
   const app = Fastify({ logger: config.production ? { level: "info" } : false, bodyLimit: 2 * 1024 * 1024 });
   await app.register(cors, { origin: config.production ? false : true });
@@ -153,7 +160,17 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
     claudeCredentials: Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_PROFILE),
   }));
 
-  app.get("/api/stats", async () => store.stats());
+  app.get("/api/stats", async () => {
+    const orgs = new Map(store.listOrgs().map((o) => [o.id, o]));
+    const open = store.listTickets({ status: "open", limit: 10_000 });
+    const slaBreached = open.filter((t) => {
+      const org = orgs.get(t.org_id);
+      if (!org) return false;
+      const sla = slaFor(t, org.settings.sla);
+      return sla.response === "breached" || sla.resolution === "breached";
+    }).length;
+    return { ...store.stats(), slaBreached, schedules: store.listSchedules().filter((s) => s.enabled).length };
+  });
   app.get("/api/providers", async () => PROVIDERS);
   app.get("/api/templates", async () => TASK_TEMPLATES);
 
@@ -174,6 +191,10 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
       maxAutoChangesPerHour: z.number().int().min(0).max(1000),
       maxSelfServicePerUserPerDay: z.number().int().min(0).max(50),
       paused: z.boolean(),
+      sla: z.record(
+        z.enum(["urgent", "high", "normal", "low"]),
+        z.object({ responseMinutes: z.number().int().min(1).max(100_000), resolutionMinutes: z.number().int().min(1).max(100_000) }),
+      ),
     })
     .partial();
   const autonomy = z.enum(AUTONOMY_LEVELS as [string, ...string[]]);
@@ -313,8 +334,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
 
   app.get("/api/tickets", async (req) => {
     const q = query(z.object({ orgId: z.string().optional(), status: z.string().optional(), search: z.string().optional() }), req);
-    const orgs = new Map(store.listOrgs().map((o) => [o.id, o.name]));
-    return store.listTickets(q).map((t) => ({ ...t, org_name: orgs.get(t.org_id) ?? "" }));
+    const orgs = new Map(store.listOrgs().map((o) => [o.id, o]));
+    return store.listTickets(q).map((t) => ({ ...withSla(t, orgs.get(t.org_id)), org_name: orgs.get(t.org_id)?.name ?? "" }));
   });
 
   const ticketInput = z.object({
@@ -437,8 +458,10 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
     const ticket = store.getTicket(req.params.id);
     if (!ticket) throw notFound("Ticket");
     const runs = store.listRuns({ ticketId: ticket.id });
+    const org = store.getOrg(ticket.org_id);
     return {
-      ticket: { ...ticket, org_name: store.getOrg(ticket.org_id)?.name ?? "" },
+      ticket: { ...withSla(ticket, org), org_name: org?.name ?? "" },
+      schedules: store.listSchedules({ ticketId: ticket.id }),
       events: store.listTicketEvents(ticket.id),
       runs,
       actions: runs.flatMap((r) => store.listActions({ runId: r.id })),
@@ -523,6 +546,84 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
       actions,
       transcript: buildTranscript(store.getRunMessages<MessageParam>(run.id), actions),
     };
+  });
+
+  // ---------------------------------------------------------- schedules
+
+  const scheduleInput = z.object({
+    orgId: z.string(),
+    title: z.string().trim().min(1),
+    instruction: z.string().trim().min(1),
+    cadence: z.enum(["once", "daily", "weekly", "monthly"]),
+    mode: z.enum(["live", "plan"]).default("live"),
+    startAt: z.iso.datetime({ offset: true }),
+  });
+
+  app.get("/api/schedules", async (req) => {
+    const q = query(z.object({ orgId: z.string().optional() }), req);
+    const orgs = new Map(store.listOrgs().map((o) => [o.id, o.name]));
+    return store.listSchedules(q).map((s) => {
+      const ticket = s.ticket_id ? store.getTicket(s.ticket_id) : null;
+      return { ...s, org_name: orgs.get(s.org_id) ?? "", ticket: ticket ? { id: ticket.id, number: ticket.number, title: ticket.title } : null };
+    });
+  });
+
+  app.post("/api/schedules", async (req) => {
+    const input = body(scheduleInput, req);
+    if (!store.getOrg(input.orgId)) throw notFound("Organization");
+    const schedule = store.createSchedule({ ...input, nextRunAt: new Date(input.startAt).toISOString(), createdBy: actor(req) });
+    store.audit({ orgId: input.orgId, actor: actor(req), action: "schedule.created", target: schedule.id, detail: { title: input.title, cadence: input.cadence } });
+    return schedule;
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/schedules/:id", async (req) => {
+    const current = store.getSchedule(req.params.id);
+    if (!current) throw notFound("Schedule");
+    const patch = body(
+      z.object({
+        title: z.string().trim().min(1).optional(),
+        instruction: z.string().trim().min(1).optional(),
+        cadence: z.enum(["once", "daily", "weekly", "monthly"]).optional(),
+        mode: z.enum(["live", "plan"]).optional(),
+        enabled: z.boolean().optional(),
+        startAt: z.iso.datetime({ offset: true }).optional(),
+      }),
+      req,
+    );
+    const { startAt, ...rest } = patch;
+    const updated = store.updateSchedule(current.id, { ...rest, ...(startAt ? { next_run_at: new Date(startAt).toISOString() } : {}) });
+    store.audit({ orgId: current.org_id, actor: actor(req), action: "schedule.updated", target: current.id, detail: { fields: Object.keys(patch) } });
+    return updated;
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/schedules/:id", async (req) => {
+    const current = store.getSchedule(req.params.id);
+    if (!current || !store.deleteSchedule(current.id)) throw notFound("Schedule");
+    store.audit({ orgId: current.org_id, actor: actor(req), action: "schedule.deleted", target: current.id, detail: { title: current.title } });
+    return { ok: true };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/schedules/:id/run", async (req) => {
+    if (!store.getSchedule(req.params.id)) throw notFound("Schedule");
+    const result = scheduler.runNow(req.params.id);
+    if (!result.started.length) throw new HttpError(409, result.skipped[0]?.reason ?? "Could not start the schedule.");
+    return result.started[0];
+  });
+
+  // ------------------------------------------------------------- reports
+
+  app.get<{ Params: { id: string } }>("/api/orgs/:id/report", async (req) => {
+    const org = store.getOrg(req.params.id);
+    if (!org) throw notFound("Organization");
+    const q = query(
+      z.object({
+        days: z.coerce.number().int().min(1).max(730).default(90),
+        minutesPerTicket: z.coerce.number().min(0).max(600).default(20),
+        minutesPerAction: z.coerce.number().min(0).max(120).default(5),
+      }),
+      req,
+    );
+    return clientReport(store, org, q);
   });
 
   // ---------------------------------------------------------- approvals
@@ -632,5 +733,6 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
   }
 
   app.addHook("onClose", async () => db.close());
-  return { app, store, agent };
+  app.addHook("onClose", async () => scheduler.stop());
+  return { app, store, agent, scheduler };
 }

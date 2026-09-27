@@ -331,7 +331,7 @@ describe("chat bridge, simulator and controls", () => {
     await agent.settled(runId);
     const action = store.listActions({ runId }).find((a) => a.tool === "m365_reset_password")!;
     expect(action.status).toBe("executed");
-    expect(store.listTicketEvents(ticketId).some((e) => e.kind === "action" && e.body.startsWith("Sent the temporary password privately"))).toBe(true);
+    expect(store.listTicketEvents(ticketId).some((e) => e.kind === "action" && e.body.startsWith("Sent the sign-in credential privately"))).toBe(true);
 
     await app.inject({ method: "PATCH", url: `/api/orgs/${contoso.id}`, payload: { settings: { paused: true } } });
     const paused = await app.inject({

@@ -121,6 +121,37 @@ function ticketTools(store: Store, run: Run, ticketId: string, delivery_: ReplyD
       },
     }),
     defineTool({
+      name: "schedule_follow_up",
+      description:
+        "Schedule yourself to come back to this ticket later, e.g. to remove temporary access when it expires, check that a fix held, or chase a reply. At that time you'll get the ticket again with this instruction, acting with the same requester's authority.",
+      input: z.object({
+        runAt: z.iso.datetime({ offset: true }).describe("When to follow up, ISO 8601 with timezone, e.g. 2026-10-03T17:00:00Z"),
+        instruction: z.string().min(5).describe("What to do then, specific enough to act on without re-reading everything"),
+      }),
+      risk: "internal",
+      describe: (i) => `Follow up at ${i.runAt}: ${i.instruction.slice(0, 80)}`,
+      run: async ({ runAt, instruction }) => {
+        const at = Date.parse(runAt);
+        if (at <= Date.now()) throw new Error("runAt must be in the future.");
+        if (at > Date.now() + 90 * 86_400_000) throw new Error("Follow-ups can be at most 90 days out.");
+        const ticket = store.getTicket(ticketId)!;
+        const schedule = store.createSchedule({
+          orgId: run.org_id,
+          ticketId,
+          title: `Follow-up on #${ticket.number}`,
+          instruction,
+          cadence: "once",
+          nextRunAt: new Date(at).toISOString(),
+          createdBy: AGENT,
+        });
+        store.addTicketEvent(ticketId, "agent_note", AGENT, `Scheduled a follow-up for ${new Date(at).toISOString()}: ${instruction}`, {
+          runId: run.id,
+          scheduleId: schedule.id,
+        });
+        return { ok: true, scheduleId: schedule.id, runAt: schedule.next_run_at };
+      },
+    }),
+    defineTool({
       name: "escalate_to_human",
       description: "Hand the ticket to a human technician with a handoff note (what you checked, what you found, suggested next step).",
       input: z.object({ reason: z.string().min(1), handoffNote: z.string().min(1) }),

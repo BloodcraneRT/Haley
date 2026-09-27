@@ -76,6 +76,13 @@ export interface OrgSettings {
   maxSelfServicePerUserPerDay: number;
   /** Kill switch: Haley stops picking up and acting on this client's tickets; everything goes to technicians. */
   paused: boolean;
+  /** Response and resolution targets per priority, in minutes (24x7). */
+  sla: Record<TicketPriority, SlaTarget>;
+}
+
+export interface SlaTarget {
+  responseMinutes: number;
+  resolutionMinutes: number;
 }
 
 export const DEFAULT_ORG_SETTINGS: OrgSettings = {
@@ -86,6 +93,12 @@ export const DEFAULT_ORG_SETTINGS: OrgSettings = {
   maxAutoChangesPerHour: 20,
   maxSelfServicePerUserPerDay: 3,
   paused: false,
+  sla: {
+    urgent: { responseMinutes: 15, resolutionMinutes: 240 },
+    high: { responseMinutes: 60, resolutionMinutes: 480 },
+    normal: { responseMinutes: 240, resolutionMinutes: 1440 },
+    low: { responseMinutes: 480, resolutionMinutes: 4320 },
+  },
 };
 
 export interface Org {
@@ -130,6 +143,11 @@ export interface Ticket {
   verification: string;
   /** A requester message arrived while Haley was busy; start another pass when the current one ends. */
   needs_followup: boolean;
+  /** First human-visible response (auto-acknowledgements don't count). */
+  first_response_at: string | null;
+  resolved_at: string | null;
+  /** Already escalated for an SLA breach, so the sweep doesn't repeat it. */
+  sla_escalated: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -195,6 +213,25 @@ export interface KbArticle {
   run_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type Cadence = "once" | "daily" | "weekly" | "monthly";
+
+export interface Schedule {
+  id: string;
+  org_id: string;
+  /** Follow-ups Haley schedules on a ticket run as that ticket (with its requester's authority). */
+  ticket_id: string | null;
+  title: string;
+  instruction: string;
+  cadence: Cadence;
+  mode: RunMode;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_run_id: string | null;
+  enabled: boolean;
+  created_by: string;
+  created_at: string;
 }
 
 export interface AuditEntry {

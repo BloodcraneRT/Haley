@@ -9,6 +9,7 @@ export interface RunStarter {
 
 const SECRET_LABELS: Record<string, string> = {
   temporaryPassword: "Temporary password",
+  temporaryAccessPass: "Temporary Access Pass",
   userPrincipalName: "Username",
   primaryEmail: "Username",
 };
@@ -67,7 +68,7 @@ export class ChannelHub implements ReplyDelivery {
       return { delivered: false, detail: `A ${ticket.channel} conversation can't carry credentials privately.` };
     }
     const lines = Object.entries(secrets).map(([k, v]) => `${SECRET_LABELS[k] ?? k}: \`${v}\``);
-    const text = `${heading}\n\n${lines.join("\n")}\n\nYou'll be asked to choose a new password when you sign in. Don't share this message.`;
+    const text = `${heading}\n\n${lines.join("\n")}\n\nUse it to sign in now; you'll be asked to set up your own password or sign-in method. Don't share this message.`;
     try {
       return await adapter.send(ticket, text, { private: true });
     } catch (err) {

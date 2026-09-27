@@ -215,6 +215,14 @@ export class GraphM365Api implements M365Api {
     return items.map((h) => ({ service: h.service, status: h.status }));
   }
 
+  async issueTemporaryAccessPass(userId: string, lifetimeMinutes: number, usableOnce: boolean) {
+    const created = await this.call("POST", `/users/${encodeURIComponent(userId)}/authentication/temporaryAccessPassMethods`, {
+      lifetimeInMinutes: lifetimeMinutes,
+      isUsableOnce: usableOnce,
+    });
+    return { pass: String(created.temporaryAccessPass), lifetimeMinutes: Number(created.lifetimeInMinutes ?? lifetimeMinutes) };
+  }
+
   async setAutoReply(userId: string, reply: { enabled: boolean; internalMessage: string; externalMessage: string }) {
     await this.call("PATCH", `/users/${encodeURIComponent(userId)}/mailboxSettings`, {
       automaticRepliesSetting: {

@@ -2,7 +2,8 @@ import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 
 const config = loadConfig();
-const { app } = await buildApp({ config });
+const { app, scheduler } = await buildApp({ config });
+scheduler.start();
 
 if (!config.apiToken) {
   console.warn("[haley] HALEY_API_TOKEN is not set; the API is open to anyone who can reach it. Set it before exposing Haley.");

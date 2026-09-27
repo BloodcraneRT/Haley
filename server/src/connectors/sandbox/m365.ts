@@ -281,6 +281,15 @@ export class SandboxM365Api implements M365Api {
     return this.state.health;
   }
 
+  async issueTemporaryAccessPass(userId: string, lifetimeMinutes: number, _usableOnce: boolean) {
+    const u = this.find(userId);
+    if (!u.accountEnabled) throw new ConnectorError("Graph POST temporaryAccessPassMethods failed (400): The user account is disabled.", 400);
+    const pass = randomUUID().replace(/-/g, "").slice(0, 10).replace(/(.{5})/, "$1-");
+    u.authMethods = [...u.authMethods.filter((m) => m.type !== "temporaryAccessPass"), { type: "temporaryAccessPass", detail: `valid ${lifetimeMinutes} min` }];
+    this.commit();
+    return { pass, lifetimeMinutes };
+  }
+
   async setAutoReply(userId: string, reply: { enabled: boolean; internalMessage: string; externalMessage: string }) {
     this.find(userId).autoReply = reply;
     this.commit();

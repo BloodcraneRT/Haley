@@ -208,6 +208,26 @@ export function m365Tools(api: M365Api): HaleyTool[] {
       },
     }),
     defineTool({
+      name: "m365_issue_temporary_access_pass",
+      description:
+        "Issue a Temporary Access Pass: a short-lived, one-time code the user signs in with to register new MFA methods. Prefer this over a password reset when someone lost or replaced their phone or can't complete MFA. The pass goes to the requester privately or to a technician, never to you.",
+      input: z.object({
+        user,
+        lifetimeMinutes: z.number().int().min(10).max(480).default(60),
+        usableOnce: z.boolean().default(true),
+      }),
+      risk: "destructive",
+      describe: (i) => `Issue a Temporary Access Pass for ${i.user}`,
+      run: async ({ user, lifetimeMinutes, usableOnce }) => {
+        const u = await api.getUser(user);
+        const tap = await api.issueTemporaryAccessPass(u.id, lifetimeMinutes, usableOnce);
+        return new SensitiveResult(
+          { ok: true, user: u.userPrincipalName, lifetimeMinutes: tap.lifetimeMinutes, usableOnce, temporaryAccessPass: "[held]" },
+          { temporaryAccessPass: tap.pass, userPrincipalName: u.userPrincipalName },
+        );
+      },
+    }),
+    defineTool({
       name: "m365_set_account_enabled",
       description: "Block (enabled=false) or unblock (enabled=true) a user's sign-in. Blocking is the first step of offboarding or a compromise response.",
       input: z.object({ user, enabled: z.boolean() }),

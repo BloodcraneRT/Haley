@@ -76,4 +76,5 @@ export interface M365Api {
   listDevices(userPrincipalName?: string): Promise<M365Device[]>;
   serviceHealth(): Promise<M365ServiceHealth[]>;
   setAutoReply(userId: string, reply: { enabled: boolean; internalMessage: string; externalMessage: string }): Promise<void>;
+  issueTemporaryAccessPass(userId: string, lifetimeMinutes: number, usableOnce: boolean): Promise<{ pass: string; lifetimeMinutes: number }>;
 }

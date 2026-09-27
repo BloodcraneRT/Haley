@@ -20,7 +20,7 @@ export const PROVIDERS: ProviderInfo[] = [
     ],
     setupSteps: [
       "In the customer's Entra admin center, go to App registrations → New registration (single tenant).",
-      "Under API permissions add Microsoft Graph application permissions: User.ReadWrite.All, Group.ReadWrite.All, Directory.Read.All, UserAuthenticationMethod.Read.All, DeviceManagementManagedDevices.Read.All, ServiceHealth.Read.All, MailboxSettings.ReadWrite, Organization.Read.All. Grant admin consent.",
+      "Under API permissions add Microsoft Graph application permissions: User.ReadWrite.All, Group.ReadWrite.All, Directory.Read.All, UserAuthenticationMethod.ReadWrite.All, DeviceManagementManagedDevices.Read.All, ServiceHealth.Read.All, MailboxSettings.ReadWrite, Organization.Read.All. Grant admin consent.",
       "For password resets, assign the app's service principal the 'User Administrator' or 'Privileged Authentication Administrator' role.",
       "Under Certificates & secrets create a client secret and paste the tenant ID, client ID and secret here.",
     ],

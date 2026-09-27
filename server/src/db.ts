@@ -134,6 +134,26 @@ const MIGRATIONS: string[] = [
    ALTER TABLE actions ADD COLUMN policy_reason TEXT NOT NULL DEFAULT '';
    ALTER TABLE runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'live';
    CREATE INDEX IF NOT EXISTS idx_tickets_requester ON tickets(channel, requester_email, status);`,
+  // 2: schedules and SLA timestamps
+  `CREATE TABLE IF NOT EXISTS schedules (
+     id TEXT PRIMARY KEY,
+     org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+     ticket_id TEXT REFERENCES tickets(id) ON DELETE CASCADE,
+     title TEXT NOT NULL,
+     instruction TEXT NOT NULL,
+     cadence TEXT NOT NULL,
+     mode TEXT NOT NULL DEFAULT 'live',
+     next_run_at TEXT,
+     last_run_at TEXT,
+     last_run_id TEXT,
+     enabled INTEGER NOT NULL DEFAULT 1,
+     created_by TEXT NOT NULL,
+     created_at TEXT NOT NULL
+   );
+   CREATE INDEX IF NOT EXISTS idx_schedules_due ON schedules(enabled, next_run_at);
+   ALTER TABLE tickets ADD COLUMN first_response_at TEXT;
+   ALTER TABLE tickets ADD COLUMN resolved_at TEXT;
+   ALTER TABLE tickets ADD COLUMN sla_escalated INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 export function openDb(path: string): Db {

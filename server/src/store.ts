@@ -7,6 +7,7 @@ import type {
   ActionStatus,
   AuditEntry,
   Assurance,
+  Cadence,
   Autonomy,
   Integration,
   IntegrationMode,
@@ -17,6 +18,7 @@ import type {
   Risk,
   Run,
   RunKind,
+  Schedule,
   RunMode,
   RunStatus,
   Ticket,
@@ -225,6 +227,9 @@ export class Store {
         assurance: input.assurance ?? "none",
         verification: input.verification ?? "",
         needs_followup: false,
+        first_response_at: null,
+        resolved_at: null,
+        sla_escalated: false,
         created_at: ts,
         updated_at: ts,
       };
@@ -317,7 +322,12 @@ export class Store {
       ...(row as unknown as Ticket),
       channel_ref: parse(row.channel_ref, {}),
       needs_followup: Boolean(row.needs_followup),
+      sla_escalated: Boolean(row.sla_escalated),
     };
+  }
+
+  markSlaEscalated(id: string): void {
+    this.db.prepare("UPDATE tickets SET sla_escalated = 1 WHERE id = ?").run(id);
   }
 
   updateTicket(
@@ -335,12 +345,17 @@ export class Store {
     }
     if (Object.keys(changes).length === 0) return ticket;
     const next = { ...ticket, ...patch, updated_at: now() } as Ticket;
-    if (patch.status === "resolved" || patch.status === "closed") next.needs_followup = false;
+    if (patch.status === "resolved" || patch.status === "closed") {
+      next.needs_followup = false;
+      next.resolved_at ??= next.updated_at;
+    } else if (patch.status) {
+      next.resolved_at = null;
+    }
     this.db
       .prepare(
-        "UPDATE tickets SET status = ?, priority = ?, category = ?, assignee = ?, title = ?, needs_followup = ?, updated_at = ? WHERE id = ?",
+        "UPDATE tickets SET status = ?, priority = ?, category = ?, assignee = ?, title = ?, needs_followup = ?, resolved_at = ?, updated_at = ? WHERE id = ?",
       )
-      .run(next.status, next.priority, next.category, next.assignee, next.title, next.needs_followup ? 1 : 0, next.updated_at, id);
+      .run(next.status, next.priority, next.category, next.assignee, next.title, next.needs_followup ? 1 : 0, next.resolved_at, next.updated_at, id);
     for (const [field, change] of Object.entries(changes)) {
       this.addTicketEvent(
         id,
@@ -369,6 +384,9 @@ export class Store {
       .prepare("INSERT INTO ticket_events (id, ticket_id, kind, author, body, meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(event.id, ticketId, kind, author, body, json(meta), event.created_at);
     this.db.prepare("UPDATE tickets SET updated_at = ? WHERE id = ?").run(event.created_at, ticketId);
+    if (kind === "reply" && !meta.auto) {
+      this.db.prepare("UPDATE tickets SET first_response_at = ? WHERE id = ? AND first_response_at IS NULL").run(event.created_at, ticketId);
+    }
     return event;
   }
 
@@ -714,6 +732,77 @@ export class Store {
 
   private toArticle(row: Row): KbArticle {
     return { ...(row as unknown as KbArticle), tags: parse(row.tags, []) };
+  }
+
+  // ----------------------------------------------------------- schedules
+
+  createSchedule(input: {
+    orgId: string;
+    ticketId?: string | null;
+    title: string;
+    instruction: string;
+    cadence: Cadence;
+    mode?: RunMode;
+    nextRunAt: string;
+    createdBy: string;
+  }): Schedule {
+    const id = newId("sch");
+    this.db
+      .prepare(
+        `INSERT INTO schedules (id, org_id, ticket_id, title, instruction, cadence, mode, next_run_at, enabled, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      )
+      .run(id, input.orgId, input.ticketId ?? null, input.title, input.instruction, input.cadence, input.mode ?? "live", input.nextRunAt, input.createdBy, now());
+    return this.getSchedule(id)!;
+  }
+
+  getSchedule(id: string): Schedule | null {
+    const row = this.db.prepare("SELECT * FROM schedules WHERE id = ?").get(id) as Row | undefined;
+    return row ? { ...(row as unknown as Schedule), enabled: Boolean(row.enabled) } : null;
+  }
+
+  listSchedules(filter: { orgId?: string; ticketId?: string } = {}): Schedule[] {
+    const where: string[] = [];
+    const args: SQLInputValue[] = [];
+    if (filter.orgId) {
+      where.push("org_id = ?");
+      args.push(filter.orgId);
+    }
+    if (filter.ticketId) {
+      where.push("ticket_id = ?");
+      args.push(filter.ticketId);
+    }
+    return (
+      this.db
+        .prepare(`SELECT * FROM schedules ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY enabled DESC, next_run_at`)
+        .all(...args) as Row[]
+    ).map((r) => ({ ...(r as unknown as Schedule), enabled: Boolean(r.enabled) }));
+  }
+
+  dueSchedules(at: string): Schedule[] {
+    return (this.db.prepare("SELECT id FROM schedules WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at").all(at) as Row[]).map(
+      (r) => this.getSchedule(r.id as string)!,
+    );
+  }
+
+  updateSchedule(
+    id: string,
+    patch: Partial<Pick<Schedule, "title" | "instruction" | "cadence" | "mode" | "next_run_at" | "last_run_at" | "last_run_id" | "enabled">>,
+  ): Schedule | null {
+    const current = this.getSchedule(id);
+    if (!current) return null;
+    const next = { ...current, ...patch };
+    this.db
+      .prepare(
+        `UPDATE schedules SET title = ?, instruction = ?, cadence = ?, mode = ?, next_run_at = ?, last_run_at = ?, last_run_id = ?, enabled = ?
+         WHERE id = ?`,
+      )
+      .run(next.title, next.instruction, next.cadence, next.mode, next.next_run_at, next.last_run_at, next.last_run_id, next.enabled ? 1 : 0, id);
+    return next;
+  }
+
+  deleteSchedule(id: string): boolean {
+    return this.db.prepare("DELETE FROM schedules WHERE id = ?").run(id).changes > 0;
   }
 
   // --------------------------------------------------------------- audit

@@ -52,7 +52,7 @@ export class AgentService {
 
   // --------------------------------------------------------------- start
 
-  startTicketRun(ticketId: string, createdBy: string, mode: RunMode = "live"): Run {
+  startTicketRun(ticketId: string, createdBy: string, mode: RunMode = "live", followUp?: string): Run {
     const ticket = this.store.getTicket(ticketId);
     if (!ticket) throw new Error(`No ticket ${ticketId}`);
     const active = this.activeRun(ticketId);
@@ -68,12 +68,20 @@ export class AgentService {
       kind: "ticket",
       mode,
       title: `#${ticket.number} ${ticket.title}`,
-      instruction: mode === "plan" ? "Plan this ticket (dry run)." : prior ? "Follow-up pass on this ticket." : "Work this ticket.",
+      instruction: followUp
+        ? `Scheduled follow-up: ${followUp}`
+        : mode === "plan"
+          ? "Plan this ticket (dry run)."
+          : prior
+            ? "Follow-up pass on this ticket."
+            : "Work this ticket.",
       createdBy,
     });
     const intro = `${this.header(org)}\n\n${ticketContext(ticket, this.store.listTicketEvents(ticketId))}\n\n${
-      mode === "plan"
-        ? PLAN_MODE_TEXT
+      followUp
+        ? `This is a follow-up you scheduled earlier on this ticket. Do this now: ${followUp}${mode === "plan" ? `\n\n${PLAN_MODE_TEXT}` : ""}`
+        : mode === "plan"
+          ? PLAN_MODE_TEXT
         : prior
           ? "You have worked this ticket before; the history above shows what happened since. Continue from where things stand."
           : "Work this ticket."
@@ -421,8 +429,10 @@ export class AgentService {
         secrets = output.secrets;
         output = output.visible;
         const note = await this.deliverSecretToRequester(run, action, secrets);
-        if (output && typeof output === "object" && "temporaryPassword" in output) {
-          output = { ...output, temporaryPassword: note };
+        if (output && typeof output === "object") {
+          const visible = { ...(output as Record<string, unknown>) };
+          for (const key of Object.keys(secrets)) if (key in visible) visible[key] = note;
+          output = visible;
         }
       }
       this.store.finishAction(action.id, { status: "executed", result: output ?? { ok: true }, secrets });
@@ -460,8 +470,14 @@ export class AgentService {
     const targets = targetsOf(action.input);
     const self = ticket.requester_email.toLowerCase();
     if (!self || targets.length === 0 || !targets.every((t) => t === self)) return fallback;
-    const result = await this.delivery.deliverSecret(ticket, `Here's the temporary password for ${self}:`, secrets);
-    this.store.addTicketEvent(ticket.id, "action", AGENT, result.delivered ? `Sent the temporary password privately: ${result.detail}` : `Couldn't send the temporary password privately: ${result.detail}`, { actionId: action.id, delivery: result });
+    const result = await this.delivery.deliverSecret(ticket, `Here are your sign-in details for ${self}:`, secrets);
+    this.store.addTicketEvent(
+      ticket.id,
+      "action",
+      AGENT,
+      result.delivered ? `Sent the sign-in credential privately: ${result.detail}` : `Couldn't send the sign-in credential privately: ${result.detail}`,
+      { actionId: action.id, delivery: result },
+    );
     this.store.audit({
       orgId: run.org_id,
       actor: AGENT,
