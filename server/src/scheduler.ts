@@ -1,4 +1,5 @@
 import type { AgentService } from "./agent/runner.js";
+import type { PsaSync } from "./psa/sync.js";
 import { slaFor } from "./sla.js";
 import type { Store } from "./store.js";
 import type { Cadence, Schedule } from "./types.js";
@@ -32,6 +33,7 @@ export class Scheduler {
   constructor(
     private readonly store: Store,
     private readonly agent: AgentService,
+    private readonly psa: PsaSync | null = null,
   ) {}
 
   start(intervalMs = 30_000): void {
@@ -51,6 +53,7 @@ export class Scheduler {
     try {
       for (const schedule of this.store.dueSchedules(new Date(nowMs).toISOString())) this.fire(schedule, nowMs, result);
       this.sweepSla(nowMs, result);
+      if (this.psa) await this.psa.syncAll();
     } finally {
       this.running = false;
     }

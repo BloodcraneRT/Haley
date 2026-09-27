@@ -1,6 +1,6 @@
 export type Autonomy = "read_only" | "supervised" | "autonomous" | "unattended";
 export const AUTONOMY_LEVELS: Autonomy[] = ["read_only", "supervised", "autonomous", "unattended"];
-export type ProviderId = "m365" | "google" | "slack";
+export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code";
 
 /**
  * How strongly the requester's identity is established, weakest first.
@@ -8,13 +8,23 @@ export type ProviderId = "m365" | "google" | "slack";
  *  email       DMARC / aligned-DKIM email: the domain vouches, but mailboxes get phished and spoofed
  *  chat        signed-in chat identity (Slack workspace member, a chat bridge that authenticated them)
  *  directory   matched to an active directory account through SSO (Teams / Entra ID)
+ *  mfa         approved an MFA push on their own registered device moments ago (step-up)
  *  technician  entered or confirmed by a technician
  */
-export type Assurance = "none" | "email" | "chat" | "directory" | "technician";
-export const ASSURANCE_RANK: Record<Assurance, number> = { none: 0, email: 1, chat: 2, directory: 3, technician: 4 };
+export type Assurance = "none" | "email" | "chat" | "directory" | "mfa" | "technician";
+export const ASSURANCE_RANK: Record<Assurance, number> = { none: 0, email: 1, chat: 2, directory: 3, mfa: 4, technician: 5 };
+
+/** How long an approved MFA push counts as step-up verification for its ticket. */
+export const MFA_WINDOW_MS = 30 * 60_000;
+
+/** The requester's assurance right now: a fresh MFA approval lifts it to "mfa". */
+export function effectiveAssurance(ticket: Pick<Ticket, "assurance" | "mfa_verified_at">, nowMs = Date.now()): Assurance {
+  const fresh = ticket.mfa_verified_at && nowMs - Date.parse(ticket.mfa_verified_at) < MFA_WINDOW_MS;
+  return fresh && ASSURANCE_RANK.mfa > ASSURANCE_RANK[ticket.assurance] ? "mfa" : ticket.assurance;
+}
 
 /** Where a ticket came from; replies go back the same way. */
-export type TicketChannel = "portal" | "api" | "email" | "slack" | "teams" | "chat";
+export type TicketChannel = "portal" | "api" | "email" | "slack" | "teams" | "chat" | "syncro" | "dynamics";
 export type IntegrationMode = "live" | "sandbox";
 
 export type TicketStatus =
@@ -151,6 +161,9 @@ export interface Ticket {
   resolved_at: string | null;
   /** Already escalated for an SLA breach, so the sweep doesn't repeat it. */
   sla_escalated: boolean;
+  /** Last approved MFA push for the requester (step-up verification) and the method used. */
+  mfa_verified_at: string | null;
+  mfa_method: string;
   created_at: string;
   updated_at: string;
 }

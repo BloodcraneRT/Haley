@@ -18,7 +18,7 @@ export interface ChannelAdapter {
 export interface ReplyDelivery {
   deliverReply(ticket: Ticket, text: string): Promise<DeliveryResult>;
   /** Sends credentials straight to the verified requester, never through the model. */
-  deliverSecret(ticket: Ticket, heading: string, secrets: Record<string, string>): Promise<DeliveryResult>;
+  deliverSecret(ticket: Ticket, heading: string, secrets: Record<string, string>, actionId: string): Promise<DeliveryResult>;
 }
 
 export interface InboundMessage {

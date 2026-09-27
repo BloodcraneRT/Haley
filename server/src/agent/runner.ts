@@ -3,7 +3,7 @@ import type { HaleyConfig } from "../config.js";
 import { SensitiveResult, type Connector, type HaleyTool, type ToolContext } from "../connectors/types.js";
 import type { PendingState, Store } from "../store.js";
 import type { ReplyDelivery } from "../channels/types.js";
-import { ASSURANCE_RANK, type Action, type Org, type Run, type RunMode } from "../types.js";
+import { ASSURANCE_RANK, effectiveAssurance, type Action, type Org, type Run, type RunMode } from "../types.js";
 import { builtinTools } from "./builtinTools.js";
 import { textOf, toolCallsOf, type ChatMessage, type LlmClient, type ModelResponse, type Part, type ToolSpec } from "../ai/types.js";
 import { decide, targetsOf, type Requester } from "./policy.js";
@@ -183,13 +183,15 @@ export class AgentService {
     if (!ticket) return { email: null, assurance: "technician", authorized: true };
     const email = ticket.requester_email.toLowerCase() || null;
     const listed = Boolean(email) && org.settings.authorizedRequesters.some((a) => a.toLowerCase() === email);
-    return { email, assurance: ticket.assurance, authorized: ticket.assurance === "technician" || listed };
+    return { email, assurance: effectiveAssurance(ticket), authorized: ticket.assurance === "technician" || listed };
   }
 
   private toolsFor(run: Run): Map<string, HaleyTool> {
     const tools = new Map<string, HaleyTool>();
-    for (const tool of builtinTools(this.store, run, this.delivery)) tools.set(tool.name, tool);
-    for (const connector of this.connectorsFor(run.org_id)) {
+    const connectors = this.connectorsFor(run.org_id);
+    const verifier = connectors.find((c) => c.verifier)?.verifier ?? null;
+    for (const tool of builtinTools(this.store, run, this.delivery, verifier)) tools.set(tool.name, tool);
+    for (const connector of connectors) {
       for (const tool of connector.tools) tools.set(tool.name, tool);
     }
     return tools;
@@ -459,11 +461,11 @@ export class AgentService {
   private async deliverSecretToRequester(run: Run, action: Action, secrets: Record<string, string>): Promise<string> {
     const fallback = "[held for a technician to deliver securely]";
     const ticket = run.ticket_id ? this.store.getTicket(run.ticket_id) : null;
-    if (!ticket || !this.delivery || ASSURANCE_RANK[ticket.assurance] < ASSURANCE_RANK.chat) return fallback;
+    if (!ticket || !this.delivery || ASSURANCE_RANK[effectiveAssurance(ticket)] < ASSURANCE_RANK.chat) return fallback;
     const targets = targetsOf(action.input);
     const self = ticket.requester_email.toLowerCase();
     if (!self || targets.length === 0 || !targets.every((t) => t === self)) return fallback;
-    const result = await this.delivery.deliverSecret(ticket, `Here are your sign-in details for ${self}:`, secrets);
+    const result = await this.delivery.deliverSecret(ticket, `Here are your sign-in details for ${self}:`, secrets, action.id);
     this.store.addTicketEvent(
       ticket.id,
       "action",

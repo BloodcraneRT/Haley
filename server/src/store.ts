@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { SQLInputValue } from "node:sqlite";
 import { seal, unseal } from "./crypto.js";
 import { tx, type Db } from "./db.js";
@@ -29,8 +29,11 @@ import type {
 } from "./types.js";
 import { DEFAULT_ORG_SETTINGS } from "./types.js";
 import type { ModelProfile } from "./ai/providers.js";
+import { DEFAULT_PSA_OPTIONS, type PsaConnection, type PsaKind, type PsaOptions, type TicketLink } from "./psa/types.js";
 
 type Row = Record<string, unknown>;
+
+const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
 export const newId = (prefix: string) => `${prefix}_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
 const now = () => new Date().toISOString();
@@ -231,6 +234,8 @@ export class Store {
         first_response_at: null,
         resolved_at: null,
         sla_escalated: false,
+        mfa_verified_at: null,
+        mfa_method: "",
         created_at: ts,
         updated_at: ts,
       };
@@ -325,6 +330,61 @@ export class Store {
       needs_followup: Boolean(row.needs_followup),
       sla_escalated: Boolean(row.sla_escalated),
     };
+  }
+
+  markMfaVerified(id: string, method: string, at: string): void {
+    this.db.prepare("UPDATE tickets SET mfa_verified_at = ?, mfa_method = ? WHERE id = ?").run(at, method, id);
+  }
+
+  recordVerification(input: { orgId: string; ticketId: string | null; method: string; target: string; outcome: string; detail: string }): void {
+    this.db
+      .prepare(
+        "INSERT INTO verification_attempts (id, org_id, ticket_id, method, target, outcome, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(newId("ver"), input.orgId, input.ticketId, input.method, input.target.toLowerCase(), input.outcome, input.detail, now());
+  }
+
+  listVerifications(filter: { ticketId?: string; target?: string; since?: string }): Array<{ method: string; target: string; outcome: string; detail: string; ticket_id: string | null; created_at: string }> {
+    const where: string[] = [];
+    const args: SQLInputValue[] = [];
+    if (filter.ticketId) {
+      where.push("ticket_id = ?");
+      args.push(filter.ticketId);
+    }
+    if (filter.target) {
+      where.push("target = ?");
+      args.push(filter.target.toLowerCase());
+    }
+    if (filter.since) {
+      where.push("created_at >= ?");
+      args.push(filter.since);
+    }
+    return this.db
+      .prepare(`SELECT * FROM verification_attempts ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC`)
+      .all(...args) as never;
+  }
+
+  /** A view-once link to an action's credential. Only the token's hash is stored. */
+  createSecretLink(actionId: string, ticketId: string, ttlMs: number): string {
+    const token = randomBytes(32).toString("base64url");
+    const expires = new Date(Date.now() + ttlMs).toISOString();
+    this.db
+      .prepare("INSERT INTO secret_links (token_hash, action_id, ticket_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?)")
+      .run(hashToken(token), actionId, ticketId, expires, now());
+    return token;
+  }
+
+  getSecretLink(token: string): { action_id: string; ticket_id: string; expires_at: string; viewed_at: string | null } | null {
+    return (this.db.prepare("SELECT * FROM secret_links WHERE token_hash = ?").get(hashToken(token)) as never) ?? null;
+  }
+
+  /** Marks the link used; false if it was already used or expired. */
+  consumeSecretLink(token: string): boolean {
+    return (
+      this.db
+        .prepare("UPDATE secret_links SET viewed_at = ? WHERE token_hash = ? AND viewed_at IS NULL AND expires_at > ?")
+        .run(now(), hashToken(token), now()).changes > 0
+    );
   }
 
   markSlaEscalated(id: string): void {
@@ -843,6 +903,143 @@ export class Store {
       is_default: Boolean(row.is_default),
       has_key: Boolean(row.api_key_sealed),
       created_at: row.created_at as string,
+    };
+  }
+
+  // ------------------------------------------------------------------ psa
+
+  createPsaConnection(input: { kind: PsaKind; name: string; config: Record<string, string>; options?: Partial<PsaOptions> }): PsaConnection {
+    const id = newId("psa");
+    this.db
+      .prepare("INSERT INTO psa_connections (id, kind, name, config_sealed, options, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(id, input.kind, input.name, seal(this.secretKey, json(input.config)), json({ ...DEFAULT_PSA_OPTIONS, ...input.options }), now());
+    return this.getPsaConnection(id)!;
+  }
+
+  listPsaConnections(): PsaConnection[] {
+    return (this.db.prepare("SELECT * FROM psa_connections ORDER BY created_at").all() as Row[]).map((r) => this.toPsa(r));
+  }
+
+  getPsaConnection(id: string): PsaConnection | null {
+    const row = this.db.prepare("SELECT * FROM psa_connections WHERE id = ?").get(id) as Row | undefined;
+    return row ? this.toPsa(row) : null;
+  }
+
+  getPsaConfig(id: string): Record<string, string> {
+    const row = this.db.prepare("SELECT config_sealed FROM psa_connections WHERE id = ?").get(id) as Row | undefined;
+    return row ? parse(unseal(this.secretKey, row.config_sealed as string), {}) : {};
+  }
+
+  updatePsaConnection(
+    id: string,
+    patch: {
+      name?: string;
+      config?: Record<string, string>;
+      customerMap?: Record<string, string>;
+      options?: Partial<PsaOptions>;
+      cursor?: string | null;
+      enabled?: boolean;
+      status?: PsaConnection["status"];
+      statusDetail?: string;
+      lastSyncAt?: string;
+    },
+  ): PsaConnection | null {
+    const current = this.getPsaConnection(id);
+    if (!current) return null;
+    const sets: string[] = [];
+    const args: SQLInputValue[] = [];
+    const set = (col: string, value: SQLInputValue) => {
+      sets.push(`${col} = ?`);
+      args.push(value);
+    };
+    if (patch.name !== undefined) set("name", patch.name);
+    if (patch.config !== undefined) set("config_sealed", seal(this.secretKey, json({ ...this.getPsaConfig(id), ...patch.config })));
+    if (patch.customerMap !== undefined) set("customer_map", json(patch.customerMap));
+    if (patch.options !== undefined) set("options", json({ ...current.options, ...patch.options }));
+    if (patch.cursor !== undefined) set("cursor", patch.cursor);
+    if (patch.enabled !== undefined) set("enabled", patch.enabled ? 1 : 0);
+    if (patch.status !== undefined) set("status", patch.status);
+    if (patch.statusDetail !== undefined) set("status_detail", patch.statusDetail);
+    if (patch.lastSyncAt !== undefined) set("last_sync_at", patch.lastSyncAt);
+    if (sets.length) this.db.prepare(`UPDATE psa_connections SET ${sets.join(", ")} WHERE id = ?`).run(...args, id);
+    return this.getPsaConnection(id);
+  }
+
+  deletePsaConnection(id: string): boolean {
+    return this.db.prepare("DELETE FROM psa_connections WHERE id = ?").run(id).changes > 0;
+  }
+
+  private toPsa(row: Row): PsaConnection {
+    return {
+      id: row.id as string,
+      kind: row.kind as PsaKind,
+      name: row.name as string,
+      customer_map: parse(row.customer_map, {}),
+      options: { ...DEFAULT_PSA_OPTIONS, ...parse<Partial<PsaOptions>>(row.options, {}) },
+      cursor: (row.cursor as string) ?? null,
+      enabled: Boolean(row.enabled),
+      status: row.status as PsaConnection["status"],
+      status_detail: row.status_detail as string,
+      last_sync_at: (row.last_sync_at as string) ?? null,
+      created_at: row.created_at as string,
+    };
+  }
+
+  createTicketLink(input: { ticketId: string; connectionId: string; externalId: string; externalNumber: string; seenCommentIds?: string[]; lastStatus?: string }): TicketLink {
+    this.db
+      .prepare(
+        `INSERT INTO ticket_links (ticket_id, connection_id, external_id, external_number, seen_comment_ids, last_status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(input.ticketId, input.connectionId, input.externalId, input.externalNumber, json(input.seenCommentIds ?? []), input.lastStatus ?? "", now());
+    return this.getTicketLink(input.ticketId, input.connectionId)!;
+  }
+
+  getTicketLink(ticketId: string, connectionId: string): TicketLink | null {
+    const row = this.db.prepare("SELECT * FROM ticket_links WHERE ticket_id = ? AND connection_id = ?").get(ticketId, connectionId) as Row | undefined;
+    return row ? this.toLink(row) : null;
+  }
+
+  findTicketLinkByExternal(connectionId: string, externalId: string): TicketLink | null {
+    const row = this.db.prepare("SELECT * FROM ticket_links WHERE connection_id = ? AND external_id = ?").get(connectionId, externalId) as Row | undefined;
+    return row ? this.toLink(row) : null;
+  }
+
+  listTicketLinks(filter: { connectionId?: string; ticketId?: string } = {}): TicketLink[] {
+    const where: string[] = [];
+    const args: SQLInputValue[] = [];
+    if (filter.connectionId) {
+      where.push("connection_id = ?");
+      args.push(filter.connectionId);
+    }
+    if (filter.ticketId) {
+      where.push("ticket_id = ?");
+      args.push(filter.ticketId);
+    }
+    return (this.db.prepare(`SELECT * FROM ticket_links ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`).all(...args) as Row[]).map((r) =>
+      this.toLink(r),
+    );
+  }
+
+  updateTicketLink(ticketId: string, connectionId: string, patch: { seenCommentIds?: string[]; pushedEventIds?: string[]; lastStatus?: string }): void {
+    const link = this.getTicketLink(ticketId, connectionId);
+    if (!link) return;
+    this.db
+      .prepare("UPDATE ticket_links SET seen_comment_ids = ?, pushed_event_ids = ?, last_status = ? WHERE ticket_id = ? AND connection_id = ?")
+      .run(
+        json(patch.seenCommentIds ?? link.seen_comment_ids),
+        json(patch.pushedEventIds ?? link.pushed_event_ids),
+        patch.lastStatus ?? link.last_status,
+        ticketId,
+        connectionId,
+      );
+  }
+
+  private toLink(row: Row): TicketLink {
+    return {
+      ...(row as unknown as TicketLink),
+      seen_comment_ids: parse(row.seen_comment_ids, []),
+      pushed_event_ids: parse(row.pushed_event_ids, []),
     };
   }
 

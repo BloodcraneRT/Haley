@@ -22,7 +22,11 @@ import { ChannelHub } from "./channels/hub.js";
 import { SlackChannel } from "./channels/slack.js";
 import { TeamsChannel } from "./channels/teams.js";
 import { clientReport } from "./report.js";
+import { PSA_PROVIDERS, buildPsaAdapter } from "./psa/registry.js";
+import { PsaSync } from "./psa/sync.js";
+import type { PsaAdapter, PsaConnection } from "./psa/types.js";
 import { registerHooks } from "./routes/hooks.js";
+import { registerSecretLinks } from "./routes/secretLinks.js";
 import { nextOccurrence, Scheduler } from "./scheduler.js";
 import { slaFor } from "./sla.js";
 import { buildTranscript } from "./transcript.js";
@@ -32,6 +36,8 @@ export interface AppDeps {
   config: HaleyConfig;
   llm?: LlmClient;
   fetchImpl?: typeof fetch;
+  /** Overrides how PSA adapters are built (tests use in-memory PSAs). */
+  psaFactory?: (connection: PsaConnection, config: Record<string, string>) => PsaAdapter;
   /** Outbound email transport; defaults to SMTP from HALEY_SMTP_URL. Tests pass a fake. */
   mailTransport?: { sendMail(options: Record<string, unknown>): Promise<unknown> };
 }
@@ -71,9 +77,10 @@ export interface HaleyApp {
   store: Store;
   agent: AgentService;
   scheduler: Scheduler;
+  psa: PsaSync;
 }
 
-export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }: AppDeps): Promise<HaleyApp> {
+export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, psaFactory }: AppDeps): Promise<HaleyApp> {
   const db = openDb(config.dbPath);
   const store = new Store(db, config.secretKey);
 
@@ -99,7 +106,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
 
   // End-user channels. Each is enabled by its own secrets; the simulator-backed chat adapter is always on.
   const ch = config.channels;
-  const hub = new ChannelHub(store);
+  const hub = new ChannelHub(store, ch.publicUrl);
   hub.register(new ChatWebhookAdapter(ch.chatWebhookSecret, fetchImpl));
   if (mailTransport || ch.smtpUrl) hub.register(new EmailAdapter(mailTransport ?? ch.smtpUrl, ch.smtpFrom || "Haley <haley@localhost>"));
   const slack = ch.slackSigningSecret ? new SlackChannel(store, fetchImpl) : null;
@@ -112,10 +119,14 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
 
   const models = new ModelRegistry(store, fetchImpl);
   models.ensureDefault({ model: config.model, effort: config.effort, fallbacks: config.fallbacks });
+  const psa = new PsaSync(store, hub, psaFactory ?? ((connection, cfg) => buildPsaAdapter(connection, cfg, fetchImpl)));
+  hub.register(psa.channelAdapter("syncro"));
+  hub.register(psa.channelAdapter("dynamics"));
+
   const agent = new AgentService(store, llm ? () => llm : (orgId) => models.clientFor(orgId), config, connectorsFor, hub);
   hub.attach(agent);
   agent.recoverInterrupted();
-  const scheduler = new Scheduler(store, agent);
+  const scheduler = new Scheduler(store, agent, psa);
 
   const withSla = (ticket: Ticket, org: Org | null | undefined) => ({ ...ticket, sla: org ? slaFor(ticket, org.settings.sla) : null });
 
@@ -135,6 +146,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
   });
 
   registerHooks(app, { config: ch, store, hub, slack, teams, log: (err) => app.log.error(err) });
+  registerSecretLinks(app, store);
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof HttpError) return reply.status(err.statusCode).send({ error: err.message });
@@ -679,6 +691,113 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
     }
   });
 
+  // ----------------------------------------------------------- PSA sync
+
+  app.get("/api/psa/providers", async () => PSA_PROVIDERS);
+
+  app.get("/api/psa", async () =>
+    store.listPsaConnections().map((c) => ({ ...c, linkedTickets: store.listTicketLinks({ connectionId: c.id }).length })),
+  );
+
+  const psaOptions = z
+    .object({
+      importTickets: z.boolean(),
+      exportTickets: z.boolean(),
+      mirrorNotes: z.boolean(),
+      requesterAssurance: z.enum(["none", "email"]),
+    })
+    .partial();
+
+  const testPsa = async (id: string) => {
+    psa.invalidate(id);
+    const connection = store.getPsaConnection(id)!;
+    try {
+      const detail = await psa.adapterFor(connection).test();
+      return store.updatePsaConnection(id, { status: "connected", statusDetail: detail });
+    } catch (err) {
+      psa.invalidate(id);
+      return store.updatePsaConnection(id, { status: "error", statusDetail: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  app.post("/api/psa", async (req) => {
+    const input = body(
+      z.object({
+        kind: z.enum(PSA_PROVIDERS.map((p) => p.id) as [string, ...string[]]),
+        name: z.string().trim().min(1).optional(),
+        config: z.record(z.string(), z.string()),
+        options: psaOptions.default({}),
+      }),
+      req,
+    );
+    const info = PSA_PROVIDERS.find((p) => p.id === input.kind)!;
+    const missing = info.fields.filter((f) => !input.config[f.key]?.trim()).map((f) => f.label);
+    if (missing.length) throw new HttpError(400, `Missing: ${missing.join(", ")}`);
+    const connection = store.createPsaConnection({ kind: input.kind as PsaConnection["kind"], name: input.name || info.name, config: input.config, options: input.options });
+    store.audit({ actor: actor(req), action: "psa.connected", target: connection.id, detail: { kind: connection.kind } });
+    return testPsa(connection.id);
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/psa/:id", async (req) => {
+    if (!store.getPsaConnection(req.params.id)) throw notFound("PSA connection");
+    const patch = body(
+      z.object({
+        name: z.string().trim().min(1).optional(),
+        config: z.record(z.string(), z.string()).optional(),
+        options: psaOptions.optional(),
+        enabled: z.boolean().optional(),
+      }),
+      req,
+    );
+    // Blank secret fields in an edit form mean "keep the stored value".
+    const config = patch.config ? Object.fromEntries(Object.entries(patch.config).filter(([, v]) => v.trim() !== "")) : undefined;
+    store.updatePsaConnection(req.params.id, { ...patch, config });
+    psa.invalidate(req.params.id);
+    store.audit({ actor: actor(req), action: "psa.updated", target: req.params.id, detail: { fields: Object.keys(patch) } });
+    return patch.config ? testPsa(req.params.id) : store.getPsaConnection(req.params.id);
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/psa/:id", async (req) => {
+    if (!store.deletePsaConnection(req.params.id)) throw notFound("PSA connection");
+    psa.invalidate(req.params.id);
+    store.audit({ actor: actor(req), action: "psa.removed", target: req.params.id });
+    return { ok: true };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/psa/:id/test", async (req) => {
+    if (!store.getPsaConnection(req.params.id)) throw notFound("PSA connection");
+    return testPsa(req.params.id);
+  });
+
+  /** External customers with their current mapping and a suggested client by domain or name. */
+  app.get<{ Params: { id: string } }>("/api/psa/:id/customers", async (req) => {
+    const connection = store.getPsaConnection(req.params.id);
+    if (!connection) throw notFound("PSA connection");
+    const orgs = store.listOrgs();
+    const customers = await psa.adapterFor(connection).listCustomers();
+    return customers.map((c) => {
+      const byDomain = orgs.find((o) =>
+        c.domains.some((d) => d === o.domain.toLowerCase() || o.settings.emailDomains.map((x) => x.toLowerCase()).includes(d)),
+      );
+      const byName = orgs.find((o) => o.name.toLowerCase() === c.name.toLowerCase());
+      return { ...c, orgId: connection.customer_map[c.id] ?? null, suggestedOrgId: (byDomain ?? byName)?.id ?? null };
+    });
+  });
+
+  app.put<{ Params: { id: string } }>("/api/psa/:id/mapping", async (req) => {
+    if (!store.getPsaConnection(req.params.id)) throw notFound("PSA connection");
+    const map = body(z.record(z.string(), z.string()), req);
+    for (const orgId of Object.values(map)) if (!store.getOrg(orgId)) throw new HttpError(400, `Unknown client ${orgId}`);
+    store.updatePsaConnection(req.params.id, { customerMap: map });
+    store.audit({ actor: actor(req), action: "psa.mapping_updated", target: req.params.id, detail: { customers: Object.keys(map).length } });
+    return store.getPsaConnection(req.params.id);
+  });
+
+  app.post<{ Params: { id: string } }>("/api/psa/:id/sync", async (req) => {
+    if (!store.getPsaConnection(req.params.id)) throw notFound("PSA connection");
+    return psa.sync(req.params.id);
+  });
+
   // ---------------------------------------------------------- schedules
 
   const scheduleInput = z.object({
@@ -872,5 +991,5 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport }
 
   app.addHook("onClose", async () => db.close());
   app.addHook("onClose", async () => scheduler.stop());
-  return { app, store, agent, scheduler };
+  return { app, store, agent, scheduler, psa };
 }

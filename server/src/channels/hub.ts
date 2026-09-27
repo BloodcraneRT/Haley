@@ -1,5 +1,8 @@
 import type { Store } from "../store.js";
-import { ASSURANCE_RANK, type Run, type Ticket, type TicketChannel } from "../types.js";
+import { ASSURANCE_RANK, effectiveAssurance, type Assurance, type Run, type Ticket, type TicketChannel } from "../types.js";
+
+/** One-time credential links expire after this long. */
+export const SECRET_LINK_TTL_MS = 15 * 60_000;
 import type { ChannelAdapter, DeliveryResult, InboundMessage, InboundResult, ReplyDelivery } from "./types.js";
 
 export interface RunStarter {
@@ -30,7 +33,11 @@ export class ChannelHub implements ReplyDelivery {
   private readonly adapters = new Map<TicketChannel, ChannelAdapter>();
   private runs: RunStarter | null = null;
 
-  constructor(private readonly store: Store) {}
+  constructor(
+    private readonly store: Store,
+    /** Public base URL, for one-time secret links. */
+    private readonly publicUrl = "",
+  ) {}
 
   register(adapter: ChannelAdapter): void {
     this.adapters.set(adapter.channel, adapter);
@@ -62,12 +69,27 @@ export class ChannelHub implements ReplyDelivery {
     }
   }
 
-  async deliverSecret(ticket: Ticket, heading: string, secrets: Record<string, string>): Promise<DeliveryResult> {
-    if (ASSURANCE_RANK[ticket.assurance] < ASSURANCE_RANK.chat) {
+  async deliverSecret(ticket: Ticket, heading: string, secrets: Record<string, string>, actionId: string): Promise<DeliveryResult> {
+    const assurance = effectiveAssurance(ticket);
+    if (ASSURANCE_RANK[assurance] < ASSURANCE_RANK.chat) {
       return { delivered: false, detail: "The requester's identity isn't strong enough to receive credentials." };
     }
     const adapter = this.adapters.get(ticket.channel);
     if (!adapter?.supportsPrivate || ticket.channel_ref.private !== "1") {
+      // Email can't carry a credential, but a view-once link can once the owner approved an MFA push.
+      const email = this.adapters.get("email");
+      if (assurance === "mfa" && email && ticket.requester_email && this.publicUrl) {
+        const token = this.store.createSecretLink(actionId, ticket.id, SECRET_LINK_TTL_MS);
+        try {
+          const sent = await email.send(
+            ticket,
+            `${heading}\n\nOpen this link within ${SECRET_LINK_TTL_MS / 60_000} minutes to see it. It works once:\n${this.publicUrl}/s/${token}\n\nIf you didn't ask for this, reply to this email right away.`,
+          );
+          return sent.delivered ? { delivered: true, detail: `One-time link emailed to ${ticket.requester_email}` } : sent;
+        } catch (err) {
+          return { delivered: false, detail: `Emailing the one-time link failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      }
       return { delivered: false, detail: `A ${ticket.channel} conversation can't carry credentials privately.` };
     }
     const lines = Object.entries(secrets).map(([k, v]) => `${SECRET_LABELS[k] ?? k}: \`${v}\``);
@@ -77,6 +99,38 @@ export class ChannelHub implements ReplyDelivery {
     } catch (err) {
       return { delivered: false, detail: `Private delivery failed: ${err instanceof Error ? err.message : String(err)}` };
     }
+  }
+
+  /**
+   * A new message on an existing ticket: record it, reopen if needed, and give Haley another pass
+   * (now, or when her current pass ends). Technician-owned tickets just get the message.
+   */
+  appendToTicket(
+    ticket: Ticket,
+    msg: { channel: TicketChannel; author: string; email: string | null; assurance: Assurance; text: string },
+  ): InboundResult {
+    if (!this.runs) throw new Error("ChannelHub is not attached to the agent");
+    const org = this.store.getOrg(ticket.org_id);
+    const fromRequester = Boolean(msg.email) && msg.email!.toLowerCase() === ticket.requester_email.toLowerCase();
+    this.store.addTicketEvent(ticket.id, "comment", msg.author, msg.text, {
+      channel: msg.channel,
+      fromRequester,
+      senderEmail: msg.email,
+      assurance: msg.assurance,
+    });
+    if (["resolved", "closed", "waiting_on_customer"].includes(ticket.status) && ticket.assignee === "haley") {
+      this.store.setTicketStatus(ticket.id, "in_progress", msg.channel);
+    }
+    // A technician owns escalated tickets (and all tickets while Haley is paused); the message is on the timeline for them.
+    if (ticket.status === "escalated" || ticket.assignee !== "haley" || org?.settings.paused) {
+      return { ticketId: ticket.id, ticketNumber: ticket.number, created: false, runId: null };
+    }
+    if (this.runs.activeRun(ticket.id)) {
+      this.store.setNeedsFollowup(ticket.id, true);
+      return { ticketId: ticket.id, ticketNumber: ticket.number, created: false, runId: null };
+    }
+    const run = this.runs.startTicketRun(ticket.id, msg.channel);
+    return { ticketId: ticket.id, ticketNumber: ticket.number, created: false, runId: run.id };
   }
 
   /** Opens a ticket for a new conversation or appends to the existing one, then puts Haley on it. */
@@ -92,28 +146,7 @@ export class ChannelHub implements ReplyDelivery {
     }
     if (!ticket && msg.thread) ticket = this.store.findOpenTicketByChannelRef(org.id, msg.channel, msg.thread.key, msg.thread.value);
 
-    if (ticket) {
-      const fromRequester = Boolean(sender.email) && sender.email!.toLowerCase() === ticket.requester_email.toLowerCase();
-      this.store.addTicketEvent(ticket.id, "comment", author, msg.text, {
-        channel: msg.channel,
-        fromRequester,
-        senderEmail: sender.email,
-        assurance: sender.assurance,
-      });
-      if (["resolved", "closed", "waiting_on_customer"].includes(ticket.status) && ticket.assignee === "haley") {
-        this.store.setTicketStatus(ticket.id, "in_progress", msg.channel);
-      }
-      // A technician owns escalated tickets (and all tickets while Haley is paused); the message is on the timeline for them.
-      if (ticket.status === "escalated" || ticket.assignee !== "haley" || org.settings.paused) {
-        return { ticketId: ticket.id, ticketNumber: ticket.number, created: false, runId: null };
-      }
-      if (this.runs.activeRun(ticket.id)) {
-        this.store.setNeedsFollowup(ticket.id, true);
-        return { ticketId: ticket.id, ticketNumber: ticket.number, created: false, runId: null };
-      }
-      const run = this.runs.startTicketRun(ticket.id, msg.channel);
-      return { ticketId: ticket.id, ticketNumber: ticket.number, created: false, runId: run.id };
-    }
+    if (ticket) return this.appendToTicket(ticket, { channel: msg.channel, author, email: sender.email, assurance: sender.assurance, text: msg.text });
 
     const flooding =
       Boolean(sender.email) &&

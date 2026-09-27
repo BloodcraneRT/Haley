@@ -56,11 +56,26 @@ export class ConnectorError extends Error {
   }
 }
 
+export interface VerificationResult {
+  outcome: "approved" | "denied" | "timeout" | "unavailable";
+  /** Human-readable detail, e.g. "Approved on iPhone 15" or "No push-capable device enrolled". */
+  detail: string;
+}
+
+/** Out-of-band identity check: a push to the user's own registered MFA device. */
+export interface Verifier {
+  /** Short method name recorded on the ticket, e.g. "Duo push". */
+  method: string;
+  verify(userEmail: string, context: { reason: string; ticketNumber: number | null }): Promise<VerificationResult>;
+}
+
 export interface Connector {
   integrationId: string;
   provider: string;
   label: string;
   tools: HaleyTool[];
+  /** Present on identity-verification providers (Duo, Okta, Microsoft Authenticator). */
+  verifier?: Verifier;
   test(): Promise<string>;
 }
 
@@ -88,6 +103,8 @@ export interface ProviderInfo {
   capabilities: string[];
   /** Whether a simulated tenant is available for trying the provider without credentials. */
   supportsSandbox: boolean;
-  /** "directory" providers give Haley tools; "channel" providers let end users reach Haley. */
-  kind: "directory" | "channel";
+  /** "directory" providers give Haley tools; "channel" providers let end users reach Haley; "verification" providers do MFA step-up. */
+  kind: "directory" | "channel" | "verification";
+  /** Shown prominently in the connect dialog (e.g. undocumented APIs). */
+  warning?: string;
 }

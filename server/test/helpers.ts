@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { LlmClient, LlmRequest, ModelResponse, Part, StopReason } from "../src/ai/types.js";
 import { buildApp } from "../src/app.js";
+import type { PsaAdapter, PsaConnection } from "../src/psa/types.js";
 import { loadConfig, type HaleyConfig } from "../src/config.js";
 
 type StepResult = { content: Part[]; stop_reason?: StopReason };
@@ -60,8 +61,9 @@ export async function makeApp(
   overrides: Partial<HaleyConfig> = {},
   fetchImpl?: typeof fetch,
   mailTransport?: { sendMail(options: Record<string, unknown>): Promise<unknown> },
+  psaFactory?: (connection: PsaConnection, config: Record<string, string>) => PsaAdapter,
 ) {
-  return buildApp({ config: testConfig(overrides), llm: llm ?? undefined, fetchImpl, mailTransport });
+  return buildApp({ config: testConfig(overrides), llm: llm ?? undefined, fetchImpl, mailTransport, psaFactory });
 }
 
 export interface FetchCall {

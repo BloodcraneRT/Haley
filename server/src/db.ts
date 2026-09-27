@@ -168,6 +168,55 @@ const MIGRATIONS: string[] = [
      created_at TEXT NOT NULL
    );
    ALTER TABLE runs ADD COLUMN model TEXT NOT NULL DEFAULT '';`,
+  // 4: MFA step-up verification and one-time secret links
+  `ALTER TABLE tickets ADD COLUMN mfa_verified_at TEXT;
+   ALTER TABLE tickets ADD COLUMN mfa_method TEXT NOT NULL DEFAULT '';
+   CREATE TABLE IF NOT EXISTS verification_attempts (
+     id TEXT PRIMARY KEY,
+     org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+     ticket_id TEXT REFERENCES tickets(id) ON DELETE CASCADE,
+     method TEXT NOT NULL,
+     target TEXT NOT NULL,
+     outcome TEXT NOT NULL,
+     detail TEXT NOT NULL DEFAULT '',
+     created_at TEXT NOT NULL
+   );
+   CREATE INDEX IF NOT EXISTS idx_verification_target ON verification_attempts(target, created_at);
+   CREATE TABLE IF NOT EXISTS secret_links (
+     token_hash TEXT PRIMARY KEY,
+     action_id TEXT NOT NULL REFERENCES actions(id) ON DELETE CASCADE,
+     ticket_id TEXT NOT NULL,
+     expires_at TEXT NOT NULL,
+     viewed_at TEXT,
+     created_at TEXT NOT NULL
+   );`,
+  // 5: PSA / service desk sync (SyncroMSP, Dynamics 365)
+  `CREATE TABLE IF NOT EXISTS psa_connections (
+     id TEXT PRIMARY KEY,
+     kind TEXT NOT NULL,
+     name TEXT NOT NULL,
+     config_sealed TEXT NOT NULL,
+     customer_map TEXT NOT NULL DEFAULT '{}',
+     options TEXT NOT NULL DEFAULT '{}',
+     cursor TEXT,
+     enabled INTEGER NOT NULL DEFAULT 1,
+     status TEXT NOT NULL DEFAULT 'unknown',
+     status_detail TEXT NOT NULL DEFAULT '',
+     last_sync_at TEXT,
+     created_at TEXT NOT NULL
+   );
+   CREATE TABLE IF NOT EXISTS ticket_links (
+     ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+     connection_id TEXT NOT NULL REFERENCES psa_connections(id) ON DELETE CASCADE,
+     external_id TEXT NOT NULL,
+     external_number TEXT NOT NULL DEFAULT '',
+     seen_comment_ids TEXT NOT NULL DEFAULT '[]',
+     pushed_event_ids TEXT NOT NULL DEFAULT '[]',
+     last_status TEXT NOT NULL DEFAULT '',
+     created_at TEXT NOT NULL,
+     PRIMARY KEY (ticket_id, connection_id),
+     UNIQUE (connection_id, external_id)
+   );`,
 ];
 
 export function openDb(path: string): Db {
