@@ -23,6 +23,7 @@ import { SlackChannel } from "./channels/slack.js";
 import { TeamsChannel } from "./channels/teams.js";
 import { clientReport } from "./report.js";
 import { PSA_PROVIDERS, buildPsaAdapter } from "./psa/registry.js";
+import "./psa/syncro.js";
 import { PsaSync } from "./psa/sync.js";
 import type { PsaAdapter, PsaConnection } from "./psa/types.js";
 import { registerHooks } from "./routes/hooks.js";
@@ -742,7 +743,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       req,
     );
     const info = PSA_PROVIDERS.find((p) => p.id === input.kind)!;
-    const missing = info.fields.filter((f) => !input.config[f.key]?.trim()).map((f) => f.label);
+    const missing = info.fields.filter((f) => !f.optional && !input.config[f.key]?.trim()).map((f) => f.label);
     if (missing.length) throw new HttpError(400, `Missing: ${missing.join(", ")}`);
     const connection = store.createPsaConnection({ kind: input.kind as PsaConnection["kind"], name: input.name || info.name, config: input.config, options: input.options });
     store.audit({ actor: actor(req), action: "psa.connected", target: connection.id, detail: { kind: connection.kind } });

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ExternalComment, ExternalTicket, PsaAdapter, PsaConnection } from "../src/psa/types.js";
 import type { TicketStatus } from "../src/types.js";
-import { makeApp, ScriptedLlm, text, toolUse, turn } from "./helpers.js";
+import { SyncroAdapter } from "../src/psa/syncro.js";
+import { fakeFetch, makeApp, ScriptedLlm, text, toolUse, turn } from "./helpers.js";
 
 /** An in-memory PSA that behaves like a real one: tickets, comments with ids, statuses, customers. */
 class FakePsa implements PsaAdapter {
@@ -194,5 +195,70 @@ describe("PSA sync", () => {
     const missing = await app.inject({ method: "POST", url: "/api/psa", payload: { kind: "syncro", config: {} } });
     expect(missing.statusCode).toBe(400);
     expect(connection.kind).toBe("syncro");
+  });
+});
+
+describe("SyncroMSP adapter", () => {
+  const syncro = () => {
+    const posted: Array<{ url: string; body: any }> = [];
+    const net = fakeFetch([
+      [/\/customers\?page=1/, () => ({ customers: [{ id: 7, business_name: "Contoso Ltd", email: "billing@contoso.example", contacts: [{ email: "megan@contoso.example" }, { email: "x@gmail.com" }] }], meta: { total_pages: 2, total_entries: 2 } })],
+      [/\/customers\?page=2/, () => ({ customers: [{ id: 8, business_name: "Gone", disabled: true }], meta: { total_pages: 2 } })],
+      [/\/tickets\?since_updated_at=/, () => ({ tickets: [{ id: 55, updated_at: "2026-09-27T10:00:00Z" }], meta: { total_pages: 1 } })],
+      [/\/tickets\/55\/comments/, () => ({
+        comments: [
+          { id: 1, body: "Outlook is slow", tech: "Megan", user_id: null, hidden: false, created_at: "2026-09-27T09:00:00Z" },
+          { id: 2, body: "Checking mail flow", tech: "Jordan", user_id: 3, hidden: true, created_at: "2026-09-27T09:05:00Z" },
+          { id: 3, body: "Still slow", tech: "Megan", user_id: null, hidden: false, created_at: "2026-09-27T09:10:00Z" },
+        ],
+        meta: { total_pages: 1 },
+      })],
+      [/\/tickets\/55$/, (c) => (c.method === "PUT" ? (posted.push({ url: c.url, body: c.json() }), { ticket: {} }) : { ticket: { id: 55, number: 1234, subject: "Email slow", status: "Customer Reply", priority: "1 High", customer_id: 7, customer_business_then_name: "Contoso Ltd", updated_at: "2026-09-27T10:00:00Z", contact: { name: "Megan Bowen", email: "Megan@Contoso.example" } } })],
+      [/\/tickets\/55\/comment$/, (c) => (posted.push({ url: c.url, body: c.json() }), { comment: { id: 99 } })],
+      [/\/contacts\?customer_id=7/, () => ({ contacts: [{ id: 41, email: "megan@contoso.example" }], meta: { total_pages: 1 } })],
+      [/\/tickets$/, (c) => (posted.push({ url: c.url, body: c.json() }), { ticket: { id: 77, number: 1300 } })],
+    ]);
+    return { adapter: new SyncroAdapter({ subdomain: "acme-msp", apiKey: "tok" }, net.impl, () => Date.parse("2026-09-27T12:00:00Z")), net, posted };
+  };
+
+  it("pages customers, derives business domains, and skips disabled ones", async () => {
+    const { adapter, net } = syncro();
+    expect(await adapter.listCustomers()).toEqual([{ id: "7", name: "Contoso Ltd", domains: ["contoso.example"] }]);
+    expect(net.calls[0].url).toBe("https://acme-msp.syncromsp.com/api/v1/customers?page=1");
+    expect(net.calls[0].headers.authorization).toBe("Bearer tok");
+  });
+
+  it("maps tickets and tells customer comments from technician ones", async () => {
+    const { adapter, net } = syncro();
+    const [t] = await adapter.listUpdatedTickets(null);
+    expect(net.calls[0].url).toContain(`since_updated_at=${encodeURIComponent("2026-09-20T12:00:00.000Z")}`);
+    expect(t).toMatchObject({
+      id: "55",
+      number: "1234",
+      description: "Outlook is slow",
+      customerId: "7",
+      requesterEmail: "megan@contoso.example",
+      status: "in_progress",
+      externalStatus: "Customer Reply",
+      priority: "high",
+    });
+    expect(t.comments.map((c) => [c.id, c.fromCustomer, c.public])).toEqual([
+      ["1", false, true],
+      ["2", false, false],
+      ["3", true, true],
+    ]);
+  });
+
+  it("posts comments, statuses and new tickets in Syncro's shapes", async () => {
+    const { adapter, posted } = syncro();
+    expect(await adapter.addComment("55", { body: "Fixed!", public: true })).toBe("99");
+    expect(posted[0].body).toMatchObject({ body: "Fixed!", hidden: false, do_not_email: false, tech: "Haley" });
+    await adapter.addComment("55", { body: "note", public: false });
+    expect(posted[1].body).toMatchObject({ hidden: true, do_not_email: true });
+    await adapter.setStatus("55", "waiting_on_customer");
+    expect(posted[2].body).toEqual({ status: "Waiting on Customer" });
+    const created = await adapter.createTicket({ customerId: "7", subject: "[Haley #1] Hi", description: "d", requesterEmail: "megan@contoso.example", priority: "urgent" });
+    expect(created).toEqual({ id: "77", number: "1300" });
+    expect(posted[3].body).toMatchObject({ customer_id: 7, contact_id: 41, status: "New", priority: "0 Urgent", problem_type: "Other" });
   });
 });

@@ -4,7 +4,7 @@ export interface PsaProviderInfo {
   id: PsaKind;
   name: string;
   description: string;
-  fields: Array<{ key: string; label: string; secret?: boolean; placeholder?: string; help?: string }>;
+  fields: Array<{ key: string; label: string; secret?: boolean; placeholder?: string; help?: string; optional?: boolean }>;
   setupSteps: string[];
 }
 
@@ -16,6 +16,7 @@ export const PSA_PROVIDERS: PsaProviderInfo[] = [
     fields: [
       { key: "subdomain", label: "Syncro subdomain", placeholder: "yourmsp (from yourmsp.syncromsp.com)" },
       { key: "apiKey", label: "API token", secret: true, help: "Admin → API Tokens → New Token, with ticket, customer and contact permissions." },
+      { key: "problemType", label: "Problem type for tickets Haley creates", optional: true, placeholder: "Other", help: "Must be one of your account's problem types." },
     ],
     setupSteps: [
       "In SyncroMSP go to Admin → API Tokens → New Token (custom permissions).",
