@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createHash, createHmac } from "node:crypto";
 import { DuoVerifier, signDuo } from "../src/connectors/verification/duo.js";
+import { OktaVerifier } from "../src/connectors/verification/okta.js";
 import { SmsCodeVerifier } from "../src/connectors/verification/sms.js";
 import { fakeFetch, firstUserText, lastToolResults, makeApp, ScriptedLlm, testConfig, text, toolUse, turn } from "./helpers.js";
 
@@ -211,5 +212,40 @@ describe("Duo push", () => {
     expect(reset).toMatchObject({ status: "blocked", policy_reason: expect.stringContaining("possible impersonation") });
     expect(sent.some((m) => String(m.text).includes("quick sign-off"))).toBe(false);
     expect(store.listAudit().map((a) => a.action)).toContain("verification.denied");
+  });
+});
+
+describe("Okta Verify push", () => {
+  function okta(results: string[], factors: unknown[] = [{ id: "opf1", factorType: "push", provider: "OKTA", status: "ACTIVE", profile: { name: "Sam's iPhone" } }], pollHost = "acme.okta.com") {
+    const queue = [...results];
+    const tx = (result: string) => ({ factorResult: result, _links: { poll: { href: `https://${pollHost}/api/v1/users/00u1/factors/opf1/transactions/tx1` } } });
+    return fakeFetch([
+      [/\/api\/v1\/users\/sam%40acme\.example$/, () => ({ id: "00u1", status: "ACTIVE", profile: { login: "sam@acme.example" } })],
+      [/\/api\/v1\/users\/gone%40acme\.example$/, () => new Response(JSON.stringify({ errorCode: "E0000007" }), { status: 404 })],
+      [/\/factors$/, () => factors],
+      [/\/verify$/, () => tx(queue.shift()!)],
+      [/\/transactions\/tx1$/, () => tx(queue.shift()!)],
+    ]);
+  }
+  const make = (net: ReturnType<typeof okta>) => new OktaVerifier({ domain: "https://acme.okta.com/", apiToken: "tok" }, net.impl, Date.now, async () => {});
+
+  it("pushes to the active Okta Verify factor and polls for the answer", async () => {
+    const net = okta(["WAITING", "WAITING", "SUCCESS"]);
+    expect(await make(net).verify("sam@acme.example")).toMatchObject({ outcome: "approved", detail: expect.stringContaining("Sam's iPhone") });
+    const verify = net.calls.find((c) => c.url.endsWith("/verify"))!;
+    expect(verify).toMatchObject({ method: "POST", headers: expect.objectContaining({ authorization: "SSWS tok", "user-agent": "Haley-Helpdesk/1.0" }) });
+    expect(net.calls.filter((c) => c.url.endsWith("/transactions/tx1"))).toHaveLength(2);
+  });
+
+  it("maps rejections, missing users and missing push factors", async () => {
+    expect((await make(okta(["REJECTED"])).verify("sam@acme.example")).outcome).toBe("denied");
+    expect((await make(okta(["WAITING", "TIMEOUT"])).verify("sam@acme.example")).outcome).toBe("timeout");
+    expect((await make(okta([])).verify("gone@acme.example")).outcome).toBe("unavailable");
+    const smsOnly = okta([], [{ id: "sms1", factorType: "sms", provider: "OKTA", status: "ACTIVE" }]);
+    expect((await make(smsOnly).verify("sam@acme.example")).outcome).toBe("unavailable");
+  });
+
+  it("refuses to follow a poll link to another host", async () => {
+    await expect(make(okta(["WAITING"], undefined, "evil.example")).verify("sam@acme.example")).rejects.toThrow(/different host/);
   });
 });

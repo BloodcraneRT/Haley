@@ -8,6 +8,7 @@ import { SandboxGoogleApi, type GoogleSandboxState } from "./sandbox/google.js";
 import { SandboxM365Api, type M365SandboxState } from "./sandbox/m365.js";
 import { ConnectorError, type Connector, type ProviderInfo, type StateStore } from "./types.js";
 import { DuoVerifier } from "./verification/duo.js";
+import { OktaVerifier } from "./verification/okta.js";
 import { SmsCodeVerifier, type PhoneLookup } from "./verification/sms.js";
 
 export const PROVIDERS: ProviderInfo[] = [
@@ -78,6 +79,23 @@ export const PROVIDERS: ProviderInfo[] = [
       "Make sure the Auth API application's user access includes the client's users.",
     ],
     capabilities: ["Push to the user's own device", "Denials and fraud reports escalate", "Bypass-mode users can't be 'verified'"],
+    supportsSandbox: false,
+    kind: "verification",
+  },
+  {
+    id: "okta",
+    name: "Okta Verify push",
+    description: "Step-up identity check: Haley sends an Okta Verify push to the requester's own enrolled device (Factors API) and continues only if they approve it.",
+    fields: [
+      { key: "domain", label: "Okta domain", placeholder: "acme.okta.com" },
+      { key: "apiToken", label: "API token", secret: true },
+    ],
+    setupSteps: [
+      "In the client's Okta Admin Console create a dedicated service admin (Help Desk Admin scoped to the right groups, or Org Admin).",
+      "Signed in as that admin, go to Security → API → Tokens → Create token and paste it here with the Okta domain.",
+      "Users need an active Okta Verify push factor; the token expires after 30 days without use.",
+    ],
+    capabilities: ["Push to the user's own device", "Rejections escalate", "Inactive users can't be 'verified'"],
     supportsSandbox: false,
     kind: "verification",
   },
@@ -223,6 +241,12 @@ export function buildConnector(
       fetchImpl,
     );
     return { integrationId: integration.id, provider: "duo", label: integration.label, tools: [], verifier, test: () => verifier.check() };
+  }
+
+  if (integration.provider === "okta") {
+    required(config, ["domain", "apiToken"]);
+    const verifier = new OktaVerifier({ domain: config.domain, apiToken: config.apiToken }, fetchImpl);
+    return { integrationId: integration.id, provider: "okta", label: integration.label, tools: [], verifier, test: () => verifier.check() };
   }
 
   if (integration.provider === "sms_code") {
