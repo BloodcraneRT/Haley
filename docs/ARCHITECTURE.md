@@ -2,17 +2,22 @@
 
 ```
             ┌──────────────┐        ┌────────────────────────────── server ─────────────────────────────┐
- browser ──▶│  web (React) │──/api─▶│ app.ts (Fastify routes, auth, validation)                          │
-            └──────────────┘        │   │                                                               │
- email/PSA ──── POST /api/intake ──▶│   ├─ Store (SQLite: orgs, integrations, tickets, runs, actions,   │
-                                    │   │         kb_articles, audit_log; credentials sealed AES-GCM)   │
-                                    │   │                                                               │
-                                    │   └─ AgentService (agent/runner.ts)                               │
-                                    │        │  tool-use loop ──▶ Claude API (LlmClient)                │
-                                    │        │  policy.ts decides run / approve / block per call        │
-                                    │        ├─ built-in tools: tickets, replies, KB, escalation        │
-                                    │        └─ connectors: m365 (Graph), google (Admin SDK)            │
-                                    │                 each with a live client and a sandbox tenant      │
+ browser ──▶│  web (React) │──/api─▶│ app.ts (Fastify routes, token auth, validation)                    │
+            └──────────────┘        │                                                                    │
+ email ─────── /hooks/email ───────▶│ routes/hooks.ts ─▶ channels/* (verify caller, resolve identity)    │
+ Slack ─────── /hooks/slack/events ▶│        │                     email · slack · teams · chat         │
+ Teams ─────── /hooks/teams/messages│        ▼                                                           │
+ chat bridge ─ /hooks/chat ────────▶│   ChannelHub: open/continue ticket, ack, start Haley, deliver ◀─┐  │
+                                    │        │                                             replies  │  │
+                                    │        ▼                                                      │  │
+                                    │   AgentService (agent/runner.ts) ── tool-use loop ─▶ Claude API │  │
+                                    │        │  policy.ts: run / approve / block per call ──────────┘  │
+                                    │        ├─ built-in tools: tickets, replies, KB, follow-ups         │
+                                    │        └─ connectors: m365 (Graph), google (Admin SDK), slack      │
+                                    │                                                                    │
+                                    │   Scheduler: recurring tasks, Haley's follow-ups, SLA escalation   │
+                                    │   Store (SQLite): orgs, integrations, tickets, runs, actions,      │
+                                    │     schedules, kb_articles, audit_log; credentials AES-256-GCM     │
                                     └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -32,9 +37,30 @@
 
 Requests use `claude-opus-5` with adaptive thinking, streaming (`finalMessage()`), prompt caching on the system prompt and conversation, eager input streaming for tool inputs (validated before execution), and server-side refusal fallbacks (`fallbacks: "default"`). The model, effort level and fallbacks are configurable (`HALEY_MODEL`, `HALEY_EFFORT`, `HALEY_FALLBACKS`).
 
+### End-user channels
+
+`channels/hub.ts` is the single entry point for messages from end users (see [CHANNELS.md](CHANNELS.md) for setup).
+
+1. **Verify the caller.** Each webhook checks its own proof: a shared secret for email, Slack's HMAC signature with a replay window, the Bot Framework JWT for Teams (checked against Microsoft's published signing keys), and HMAC for the chat bridge.
+2. **Resolve the client and the person.** The client comes from the email domain, the Slack workspace, the Entra tenant or the bridge. The person's **assurance level** comes from DMARC/DKIM alignment, the Slack profile email (guests excluded), or the Teams Entra object ID matched in the client's directory.
+3. **Thread.** A message continues an open ticket if it matches the email subject tag or message ID, the Slack thread or DM, the Teams conversation, or the bridge thread. Otherwise it opens a ticket, sends an acknowledgement and starts Haley.
+4. **Follow-ups.** A message on a busy ticket sets `needs_followup`, and a fresh pass starts when the current run ends. Messages on escalated tickets wait for the technician.
+5. **Replies.** `reply_to_requester`, technician replies and automatic notices ("needs a quick sign-off", "passed to the IT team") all go out on the ticket's channel, and the delivery result is stored on the timeline.
+
+### Plan mode
+
+A run with `mode: "plan"` works like a live run with one difference: every tool that isn't `read` is simulated. For each simulated step, the action is recorded as `planned`, together with the decision the live policy *would* have made and its reason. The model is told the same thing, so its final message is an exact plan. Plan runs don't touch the ticket's status and never message the requester.
+
+### Scheduler
+
+`scheduler.ts` runs on a 30-second tick and does three things:
+- **Recurring task runs** that technicians create (for example, a weekly security review).
+- **One-off follow-ups Haley creates with `schedule_follow_up`.** These run *on the original ticket*, so they carry that requester's authority rather than a technician's.
+- **SLA escalation.** Tickets past their resolution target are escalated to a technician once.
+
 ### Risk levels
 
-Every tool declares one:
+Every tool declares one. The full decision matrix, including identity assurance, authorized approvers, protected accounts and volume limits, is in [TRUST_MODEL.md](TRUST_MODEL.md).
 
 - `read`: no side effects.
 - `internal`: writes only inside Haley (ticket fields, notes, replies, KB articles). Never gated.
@@ -63,21 +89,26 @@ The dashboard renders the connect form from `ProviderInfo`, so no UI work is nee
 
 | Table | Purpose |
 |---|---|
-| `orgs` | Client organizations, their autonomy policy and MSP notes (fed to the agent). |
+| `orgs` | Client organizations: autonomy policy, MSP notes (fed to the agent), and `settings` (approvers, protected accounts, email domains, Teams tenant, limits, SLA targets, pause). |
 | `integrations` | One per provider per org; `config_sealed` holds encrypted credentials, `state` holds sandbox tenant state. |
-| `tickets`, `ticket_events` | Tickets and their timeline (comments, replies, agent notes, field changes, actions, escalations). |
+| `tickets`, `ticket_events` | Tickets (channel, reply routing, requester assurance, SLA timestamps) and their timeline (comments, replies with delivery status, agent notes, field changes, actions, escalations). |
 | `runs` | Agent runs: conversation, pending approval state, summary, token usage. |
 | `actions` | Every tool call Haley made: input, risk, rationale, decision, result, sealed secrets. |
 | `kb_articles` | Markdown knowledge base, per client or global. |
+| `schedules` | Recurring tasks and Haley's one-off ticket follow-ups. |
 | `audit_log` | Append-only record of security-relevant events. |
 
-SQLite (built into Node 22) keeps deployment to a single process and a single file. The `Store` class is the only thing that touches SQL, so moving to Postgres later is contained.
+Schema changes are forward-only migrations in `db.ts`, tracked with `PRAGMA user_version`. SQLite (built into Node 22) keeps deployment to a single process and a single file. The `Store` class is the only thing that touches SQL, so moving to Postgres later is contained.
 
 ## Roadmap ideas
 
-- Per-technician accounts with SSO (Entra ID / Google) and roles, replacing the shared API token.
-- PSA sync (ConnectWise, Autotask, HaloPSA) and outbound email for replies.
-- More connectors: Intune device actions, Exchange Online (shared mailboxes, forwarding, message trace), Okta, RMM tools (NinjaOne, Datto) for endpoint scripts.
-- Scheduled tasks (weekly license audit, monthly security review per client).
-- Live run streaming over SSE instead of polling.
-- Teams / Slack bot so end users can open and follow tickets in chat.
+These are ranked from the [competitive research](research/COMPETITIVE_LANDSCAPE.md).
+
+- **Step-up verification**: a Duo or Okta push, or a one-time code to a second factor already on file, before self-service changes when the channel's assurance is too low. That would let email-only users self-serve too.
+- **Compromised-account playbook**: investigate sign-ins, inbox rules, forwarding and OAuth grants with read-only tools, then contain with approval.
+- **Exchange Online depth**: shared mailbox and calendar permissions, forwarding, message trace, and converting a mailbox to shared on offboarding.
+- **Client onboarding through GDAP or a multi-tenant partner app**, instead of an app registration per tenant.
+- **PSA two-way sync** (HaloPSA first, then ConnectWise and Autotask) and an **RMM connector** for endpoint scripts.
+- **Per-technician accounts** with SSO and roles, replacing the shared API token.
+- **Service catalog** forms feeding deterministic tools; **tenant standards and drift** checks.
+- **Live run streaming** over SSE instead of polling.

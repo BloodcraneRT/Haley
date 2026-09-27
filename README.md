@@ -2,6 +2,8 @@
 
 **An AI IT technician for managed service providers.** Connect each client's Microsoft 365 or Google Workspace tenant, and Haley works their tickets and IT tasks: she investigates, fixes what she's allowed to, asks a technician before anything risky, replies to the end user, documents what she learned, and hands off cleanly when a human is needed.
 
+End users just message Haley by **email, Slack, Microsoft Teams or chat**. When the channel proves who they are, she fixes their problem end to end with no technician involved: password resets, lost-phone sign-in passes, sign-outs, licenses, out-of-office. Anything risky, unverified, or affecting someone else falls back to a technician automatically. The full rules are in [docs/TRUST_MODEL.md](docs/TRUST_MODEL.md).
+
 Haley is powered by Claude through the Anthropic API.
 
 ## What it does
@@ -9,22 +11,27 @@ Haley is powered by Claude through the Anthropic API.
 | | |
 |---|---|
 | **Plug in client platforms** | Microsoft 365 (Entra ID, licenses, groups, MFA methods, Intune devices, mailbox auto-replies, service health) through Microsoft Graph. Google Workspace (users, groups, org units, 2SV status, suspensions, sign-outs) through the Admin SDK. Each has a **sandbox mode**, a simulated tenant you can try Haley against without credentials. |
-| **Work tickets** | Tickets come from the dashboard or the email/PSA intake webhook. Haley triages (category, priority), investigates with read-only tools, makes the fix, replies to the requester, and writes a summary for technicians. |
+| **Talk to end users where they are** | Email (DMARC-checked, threaded by `[#1234]`), Slack (DMs and @mentions), Microsoft Teams (Entra-verified), and a signed chat bridge for anything else. Haley acknowledges immediately, replies on the same channel, and picks up follow-up messages on her own. See [docs/CHANNELS.md](docs/CHANNELS.md). |
+| **Work tickets** | Haley triages (category, priority), investigates with read-only tools, makes the fix, replies to the requester, and writes a summary for technicians. SLA timers per priority escalate breaches automatically. |
+| **Fix things unattended, safely** | The **Unattended** policy resolves verified self-service requests with no technician. Identity assurance levels, authorized approvers, protected accounts, per-person and hourly limits, and a per-client **Pause Haley** kill switch keep it safe. |
 | **Human approval where it matters** | Each client has an autonomy policy. Every change to a customer system is checked against it and either runs, waits in the approval queue, or is blocked. |
-| **Keep secrets away from the model** | Temporary passwords from resets and new accounts are encrypted and shown only to technicians, on click, with an audit entry. The model only ever sees `[delivered securely to the technician]`. |
-| **Run IT tasks** | "Ask Haley" templates for onboarding, offboarding, license audits, security posture reviews, environment documentation, and service health checks. |
+| **Keep secrets away from the model** | Temporary passwords and Temporary Access Passes are encrypted. They go straight to a verified requester's private chat or are revealed to a technician on click (audited). The model only ever sees a placeholder. |
+| **Run IT tasks** | "Ask Haley" templates for onboarding, offboarding, license audits, security posture reviews, environment documentation, and service health checks. Run them once or on a schedule; Haley can also schedule her own follow-ups (for example, "remove this temporary access Friday"). |
+| **Plan before acting** | Plan mode is a dry run against the real tenant. Every change is simulated and the run reports which steps would run automatically, which need approval, and why. |
+| **Prove value** | A per-client report for QBRs: tickets, % resolved by Haley alone, SLA compliance, changes made, and estimated hours saved. |
 | **Document** | Haley searches the knowledge base before troubleshooting and writes or updates Markdown articles (runbooks, environment overviews, audit reports) as she goes. |
 | **Audit everything** | Every approval, rejection, executed change, blocked action, credential reveal and policy change is logged. |
 
 ### Autonomy policies
 
-|                | Read | Haley-internal (notes, KB, ticket fields) | Write (licenses, groups, new users) | Destructive (password resets, blocking sign-in, revoking sessions, suspending) |
-|----------------|------|------|------|------|
-| **Read only**  | runs | runs | blocked; Haley recommends it instead | blocked |
-| **Supervised** (default) | runs | runs | needs approval | needs approval |
-| **Autonomous** | runs | runs | runs | needs approval |
+|                | Read / Haley-internal | Write (licenses, groups, new users) | Destructive (password resets, TAPs, blocking sign-in, revoking sessions) |
+|----------------|------|------|------|
+| **Read only**  | runs | blocked; Haley recommends it instead | blocked |
+| **Supervised** (default) | runs | needs approval | needs approval |
+| **Autonomous** | runs | runs | needs approval |
+| **Unattended** | runs | runs for the requester's own account or an authorized approver; access grants need an approver | runs for the requester's **own** account with Slack/Teams/chat identity (never email alone), within per-person limits |
 
-Destructive actions always need a human.
+Protected accounts always need a technician, in every mode. The details are in [docs/TRUST_MODEL.md](docs/TRUST_MODEL.md).
 
 ## Quick start
 
@@ -39,7 +46,7 @@ npm run dev:server              # API on http://localhost:8787
 npm run dev:web                 # dashboard on http://localhost:5173
 ```
 
-Open the dashboard and click **Load demo workspace**. It creates two sandbox clients (Contoso on Microsoft 365, Acme Health Clinic on Google Workspace), some runbooks, and realistic tickets, including a lockout, a mailbox access request, an Exchange degradation, and a new hire. Open a ticket and click **Run Haley**.
+Open the dashboard and click **Load demo workspace**. Then try the **End-user simulator**: set Contoso to Unattended and message Haley as `megan.bowen@contoso.example`. It creates two sandbox clients (Contoso on Microsoft 365, Acme Health Clinic on Google Workspace), some runbooks, and realistic tickets, including a lockout, a mailbox access request, an Exchange degradation, and a new hire. Open a ticket and click **Run Haley**.
 
 Without an Anthropic API key the whole app works except the agent itself; runs fail with a clear credentials error.
 
@@ -68,15 +75,9 @@ The server serves the built dashboard and the API from one port. In production i
 
 Credentials are encrypted at rest (AES-256-GCM) and never returned by the API.
 
-## Ticket intake
+## Channels and intake
 
-Point a mail-to-webhook service or your PSA at `POST /api/intake`:
-
-```json
-{ "from": "megan@contoso.com", "fromName": "Megan Bowen", "subject": "Can't open Teams", "body": "..." }
-```
-
-The ticket is routed to the client whose domain matches the sender, and Haley starts on it right away (pass `"autoRun": false` to skip that).
+Email, Slack, Teams and the chat bridge are enabled by setting their secrets (see [`.env.example`](.env.example)), and each is set up as described in [docs/CHANNELS.md](docs/CHANNELS.md). PSAs can also post tickets to `POST /api/intake` with the API token.
 
 ## Project layout
 
@@ -91,4 +92,4 @@ npm test            # server test suite (policy, connectors, agent loop, API)
 npm run typecheck
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the agent loop, approvals and connectors fit together, and how to add a new platform.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the agent loop, approvals, channels and connectors fit together, and how to add a new platform. For the competitive landscape and where these features came from, see [docs/research/COMPETITIVE_LANDSCAPE.md](docs/research/COMPETITIVE_LANDSCAPE.md).
