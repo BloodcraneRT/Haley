@@ -14,6 +14,9 @@ const SECRET_LABELS: Record<string, string> = {
   primaryEmail: "Username",
 };
 
+/** New tickets per requester per hour that Haley picks up automatically; beyond this they queue for technicians. */
+export const MAX_NEW_TICKETS_PER_REQUESTER_PER_HOUR = 10;
+
 function titleFrom(text: string): string {
   const line = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "Help request";
   return line.length > 80 ? `${line.slice(0, 77)}…` : line;
@@ -112,6 +115,10 @@ export class ChannelHub implements ReplyDelivery {
       return { ticketId: ticket.id, ticketNumber: ticket.number, created: false, runId: run.id };
     }
 
+    const flooding =
+      Boolean(sender.email) &&
+      this.store.countTicketsFromRequesterSince(org.id, sender.email!, new Date(Date.now() - 3_600_000).toISOString()) >=
+        MAX_NEW_TICKETS_PER_REQUESTER_PER_HOUR;
     const created = this.store.createTicket({
       orgId: org.id,
       title: msg.subject?.trim() || titleFrom(msg.text),
@@ -132,7 +139,10 @@ export class ChannelHub implements ReplyDelivery {
       detail: { number: created.number, from: sender.email, assurance: sender.assurance },
     });
     const firstName = sender.name.split(" ")[0] || "there";
-    if (org.settings.paused) {
+    if (flooding) {
+      this.store.audit({ orgId: org.id, actor: msg.channel, action: "intake.throttled", target: created.id, detail: { from: sender.email } });
+    }
+    if (org.settings.paused || flooding) {
       this.store.updateTicket(created.id, { assignee: "unassigned" }, "system");
       const ackText = `Hi ${firstName}, the IT team has your request (ticket #${created.number}) and will be in touch here.`;
       const delivery = await this.deliverReply(created, ackText);

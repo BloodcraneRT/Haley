@@ -347,6 +347,22 @@ describe("chat bridge, simulator and controls", () => {
     expect(threadId).toMatch(/^sim-/);
   });
 
+  it("stops auto-starting Haley for a requester who floods new tickets", async () => {
+    const llm = new ScriptedLlm(...Array.from({ length: 10 }, () => turn(text("ok"))));
+    const { app, agent, store } = await makeApp(llm);
+    const org = store.createOrg({ name: "Acme", domain: "acme.example" });
+    const send = (i: number) =>
+      app.inject({ method: "POST", url: "/api/simulate", payload: { orgId: org.id, email: "spam@acme.example", text: `issue ${i}`, threadId: `t${i}` } });
+    for (let i = 0; i < 10; i++) {
+      const res = (await send(i)).json();
+      await agent.settled(res.runId);
+    }
+    const eleventh = (await send(10)).json();
+    expect(eleventh.runId).toBeNull();
+    expect(store.getTicket(eleventh.ticketId)!.assignee).toBe("unassigned");
+    expect(store.listAudit().map((a) => a.action)).toContain("intake.throttled");
+  });
+
   it("plan mode simulates every change and reports what the live policy would do", async () => {
     const llm = new ScriptedLlm(
       turn(

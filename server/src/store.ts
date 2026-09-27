@@ -820,6 +820,13 @@ export class Store {
     return (rows as Row[]).map((r) => ({ ...(r as unknown as AuditEntry), detail: parse(r.detail, {}) }));
   }
 
+  countTicketsFromRequesterSince(orgId: string, requesterEmail: string, since: string): number {
+    const row = this.db
+      .prepare("SELECT COUNT(*) AS n FROM tickets WHERE org_id = ? AND LOWER(requester_email) = LOWER(?) AND created_at >= ?")
+      .get(orgId, requesterEmail, since) as Row;
+    return Number(row.n);
+  }
+
   /** Security-sensitive changes Haley made on its own for one requester since the given ISO time. */
   countSelfServiceSince(orgId: string, requesterEmail: string, since: string): number {
     const row = this.db
