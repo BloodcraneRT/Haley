@@ -37,6 +37,12 @@ Protected accounts always need a technician, in every mode. The details are in [
 
 ## Quick start
 
+### In your browser (GitHub Codespaces)
+
+On GitHub, click **Code → Codespaces → Create codespace**, or open [codespaces.new/BloodcraneRT/Haley](https://codespaces.new/BloodcraneRT/Haley). It installs, builds and starts Haley, then opens the dashboard on a forwarded port that only your GitHub account can reach. To let Haley work tickets, add `ANTHROPIC_API_KEY` as a [Codespaces secret](https://github.com/settings/codespaces) or add any provider's key on the **AI models** page.
+
+### On your machine
+
 Requires Node.js 22.13 or later.
 
 ```bash
