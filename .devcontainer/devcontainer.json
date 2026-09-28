@@ -1,0 +1,24 @@
+{
+  // Opens Haley in GitHub Codespaces (or VS Code Dev Containers) with the dashboard on a forwarded port.
+  "name": "Haley",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "hostRequirements": { "cpus": 2 },
+  "postCreateCommand": "npm run install:all && npm run build",
+  // Runs in a terminal each time you connect; the server serves the API and the built dashboard on 8787.
+  // No HALEY_API_TOKEN is set, so there is no sign-in: the forwarded port is private to your GitHub account.
+  "postAttachCommand": {
+    "haley": "npm start"
+  },
+  "forwardPorts": [8787],
+  "portsAttributes": {
+    "8787": { "label": "Haley dashboard", "onAutoForward": "openBrowser" }
+  },
+  // Add ANTHROPIC_API_KEY (or another provider's key) as a Codespaces secret to let Haley work tickets,
+  // or add a key later on the AI models page.
+  "secrets": {
+    "ANTHROPIC_API_KEY": { "description": "Optional. Lets Haley run on Claude; other providers can be added on the AI models page." }
+  },
+  "customizations": {
+    "codespaces": { "openFiles": ["README.md"] }
+  }
+}

@@ -1,0 +1,220 @@
+/* Design tokens. Light is the default; dark follows the OS unless the user pins a theme. */
+
+:root {
+  color-scheme: light;
+
+  --font-sans: "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --text-xs: 11.5px;
+  --text-sm: 12.5px;
+  --text-md: 13.5px;
+  --text-lg: 15px;
+  --text-xl: 19px;
+  --text-2xl: 24px;
+
+  --radius-sm: 5px;
+  --radius: 8px;
+  --radius-lg: 12px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --sidebar-width: 236px;
+  --content-max: 1240px;
+
+  /* surfaces */
+  --bg: #f7f7f8;
+  --sidebar-bg: #f0f0f2;
+  --surface: #ffffff;
+  --surface-2: #fafafb;
+  --surface-sunken: #f3f3f5;
+  --surface-hover: #f4f4f6;
+  --overlay: rgba(15, 15, 20, 0.36);
+
+  --border: #e4e4e8;
+  --border-subtle: #ececef;
+  --border-strong: #d2d2d8;
+
+  /* text */
+  --text: #17171c;
+  --text-2: #4d4d57;
+  --text-3: #6b6b76;
+  --text-on-accent: #ffffff;
+
+  /* brand */
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eef0ff;
+  --accent-text: #4338ca;
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px #6d68f0;
+
+  --danger: #c42b2b;
+  --danger-hover: #a82222;
+
+  --shadow-sm: 0 1px 2px rgba(16, 16, 24, 0.05);
+  --shadow: 0 1px 2px rgba(16, 16, 24, 0.04), 0 2px 8px rgba(16, 16, 24, 0.04);
+  --shadow-lg: 0 12px 40px rgba(16, 16, 24, 0.16), 0 2px 6px rgba(16, 16, 24, 0.06);
+
+  /* status tones: background / foreground / dot */
+  --tone-neutral-bg: #f0f0f2;
+  --tone-neutral-fg: #4d4d57;
+  --tone-neutral-dot: #9a9aa5;
+  --tone-blue-bg: #e9f0fe;
+  --tone-blue-fg: #1c4fd0;
+  --tone-blue-dot: #3b76f6;
+  --tone-green-bg: #e5f5ea;
+  --tone-green-fg: #177538;
+  --tone-green-dot: #22a152;
+  --tone-amber-bg: #fcf1d8;
+  --tone-amber-fg: #975407;
+  --tone-amber-dot: #e39a13;
+  --tone-red-bg: #fcebeb;
+  --tone-red-fg: #b3201f;
+  --tone-red-dot: #e0443f;
+  --tone-violet-bg: #f1ecfe;
+  --tone-violet-fg: #6528d4;
+  --tone-violet-dot: #8b5cf6;
+  --tone-teal-bg: #e1f4f3;
+  --tone-teal-fg: #0d6c66;
+  --tone-teal-dot: #14a39a;
+
+  /* timeline accents */
+  --note-bg: #fffaeb;
+  --note-border: #f1dfa6;
+  --reply-bg: #f1f5ff;
+  --reply-border: #cddaf9;
+  --haley-bg: #f7f5ff;
+  --haley-border: #e2dcfb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --bg: #111114;
+    --sidebar-bg: #0c0c0e;
+    --surface: #18181c;
+    --surface-2: #1c1c21;
+    --surface-sunken: #141417;
+    --surface-hover: #212127;
+    --overlay: rgba(0, 0, 0, 0.6);
+
+    --border: #2a2a31;
+    --border-subtle: #232329;
+    --border-strong: #3b3b44;
+
+    --text: #ececf1;
+    --text-2: #b4b4bf;
+    --text-3: #8f8f9b;
+
+    --accent: #5b54f0;
+    --accent-hover: #6c66f5;
+    --accent-soft: rgba(110, 104, 245, 0.16);
+    --accent-text: #a5a1ff;
+    --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px #8a85ff;
+
+    --danger: #d23b3b;
+    --danger-hover: #e04d4d;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.2);
+    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.3);
+
+    --tone-neutral-bg: #26262c;
+    --tone-neutral-fg: #c5c5cf;
+    --tone-neutral-dot: #85858f;
+    --tone-blue-bg: rgba(59, 118, 246, 0.17);
+    --tone-blue-fg: #94b6ff;
+    --tone-blue-dot: #5a8cff;
+    --tone-green-bg: rgba(34, 161, 82, 0.17);
+    --tone-green-fg: #7ddc9d;
+    --tone-green-dot: #34c46a;
+    --tone-amber-bg: rgba(227, 154, 19, 0.17);
+    --tone-amber-fg: #f5c26b;
+    --tone-amber-dot: #eaa62a;
+    --tone-red-bg: rgba(224, 68, 63, 0.18);
+    --tone-red-fg: #ff9f9b;
+    --tone-red-dot: #f0605b;
+    --tone-violet-bg: rgba(139, 92, 246, 0.2);
+    --tone-violet-fg: #c7b3ff;
+    --tone-violet-dot: #a07cf8;
+    --tone-teal-bg: rgba(20, 163, 154, 0.18);
+    --tone-teal-fg: #6fdcd3;
+    --tone-teal-dot: #2cbfb4;
+
+    --note-bg: rgba(227, 154, 19, 0.07);
+    --note-border: rgba(227, 154, 19, 0.25);
+    --reply-bg: rgba(59, 118, 246, 0.08);
+    --reply-border: rgba(59, 118, 246, 0.28);
+    --haley-bg: rgba(139, 92, 246, 0.08);
+    --haley-border: rgba(139, 92, 246, 0.26);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #111114;
+  --sidebar-bg: #0c0c0e;
+  --surface: #18181c;
+  --surface-2: #1c1c21;
+  --surface-sunken: #141417;
+  --surface-hover: #212127;
+  --overlay: rgba(0, 0, 0, 0.6);
+
+  --border: #2a2a31;
+  --border-subtle: #232329;
+  --border-strong: #3b3b44;
+
+  --text: #ececf1;
+  --text-2: #b4b4bf;
+  --text-3: #8f8f9b;
+
+  --accent: #5b54f0;
+  --accent-hover: #6c66f5;
+  --accent-soft: rgba(110, 104, 245, 0.16);
+  --accent-text: #a5a1ff;
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px #8a85ff;
+
+  --danger: #d23b3b;
+  --danger-hover: #e04d4d;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.3);
+
+  --tone-neutral-bg: #26262c;
+  --tone-neutral-fg: #c5c5cf;
+  --tone-neutral-dot: #85858f;
+  --tone-blue-bg: rgba(59, 118, 246, 0.17);
+  --tone-blue-fg: #94b6ff;
+  --tone-blue-dot: #5a8cff;
+  --tone-green-bg: rgba(34, 161, 82, 0.17);
+  --tone-green-fg: #7ddc9d;
+  --tone-green-dot: #34c46a;
+  --tone-amber-bg: rgba(227, 154, 19, 0.17);
+  --tone-amber-fg: #f5c26b;
+  --tone-amber-dot: #eaa62a;
+  --tone-red-bg: rgba(224, 68, 63, 0.18);
+  --tone-red-fg: #ff9f9b;
+  --tone-red-dot: #f0605b;
+  --tone-violet-bg: rgba(139, 92, 246, 0.2);
+  --tone-violet-fg: #c7b3ff;
+  --tone-violet-dot: #a07cf8;
+  --tone-teal-bg: rgba(20, 163, 154, 0.18);
+  --tone-teal-fg: #6fdcd3;
+  --tone-teal-dot: #2cbfb4;
+
+  --note-bg: rgba(227, 154, 19, 0.07);
+  --note-border: rgba(227, 154, 19, 0.25);
+  --reply-bg: rgba(59, 118, 246, 0.08);
+  --reply-border: rgba(59, 118, 246, 0.28);
+  --haley-bg: rgba(139, 92, 246, 0.08);
+  --haley-border: rgba(139, 92, 246, 0.26);
+}
