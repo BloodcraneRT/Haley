@@ -72,10 +72,10 @@ Dex is the same product idea as Haley, built by the team behind SysAid, with far
 | PSA sync | Many PSAs; sync depth unknown | Syncro and **Dynamics 365** (Dex doesn't list Dynamics); two-way with comment mirroring and loop prevention |
 | SLA timers, client value report, end-user simulator | Not described | **Yes** |
 | Integration breadth | **60–70+** | M365, Google, Slack, Duo, Okta, Twilio, 2 PSAs |
-| Intune and device actions | **Yes, plus a Windows agent** | **No → being added** |
+| Intune and device actions | **Yes, plus a Windows agent** | **Added**: device details and apps, BitLocker keys, sync, restart, retire, wipe, remediations |
 | Permissions model | **Delegated, per-user** | App credential per tenant |
-| Policy detail | **Six layers, resource-owner approvals** | Autonomy × risk × identity, protected accounts, rate caps, kill switch → **being extended** |
-| Onboarding | **Automatic discovery and consent** | Paste credentials → **being replaced by admin consent and discovery** |
+| Policy detail | **Six layers, resource-owner approvals** | Autonomy × risk × identity, protected accounts, rate caps, kill switch, **plus per-client rules, named approvers and hard rails** |
+| Onboarding | **Automatic discovery and consent** | **Admin-consent link (GDAP-ready) and tenant discovery**; per-tenant app still supported |
 | Memory and learning | **Yes** | Knowledge base only |
 | Ready-made recipes | **About 130** | A few demo runbooks |
 | Compliance | SysAid certifications; SOC 2 in progress | None yet |
@@ -91,17 +91,17 @@ Dex is the same product idea as Haley, built by the team behind SysAid, with far
 
 ## What to incorporate (prioritized)
 
-1. **Intune and device actions (in progress).**
+1. **Intune and device actions (done).**
    - List a user's devices; list installed apps; check compliance.
    - Look up the BitLocker recovery key as a sealed secret.
    - Sync, restart, retire or wipe a device, each gated by the policy engine.
    - Run an Intune remediation on demand.
    - Later: a lightweight Windows agent for local diagnostics.
-2. **Guided M365 onboarding (in progress).**
+2. **Guided M365 onboarding (done).**
    - One multi-tenant Haley app registration, with an admin-consent link per client.
    - Tenant discovery (domains, licences, users, admins, Intune) that suggests client settings: email domains, Teams tenant, protected admin accounts.
    - Document GDAP (Microsoft's delegated admin access for partners) for MSPs.
-3. **Per-client policy rules (in progress).**
+3. **Per-client policy rules (done).**
    - Allow, require approval or deny, matched by tool, risk, target, department and requester.
    - Approvals routed to named approvers.
    - Hardcoded rails that no rule can loosen: no MFA bypass for someone else, no admin-role grants, no wiping without a technician.

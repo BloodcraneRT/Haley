@@ -83,6 +83,24 @@ export function PausedBanner({ orgName, onResume, busy }: { orgName: string; onR
 
 // ------------------------------------------------------------------ list editor
 
+export type ListKind = "email" | "domain" | "account" | "tool" | "text";
+
+/** How each kind of list splits pasted text, normalizes and validates entries. */
+const LIST_KINDS: Record<ListKind, { split: RegExp; normalize: (v: string) => string; valid?: RegExp; noun: string }> = {
+  email: { split: /[\s,;]+/, normalize: (v) => v.toLowerCase(), valid: EMAIL_RE, noun: "a valid email address" },
+  domain: { split: /[\s,;]+/, normalize: (v) => v.toLowerCase().replace(/^@/, ""), valid: DOMAIN_RE, noun: "a valid domain" },
+  // Policy rule account patterns: an address, "*@domain", "@domain" or "*".
+  account: {
+    split: /[\s,;]+/,
+    normalize: (v) => v.toLowerCase(),
+    valid: /^(\*|\*?@[^\s@*]+\.[^\s@*]+|[^\s@*]+@[^\s@*]+\.[^\s@*]+)$/,
+    noun: "an address, *@domain or @domain",
+  },
+  tool: { split: /[\s,;]+/, normalize: (v) => v.toLowerCase(), valid: /^[a-z0-9_*-]+$/, noun: "a tool name (letters, digits, _ and *)" },
+  // Free text such as departments or people's names: only commas and semicolons separate.
+  text: { split: /[,;\n]+/, normalize: (v) => v.replace(/\s+/g, " "), noun: "valid" },
+};
+
 /** Edits a list of emails or domains as removable chips. Enter, comma or paste adds. */
 export function ListEditor({
   id,
@@ -92,28 +110,33 @@ export function ListEditor({
   onChange,
   kind,
   placeholder,
+  suggestions,
 }: {
   id: string;
   label: string;
   help?: string;
   values: string[];
   onChange: (values: string[]) => void;
-  kind: "email" | "domain";
+  kind: ListKind;
   placeholder?: string;
+  /** Offered as autocomplete options. */
+  suggestions?: string[];
 }) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const helpId = useId();
+  const listId = useId();
+  const spec = LIST_KINDS[kind];
 
   const add = (raw: string) => {
     const items = raw
-      .split(/[\s,;]+/)
-      .map((v) => v.trim().toLowerCase().replace(/^@/, ""))
+      .split(spec.split)
+      .map((v) => spec.normalize(v.trim()))
       .filter(Boolean);
     if (!items.length) return;
-    const bad = items.filter((v) => !(kind === "email" ? EMAIL_RE : DOMAIN_RE).test(v));
+    const bad = spec.valid ? items.filter((v) => !spec.valid!.test(v)) : [];
     if (bad.length) {
-      setError(`${bad.join(", ")} ${bad.length === 1 ? "isn't" : "aren't"} a valid ${kind === "email" ? "email address" : "domain"}.`);
+      setError(`${bad.join(", ")} ${bad.length === 1 ? "isn't" : "aren't"} ${spec.noun}.`);
       return;
     }
     onChange([...new Set([...values, ...items])]);
@@ -151,9 +174,10 @@ export function ListEditor({
             id={id}
             className="input input-sm"
             type="text"
-            inputMode={kind === "email" ? "email" : "url"}
+            inputMode={kind === "email" ? "email" : kind === "domain" ? "url" : "text"}
             value={draft}
             placeholder={placeholder}
+            list={suggestions?.length ? listId : undefined}
             aria-describedby={helpId}
             aria-invalid={Boolean(error)}
             onChange={(e) => {
@@ -164,7 +188,7 @@ export function ListEditor({
             onBlur={() => draft.trim() && add(draft)}
             onPaste={(e) => {
               const text = e.clipboardData.getData("text");
-              if (/[\s,;]/.test(text.trim())) {
+              if (spec.split.test(text.trim())) {
                 e.preventDefault();
                 add(text);
               }
@@ -176,6 +200,15 @@ export function ListEditor({
             <Plus className="icon-sm" aria-hidden="true" /> Add
           </button>
         </div>
+        {suggestions && suggestions.length > 0 && (
+          <datalist id={listId}>
+            {suggestions
+              .filter((v) => !values.includes(v))
+              .map((v) => (
+                <option key={v} value={v} />
+              ))}
+          </datalist>
+        )}
       </div>
       {error ? (
         <span className="error-text" role="alert" id={helpId}>
@@ -194,8 +227,9 @@ export function ListEditor({
 
 // ------------------------------------------------------------------ settings form
 
-// The kill switch and AI model are saved on their own, outside this form.
-type Draft = Omit<OrgSettings, "paused" | "modelProfileId">;
+// The kill switch, AI model and policy rules are saved on their own, outside this form.
+// Policy rules have their own section.
+type Draft = Omit<OrgSettings, "paused" | "modelProfileId" | "policyRules">;
 
 const toDraft = (s: OrgSettings): Draft => ({
   emailDomains: s.emailDomains,

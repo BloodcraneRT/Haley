@@ -75,7 +75,37 @@ export interface OrgSettings {
   sla: Record<TicketPriority, SlaTarget>;
   /** AI model profile for this client; empty uses the workspace default. */
   modelProfileId: string;
+  /** Client rules layered on the autonomy policy, checked in order; the first enabled match wins. */
+  policyRules: PolicyRule[];
 }
+
+/** deny: blocked; approve: goes to the approval queue; allow: runs without a sign-off the autonomy level would have asked for. */
+export type PolicyEffect = "allow" | "approve" | "deny";
+export const POLICY_EFFECTS: PolicyEffect[] = ["deny", "approve", "allow"];
+
+/** A client policy rule (server/src/types.ts). Empty match lists match anything. */
+export interface PolicyRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Tool names; "*" is a wildcard (e.g. "m365_*_device"). */
+  tools: string[];
+  risks: Array<"write" | "destructive">;
+  /** Target accounts: "jane@contoso.com", "*@contoso.com" or "@contoso.com". */
+  targets: string[];
+  /** The target account's Microsoft 365 department. */
+  departments: string[];
+  /** Who asked, same patterns as targets. */
+  requesters: string[];
+  effect: PolicyEffect;
+  /** For "approve": technicians (by the name they sign in with) who may approve. Empty means any technician. */
+  approvers: string[];
+  /** For "allow": the requester identity needed before the rule lets a change run on its own. */
+  minAssurance: Exclude<Assurance, "none">;
+}
+
+/** A rule as sent to the server; new rules get an id server-side. */
+export type PolicyRuleInput = Omit<PolicyRule, "id"> & { id?: string };
 
 export interface Org {
   id: string;
@@ -211,6 +241,8 @@ export interface Action {
   rationale: string;
   /** Why the policy held or blocked this call (empty when it ran automatically). */
   policy_reason: string;
+  /** Technicians a client rule named as the only ones who may decide this (empty: any technician). */
+  approvers: string[];
   status: ActionStatus;
   result: unknown;
   has_secrets: boolean;
@@ -568,6 +600,43 @@ export interface PsaPatch {
   enabled?: boolean;
 }
 
+// ------------------------------------------------------------------ Microsoft 365 onboarding (server/src/routes/m365Onboarding.ts)
+
+export interface M365OnboardingInfo {
+  /** Whether the MSP's multi-tenant app (HALEY_M365_CLIENT_ID / _SECRET) is set up for admin-consent onboarding. */
+  mspAppConfigured: boolean;
+  clientId: string | null;
+  redirectUri: string;
+  permissions: string[];
+}
+
+export interface M365ConsentLink {
+  url: string;
+  expiresInMinutes: number;
+}
+
+/** server/src/connectors/m365/discovery.ts */
+export interface M365Discovery {
+  tenantId: string;
+  organization: string;
+  domains: string[];
+  licenses: Array<{ sku: string; purchased: number; assigned: number }>;
+  users: { total: number; enabled: number; licensed: number; truncated: boolean };
+  /** null when Intune isn't available. */
+  devices: { total: number; noncompliant: number; staleOver30Days: number } | null;
+  admins: Array<{ role: string; userPrincipalName: string; displayName: string }>;
+  suggestions: { emailDomains: string[]; teamsTenantId: string; protectedAccounts: string[] };
+  /** Things Haley couldn't read, usually a missing permission. */
+  warnings: string[];
+  discoveredAt: string;
+}
+
+export interface ApplyDiscoveryInput {
+  emailDomains?: boolean;
+  teamsTenantId?: boolean;
+  protectedAccounts?: boolean;
+}
+
 export interface Stats {
   orgs: number;
   integrations: number;
@@ -726,7 +795,7 @@ export interface OrgInput {
   domain?: string;
   autonomy?: Autonomy;
   notes?: string;
-  settings?: Partial<OrgSettings>;
+  settings?: Partial<Omit<OrgSettings, "policyRules">> & { policyRules?: PolicyRuleInput[] };
 }
 
 export interface ScheduleInput {
@@ -791,6 +860,14 @@ export const api = {
   testIntegration: (id: string) => post<Integration>(`/api/integrations/${enc(id)}/test`),
   removeIntegration: (id: string) => del<{ ok: true }>(`/api/integrations/${enc(id)}`),
   integrationTools: (id: string) => get<ToolInfo[]>(`/api/integrations/${enc(id)}/tools`),
+
+  m365Onboarding: () => get<M365OnboardingInfo>("/api/m365/onboarding"),
+  /** `tenant`: the customer's tenant ID or verified domain, for a partner admin consenting through GDAP. */
+  m365ConsentLink: (orgId: string, tenant?: string) =>
+    post<M365ConsentLink>(`/api/orgs/${enc(orgId)}/m365/consent`, tenant?.trim() ? { tenant: tenant.trim() } : {}),
+  discoverM365: (integrationId: string) => post<M365Discovery>(`/api/integrations/${enc(integrationId)}/discover`),
+  m365Discovery: (integrationId: string) => get<M365Discovery>(`/api/integrations/${enc(integrationId)}/discovery`),
+  applyM365Discovery: (orgId: string, input: ApplyDiscoveryInput) => post<Org>(`/api/orgs/${enc(orgId)}/m365/apply-discovery`, input),
 
   tickets: (q: { orgId?: string; status?: string; search?: string } = {}) => get<TicketWithOrg[]>("/api/tickets", q),
   ticket: (id: string) => get<TicketDetail>(`/api/tickets/${enc(id)}`),

@@ -57,7 +57,8 @@ export async function discoverM365(api: M365Api): Promise<M365Discovery> {
     suggestions: {
       // The onmicrosoft.com domain never receives real user mail.
       emailDomains: domains.filter((d) => !d.endsWith(".onmicrosoft.com")),
-      teamsTenantId: org.id,
+      // Only a real tenant GUID can route Teams messages.
+      teamsTenantId: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(org.id) ? org.id : "",
       protectedAccounts: [...new Set(admins.map((a) => a.userPrincipalName.toLowerCase()))],
     },
     warnings,

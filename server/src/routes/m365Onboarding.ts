@@ -183,7 +183,7 @@ export function registerM365Onboarding(app: FastifyInstance, deps: OnboardingDep
     const pick = parsed.data;
     const settings = {
       ...(pick.emailDomains ? { emailDomains: merge(org.settings.emailDomains, discovery.suggestions.emailDomains) } : {}),
-      ...(pick.teamsTenantId ? { teamsTenantId: discovery.suggestions.teamsTenantId } : {}),
+      ...(pick.teamsTenantId && discovery.suggestions.teamsTenantId ? { teamsTenantId: discovery.suggestions.teamsTenantId } : {}),
       ...(pick.protectedAccounts ? { protectedAccounts: merge(org.settings.protectedAccounts, discovery.suggestions.protectedAccounts) } : {}),
     };
     const updated = store.updateOrg(org.id, { settings } as never)!;

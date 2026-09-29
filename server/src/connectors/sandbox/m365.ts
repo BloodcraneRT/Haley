@@ -94,6 +94,8 @@ function withIntuneData(state: M365SandboxState): M365SandboxState {
   return state;
 }
 
+/** A fixed, GUID-shaped tenant id so sandbox settings validate like real ones. */
+export const SANDBOX_TENANT_ID = "00000000-0000-4000-8000-00000000c0de";
 const SKU_E3 = "05e9a617-0261-4cee-bb44-138d3ef5d965";
 const SKU_BP = "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46";
 const SKU_EXO = "4b9405b0-7788-4568-add1-99614e613b69";
@@ -228,7 +230,7 @@ export class SandboxM365Api implements M365Api {
   }
 
   async organization() {
-    return { id: "sandbox-tenant", displayName: this.state.displayName, verifiedDomains: [this.state.domain, `${this.state.domain.split(".")[0]}.onmicrosoft.com`] };
+    return { id: SANDBOX_TENANT_ID, displayName: this.state.displayName, verifiedDomains: [this.state.domain, `${this.state.domain.split(".")[0]}.onmicrosoft.com`] };
   }
 
   async listUsers(search?: string) {

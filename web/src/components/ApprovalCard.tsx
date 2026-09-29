@@ -1,4 +1,4 @@
-import { Building, Check, MessageSquareText, ShieldQuestion, Sparkles, Ticket as TicketIcon, Wrench, X, Zap } from "lucide-react";
+import { Building, Check, MessageSquareText, ShieldQuestion, Sparkles, Ticket as TicketIcon, UserCheck, Wrench, X, Zap } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError, errorMessage, type Action, type Approval } from "../api";
@@ -26,8 +26,9 @@ export function ApprovalCard({
   hideContext?: boolean;
   onDecided?: (action: Action, decision: Decision) => void;
 }) {
-  const { toast, refreshStats } = useApp();
+  const { toast, refreshStats, user } = useApp();
   const [note, setNote] = useState("");
+  const [denied, setDenied] = useState<string | null>(null);
   const [showNote, setShowNote] = useState(!compact);
   const [busy, setBusy] = useState<Decision | null>(null);
   const [leaving, setLeaving] = useState(false);
@@ -35,6 +36,7 @@ export function ApprovalCard({
 
   const decide = async (decision: Decision) => {
     setBusy(decision);
+    setDenied(null);
     try {
       const updated = decision === "approve" ? await api.approve(action.id, note.trim()) : await api.reject(action.id, note.trim());
       toast(decision === "approve" ? `Approved: ${action.description}. Haley will continue.` : `Rejected: ${action.description}.`);
@@ -42,6 +44,8 @@ export function ApprovalCard({
       window.setTimeout(() => onDecided?.(updated, decision), 180);
     } catch (err) {
       toast(errorMessage(err), "error");
+      // 403: a client rule names other approvers; keep the reason on the card.
+      if (err instanceof ApiError && err.status === 403) setDenied(err.message);
       // 409: someone else already decided; let the parent refresh.
       if (err instanceof ApiError && err.status === 409) onDecided?.(action, decision);
       setBusy(null);
@@ -51,8 +55,15 @@ export function ApprovalCard({
   };
 
   const noteId = `note-${action.id}`;
+  const approvers = action.approvers ?? [];
 
   const controls = (
+    <>
+      {denied && (
+        <p className="error-text approval-denied" role="alert">
+          {denied}
+        </p>
+      )}
     <div className="approval-actions">
       <button className="btn btn-approve" onClick={() => decide("approve")} disabled={busy !== null}>
         {busy === "approve" ? <Spinner /> : <Check className="icon-sm" aria-hidden="true" />} Approve
@@ -82,11 +93,13 @@ export function ApprovalCard({
         </button>
       )}
     </div>
+    </>
   );
 
   if (minimal) {
     return (
       <div className={`approval-inline ${leaving ? "leaving" : ""}`} aria-label={`Approval: ${action.description}`} role="group">
+        {approvers.length > 0 && <ApproversLine approvers={approvers} user={user} />}
         {controls}
       </div>
     );
@@ -136,6 +149,7 @@ export function ApprovalCard({
 
       <div className="approval-body">
         {action.policy_reason?.trim() && <PolicyReason reason={action.policy_reason} />}
+        {approvers.length > 0 && <ApproversLine approvers={approvers} user={user} />}
         {action.rationale.trim() && (
           <div className="rationale">
             <div className="rationale-label">
@@ -159,6 +173,20 @@ export function ApprovalCard({
 
       {controls}
     </article>
+  );
+}
+
+/** Who a client rule lets decide this approval. */
+function ApproversLine({ approvers, user }: { approvers: string[]; user: string }) {
+  const isMe = approvers.some((a) => a.toLowerCase() === user.trim().toLowerCase());
+  return (
+    <div className="approvers-line">
+      <UserCheck className="icon-sm" aria-hidden="true" />
+      <span>
+        <strong>Needs approval from:</strong> {approvers.join(", ")}
+        {user && !isMe && <span className="muted"> · you're signed in as {user}</span>}
+      </span>
+    </div>
   );
 }
 

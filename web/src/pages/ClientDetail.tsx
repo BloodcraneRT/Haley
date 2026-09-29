@@ -11,6 +11,7 @@ import {
   OctagonPause,
   Plug,
   Plus,
+  Radar,
   RefreshCw,
   ScrollText,
   ShieldCheck,
@@ -38,9 +39,11 @@ import {
 import { AutonomyPicker, PolicyMatrix } from "../components/AutonomyPicker";
 import { Disclosure } from "../components/Disclosure";
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
+import { ConsentConnect, ConsentResultBanner, ConsentUnavailableNote, DiscoveryPanel, useDiscovery } from "../components/M365Onboarding";
 import { ConfirmModal, Modal } from "../components/Modal";
 import { PausedBanner, SafetySettingsForm, usePauseControl } from "../components/OrgSafety";
 import { PageHeader } from "../components/PageHeader";
+import { PolicyRulesSection } from "../components/PolicyRules";
 import { IntegrationStatusPill, ModePill, Pill, RiskPill } from "../components/Pill";
 import { ProviderLogo } from "../components/ProviderLogo";
 import { RelativeTime } from "../components/RelativeTime";
@@ -60,7 +63,23 @@ export function ClientDetailPage() {
   const openTickets = usePoll(() => api.tickets({ orgId: id, status: "open" }), [id]);
   const providers = usePoll(() => api.providers(), []);
   const models = usePoll(() => api.models(), []);
+  const onboarding = usePoll(() => api.m365Onboarding(), []);
   const pause = usePauseControl(org.data, () => void org.reload());
+  const m365 = org.data?.integrations.find((i) => i.provider === "m365");
+  const discovery = useDiscovery(m365);
+  const [consent, setConsent] = useState<{ ok: boolean; detail: string } | null>(null);
+
+  // Microsoft's admin-consent redirect lands here with ?m365=connected|error&detail=…; show it once, then tidy the URL.
+  const consentParam = params.get("m365");
+  useEffect(() => {
+    if (consentParam !== "connected" && consentParam !== "error") return;
+    setConsent({ ok: consentParam === "connected", detail: params.get("detail") ?? "" });
+    const next = new URLSearchParams(params);
+    next.delete("m365");
+    next.delete("detail");
+    setParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consentParam]);
   const [savingAutonomy, setSavingAutonomy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -161,6 +180,7 @@ export function ClientDetailPage() {
       />
 
       {pause.paused && <PausedBanner orgName={o.name} onResume={pause.resume} busy={pause.busy} />}
+      {consent && <ConsentResultBanner result={consent} onDismiss={() => setConsent(null)} />}
 
       <nav className="row row-wrap" style={{ marginBottom: 20 }} aria-label="Client records">
         <Link to={`/tickets?orgId=${o.id}`} className="btn btn-sm">
@@ -214,8 +234,19 @@ export function ClientDetailPage() {
             ) : (
               <div className="integrations">
                 {o.integrations.map((i) => (
-                  <IntegrationCard key={i.id} integration={i} kind={kindOf(i.provider)} onChanged={() => void org.reload()} />
+                  <IntegrationCard
+                    key={i.id}
+                    integration={i}
+                    kind={kindOf(i.provider)}
+                    onChanged={() => void org.reload()}
+                    discover={i.id === m365?.id ? { run: discovery.run, running: discovery.running, done: Boolean(discovery.data) } : undefined}
+                  />
                 ))}
+              </div>
+            )}
+            {!m365 && onboarding.data && (
+              <div style={{ marginTop: 10 }}>
+                {onboarding.data.mspAppConfigured ? <ConsentConnect org={o} info={onboarding.data} /> : <ConsentUnavailableNote />}
               </div>
             )}
             {providers.data && <VerificationStrip integration={verifier} onConnect={() => setConnectOpen(true)} />}
@@ -237,6 +268,18 @@ export function ClientDetailPage() {
               </Disclosure>
             </div>
           </section>
+
+          {m365 && discovery.data && (
+            <DiscoveryPanel
+              org={o}
+              discovery={discovery.data}
+              running={discovery.running}
+              onRerun={() => void discovery.run()}
+              onApplied={() => void org.reload()}
+            />
+          )}
+
+          <PolicyRulesSection org={o} onSaved={() => void org.reload()} />
 
           <SafetySettingsForm org={o} onSaved={() => void org.reload()} pause={pause} />
 
@@ -288,6 +331,7 @@ export function ClientDetailPage() {
       <ConnectModal
         open={connectOpen}
         org={o}
+        consentAvailable={Boolean(onboarding.data?.mspAppConfigured)}
         onClose={() => setConnectOpen(false)}
         onConnected={() => {
           setConnectOpen(false);
@@ -396,7 +440,18 @@ function OrgDetailsForm({ org, onSaved }: { org: OrgDetail; onSaved: () => void 
   );
 }
 
-function IntegrationCard({ integration: i, kind, onChanged }: { integration: Integration; kind: ProviderInfo["kind"] | undefined; onChanged: () => void }) {
+function IntegrationCard({
+  integration: i,
+  kind,
+  onChanged,
+  discover,
+}: {
+  integration: Integration;
+  kind: ProviderInfo["kind"] | undefined;
+  onChanged: () => void;
+  /** Microsoft 365 only: run a tenant discovery. */
+  discover?: { run: () => Promise<void>; running: boolean; done: boolean };
+}) {
   const { toast } = useApp();
   const [testing, setTesting] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -474,6 +529,16 @@ function IntegrationCard({ integration: i, kind, onChanged }: { integration: Int
         {!isChannel && !isVerifier && (
           <button className="btn btn-sm" onClick={() => setToolsOpen(true)}>
             <Wrench className="icon-sm" aria-hidden="true" /> View tools
+          </button>
+        )}
+        {discover && (
+          <button
+            className="btn btn-sm"
+            onClick={() => void discover.run()}
+            disabled={discover.running}
+            title="Read the tenant's domains, licenses, devices and admins, and suggest settings"
+          >
+            {discover.running ? <Spinner /> : <Radar className="icon-sm" aria-hidden="true" />} {discover.done ? "Discover again" : "Discover tenant"}
           </button>
         )}
         <span className="spacer" />
@@ -560,11 +625,14 @@ function ToolsModal({ integration, open, onClose }: { integration: Integration; 
 function ConnectModal({
   open,
   org,
+  consentAvailable,
   onClose,
   onConnected,
 }: {
   open: boolean;
   org: OrgDetail;
+  /** The MSP app is configured, so Microsoft 365 can be connected with admin consent instead. */
+  consentAvailable?: boolean;
   onClose: () => void;
   onConnected: (i: Integration) => void;
 }) {
@@ -737,6 +805,16 @@ function ConnectModal({
                   </button>
                 </div>
               </div>
+              )}
+
+              {info.id === "m365" && mode === "live" && consentAvailable && (
+                <div className="banner banner-info" role="note">
+                  <ShieldCheck className="icon" aria-hidden="true" />
+                  <span>
+                    <strong>Easier: admin consent.</strong> Close this and use <strong>Connect with admin consent</strong> on the client page. No app
+                    registration or secret needed.
+                  </span>
+                </div>
               )}
 
               {info.warning && (
