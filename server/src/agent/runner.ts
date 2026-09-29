@@ -6,7 +6,7 @@ import type { ReplyDelivery } from "../channels/types.js";
 import { ASSURANCE_RANK, effectiveAssurance, type Action, type Org, type Run, type RunMode } from "../types.js";
 import { builtinTools } from "./builtinTools.js";
 import { textOf, toolCallsOf, type ChatMessage, type LlmClient, type ModelResponse, type Part, type ToolSpec } from "../ai/types.js";
-import { decide, targetsOf, type Requester } from "./policy.js";
+import { applyRails, applyRules, decide, targetsOf, type Decision, type Requester } from "./policy.js";
 import { orgContext, SYSTEM_PROMPT, ticketContext } from "./prompts.js";
 
 const AGENT = "haley";
@@ -17,6 +17,8 @@ const MAX_RESULT_CHARS = 40_000;
 type ToolResult = { content: string; is_error: boolean };
 
 export class RunConflictError extends Error {}
+/** The technician deciding an approval isn't one of the approvers a client rule named. */
+export class ApproverNotAllowedError extends Error {}
 
 export function toToolSpec(tool: HaleyTool): ToolSpec {
   const { $schema: _ignored, ...schema } = z.toJSONSchema(tool.input, { io: "input" }) as Record<string, unknown>;
@@ -115,6 +117,9 @@ export class AgentService {
   async decideAction(actionId: string, approve: boolean, decidedBy: string, note = ""): Promise<Action> {
     const action = this.store.getAction(actionId);
     if (!action) throw new Error(`No action ${actionId}`);
+    if (action.status === "pending_approval" && action.approvers.length && !action.approvers.some((a) => a.toLowerCase() === decidedBy.toLowerCase())) {
+      throw new ApproverNotAllowedError(`Only ${action.approvers.join(", ")} can decide this (client policy).`);
+    }
     if (!this.store.claimPendingAction(actionId, decidedBy, note, approve)) {
       throw new RunConflictError(`Action ${actionId} is no longer awaiting approval.`);
     }
@@ -308,10 +313,10 @@ export class AgentService {
         pending.results[call.id] = { content: `Invalid input: ${z.prettifyError(parsed.error)}`, is_error: true };
         continue;
       }
-      const targets = targetsOf(parsed.data);
+      const targets = tool.resolveTargets ? await tool.resolveTargets(parsed.data).catch(() => targetsOf(parsed.data)) : targetsOf(parsed.data);
       const protectedList = org.settings.protectedAccounts.map((a) => a.toLowerCase());
       const requester = this.requesterFor(run, org);
-      const decision = decide({
+      let decision: Decision = decide({
         autonomy: org.autonomy,
         risk: tool.risk,
         grantsAccess: Boolean(tool.grantsAccess),
@@ -325,6 +330,13 @@ export class AgentService {
           : 0,
         maxSelfServicePerDay: org.settings.maxSelfServicePerUserPerDay,
       });
+      if (tool.risk === "write" || tool.risk === "destructive") {
+        const rules = org.settings.policyRules ?? [];
+        const departments = rules.some((r) => r.enabled && r.departments.length) ? await this.departmentsOf(targets, tools) : [];
+        decision = applyRules(decision, rules, { tool: tool.name, risk: tool.risk, targets, departments, requester });
+        const guardReason = tool.guard ? await tool.guard(parsed.data).catch(() => null) : null;
+        decision = applyRails(decision, tool.rail, guardReason, targets, requester);
+      }
       const description = tool.describe?.(parsed.data) ?? tool.name;
       // After the account owner rejected identity verification, Haley makes no customer changes on this ticket at all.
       if (
@@ -374,6 +386,7 @@ export class AgentService {
         rationale,
         status: decision.outcome === "approve" ? "pending_approval" : decision.outcome === "block" ? "blocked" : "approved",
         policyReason: decision.reason,
+        approvers: decision.outcome === "approve" ? decision.approvers : [],
       });
       if (decision.outcome === "run") {
         pending.results[call.id] = await this.execute(run, action, tool, parsed.data);
@@ -433,8 +446,9 @@ export class AgentService {
       let secrets: Record<string, string> | null = null;
       if (output instanceof SensitiveResult) {
         secrets = output.secrets;
+        const owners = output.owners;
         output = output.visible;
-        const note = await this.deliverSecretToRequester(run, action, secrets);
+        const note = await this.deliverSecretToRequester(run, action, secrets, owners);
         if (output && typeof output === "object") {
           const visible = { ...(output as Record<string, unknown>) };
           for (const key of Object.keys(secrets)) if (key in visible) visible[key] = note;
@@ -465,18 +479,35 @@ export class AgentService {
     }
   }
 
+  /** Directory departments of the target accounts (lowercase), for client rules that match on department. */
+  private async departmentsOf(targets: string[], tools: Map<string, HaleyTool>): Promise<string[]> {
+    const lookup = tools.get("m365_get_user");
+    if (!lookup || !targets.length) return [];
+    const ctx: ToolContext = { orgId: "", runId: "", ticketId: null };
+    const departments: string[] = [];
+    for (const target of targets) {
+      const user = (await lookup.run({ user: target }, ctx).catch(() => null)) as { department?: string | null } | null;
+      if (!user?.department) return [];
+      departments.push(user.department.toLowerCase());
+    }
+    return departments;
+  }
+
   /**
    * Self-service: when a verified requester changed their own account, send the credential to them
    * privately on their channel. Otherwise it waits for a technician to reveal and deliver it.
    */
-  private async deliverSecretToRequester(run: Run, action: Action, secrets: Record<string, string>): Promise<string> {
+  private async deliverSecretToRequester(run: Run, action: Action, secrets: Record<string, string>, owners?: string[]): Promise<string> {
     const fallback = "[held for a technician to deliver securely]";
     const ticket = run.ticket_id ? this.store.getTicket(run.ticket_id) : null;
     if (!ticket || !this.delivery || ASSURANCE_RANK[effectiveAssurance(ticket)] < ASSURANCE_RANK.chat) return fallback;
-    const targets = targetsOf(action.input);
+    const targets = owners ?? targetsOf(action.input);
     const self = ticket.requester_email.toLowerCase();
     if (!self || targets.length === 0 || !targets.every((t) => t === self)) return fallback;
-    const result = await this.delivery.deliverSecret(ticket, `Here are your sign-in details for ${self}:`, secrets, action.id);
+    const heading = "recoveryKey" in secrets || "recoveryKey1" in secrets
+      ? `Here's the BitLocker recovery key for your device ${secrets.device ?? ""}. Type it at the recovery screen, matching the key ID shown there:`
+      : `Here are your sign-in details for ${self}:`;
+    const result = await this.delivery.deliverSecret(ticket, heading, secrets, action.id);
     this.store.addTicketEvent(
       ticket.id,
       "action",

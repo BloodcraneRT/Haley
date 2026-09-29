@@ -18,6 +18,11 @@ export interface HaleyConfig {
   webDist: string | null;
   production: boolean;
   channels: ChannelConfig;
+  /**
+   * The MSP's own multi-tenant Entra app. When set, clients connect Microsoft 365 by approving an
+   * admin-consent link instead of creating an app registration in every tenant.
+   */
+  m365App: { clientId: string; clientSecret: string } | null;
 }
 
 /** End-user channel credentials. A channel is enabled when its secrets are set. */
@@ -78,6 +83,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HaleyConfig {
     // Built dashboard; from src/ or dist/ this resolves to <repo>/web/dist.
     webDist: env.HALEY_WEB_DIST ?? join(import.meta.dirname, "../../web/dist"),
     production,
+    m365App:
+      env.HALEY_M365_CLIENT_ID && env.HALEY_M365_CLIENT_SECRET
+        ? { clientId: env.HALEY_M365_CLIENT_ID.trim(), clientSecret: env.HALEY_M365_CLIENT_SECRET.trim() }
+        : null,
     channels: {
       publicUrl: (env.HALEY_PUBLIC_URL ?? `http://localhost:${env.PORT ?? 8787}`).replace(/\/$/, ""),
       emailHookSecret: env.HALEY_EMAIL_HOOK_SECRET ?? "",

@@ -108,11 +108,18 @@ Every tool declares one. The full decision matrix, including identity assurance,
 - `read`: no side effects.
 - `internal`: writes only inside Haley (ticket fields, notes, replies, KB articles). Never gated.
 - `write`: changes a customer system in a routine, reversible way.
-- `destructive`: security-sensitive or hard to undo. Always needs a human.
+- `destructive`: security-sensitive or hard to undo.
+
+After the matrix, `applyRules` applies the client's policy rules (first match wins), then `applyRails` applies each tool's hard rail:
+- `rail: "technician_only"` always escalates to approval;
+- `rail: "self_only"` escalates unless the target is the requester or a technician;
+- `guard(input)` can force approval based on the real input, such as an admin group.
+
+Tools whose input doesn't name the affected account (devices) implement `resolveTargets(input)`, so identity and self-service checks use the device's owner.
 
 ### Secrets
 
-A tool can return `new SensitiveResult(visible, secrets)`. The runner stores `secrets` sealed in `actions.secrets_sealed`, passes only `visible` to the model and stores only `visible` in the action result. Technicians fetch secrets with `POST /api/actions/:id/reveal`, which writes a `secret.revealed` audit entry.
+A tool can return `new SensitiveResult(visible, secrets, owners?)`. `owners` names whose secret it is when the input doesn't, as with a BitLocker key and the device's owner. The runner stores `secrets` sealed in `actions.secrets_sealed`, passes only `visible` to the model and stores only `visible` in the action result. Technicians fetch secrets with `POST /api/actions/:id/reveal`, which writes a `secret.revealed` audit entry.
 
 ### Prompt injection
 
@@ -152,7 +159,6 @@ These are ranked from the [competitive research](research/COMPETITIVE_LANDSCAPE.
 
 - **Compromised-account playbook**: investigate sign-ins, inbox rules, forwarding and OAuth grants with read-only tools, then contain with approval.
 - **Exchange Online depth**: shared mailbox and calendar permissions, forwarding, message trace, and converting a mailbox to shared on offboarding.
-- **Client onboarding through GDAP or a multi-tenant partner app**, instead of an app registration per tenant.
 - **More PSAs** (HaloPSA, ConnectWise, Autotask) on the same `PsaAdapter` interface, and an **RMM connector** for endpoint scripts.
 - **Per-technician accounts** with SSO and roles, replacing the shared API token.
 - **Service catalog** forms feeding deterministic tools; **tenant standards and drift** checks.

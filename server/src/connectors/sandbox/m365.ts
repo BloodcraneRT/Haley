@@ -1,6 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { ConnectorError, type StateStore } from "../types.js";
-import type { M365Api, M365AuthMethod, M365Device, M365Group, M365ServiceHealth, M365Sku, M365User, NewM365User } from "../m365/api.js";
+import type {
+  M365Api,
+  M365AuthMethod,
+  M365BitLockerKey,
+  M365DetectedApp,
+  M365Device,
+  M365DeviceAction,
+  M365Group,
+  M365Remediation,
+  M365ServiceHealth,
+  M365Sku,
+  M365User,
+  NewM365User,
+} from "../m365/api.js";
 
 interface SandboxUser extends M365User {
   groups: string[];
@@ -18,6 +31,67 @@ export interface M365SandboxState {
   groups: M365Group[];
   devices: M365Device[];
   health: M365ServiceHealth[];
+  /** Installed apps per device id. */
+  detectedApps?: Record<string, M365DetectedApp[]>;
+  /** BitLocker recovery keys per Entra device id. */
+  bitlocker?: Record<string, M365BitLockerKey[]>;
+  remediations?: M365Remediation[];
+  /** Remote actions and remediation runs Haley sent, newest last. */
+  deviceLog?: Array<{ deviceId: string; action: string; at: string }>;
+  roles?: Array<{ role: string; userId: string }>;
+}
+
+/** Fills in Intune and role data for tenants saved before those features existed. */
+function withIntuneData(state: M365SandboxState): M365SandboxState {
+  const recoveryKey = () =>
+    Array.from({ length: 8 }, () => String(Math.floor(Math.random() * 1_000_000)).padStart(6, "0")).join("-");
+  const officeApps: M365DetectedApp[] = [
+    { name: "Microsoft 365 Apps for enterprise", version: "16.0.18827.20128" },
+    { name: "Microsoft Edge", version: "139.0.3405.86" },
+    { name: "Microsoft Teams", version: "25212.2204.3808.2893" },
+  ];
+  for (const d of state.devices) {
+    d.manufacturer ??= d.operatingSystem === "Windows" ? "Lenovo" : "Apple";
+    d.model ??= d.operatingSystem === "Windows" ? "ThinkPad T14 Gen 5" : d.operatingSystem === "iOS" ? "iPhone 15" : "MacBook Pro 14";
+    d.serialNumber ??= `SN${d.id.replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+    d.azureADDeviceId ??= randomUUID();
+    d.isEncrypted ??= d.complianceState === "compliant";
+    d.totalStorageSpaceInBytes ??= 512 * 1024 ** 3;
+    d.freeStorageSpaceInBytes ??= d.complianceState === "compliant" ? 180 * 1024 ** 3 : 6 * 1024 ** 3;
+  }
+  state.detectedApps ??= Object.fromEntries(
+    state.devices.map((d) => [
+      d.id,
+      d.operatingSystem === "iOS"
+        ? [{ name: "Microsoft Authenticator", version: "6.8.21" }, { name: "Outlook", version: "4.2533.0" }]
+        : [...officeApps, ...(d.complianceState === "noncompliant" ? [{ name: "Adobe Acrobat Reader DC", version: "19.012.20034" }] : [])],
+    ]),
+  );
+  state.bitlocker ??= Object.fromEntries(
+    state.devices
+      .filter((d) => d.operatingSystem === "Windows")
+      .map((d) => [
+        d.azureADDeviceId!,
+        [{ id: randomUUID(), volumeType: "operatingSystemVolume", createdDateTime: new Date(Date.now() - 200 * 86_400_000).toISOString(), key: recoveryKey() }],
+      ]),
+  );
+  state.remediations ??= [
+    { id: randomUUID(), displayName: "Clear Teams cache", description: "Signs the user out of Teams and clears its local cache." },
+    { id: randomUUID(), displayName: "Restart print spooler", description: "Restarts the Print Spooler service and clears stuck jobs." },
+    { id: randomUUID(), displayName: "Disk cleanup", description: "Clears temp files and the Windows Update cache." },
+  ];
+  state.deviceLog ??= [];
+  if (!state.roles) {
+    const grady = state.users.find((u) => u.displayName.startsWith("Grady"));
+    const lynne = state.users.find((u) => u.displayName.startsWith("Lynne"));
+    state.roles = [
+      ...(grady ? [{ role: "Global Administrator", userId: grady.id }] : []),
+      ...(lynne ? [{ role: "Billing Administrator", userId: lynne.id }] : []),
+    ];
+    const breakGlass = state.groups.find((g) => /break-glass/i.test(g.displayName));
+    if (breakGlass) breakGlass.roleAssignable = true;
+  }
+  return state;
 }
 
 const SKU_E3 = "05e9a617-0261-4cee-bb44-138d3ef5d965";
@@ -133,7 +207,7 @@ export class SandboxM365Api implements M365Api {
     domain = "contoso.example",
     displayName = "Contoso (Sandbox)",
   ) {
-    this.state = store.load() ?? seed(domain, displayName);
+    this.state = withIntuneData(store.load() ?? seed(domain, displayName));
     this.store.save(this.state);
   }
 
@@ -154,7 +228,7 @@ export class SandboxM365Api implements M365Api {
   }
 
   async organization() {
-    return { id: "sandbox-tenant", displayName: this.state.displayName, verifiedDomains: [this.state.domain] };
+    return { id: "sandbox-tenant", displayName: this.state.displayName, verifiedDomains: [this.state.domain, `${this.state.domain.split(".")[0]}.onmicrosoft.com`] };
   }
 
   async listUsers(search?: string) {
@@ -275,6 +349,53 @@ export class SandboxM365Api implements M365Api {
   async listDevices(userPrincipalName?: string) {
     const upn = userPrincipalName?.toLowerCase();
     return this.state.devices.filter((d) => !upn || d.userPrincipalName === upn);
+  }
+
+  private device(id: string): M365Device {
+    const d = this.state.devices.find((x) => x.id === id);
+    if (!d) throw new ConnectorError(`Graph GET /deviceManagement/managedDevices/${id} failed (404): Device not found.`, 404);
+    return d;
+  }
+
+  async getDevice(deviceId: string) {
+    return { ...this.device(deviceId) };
+  }
+
+  async listDetectedApps(deviceId: string) {
+    this.device(deviceId);
+    return this.state.detectedApps?.[deviceId] ?? [];
+  }
+
+  async getBitLockerKeys(azureADDeviceId: string) {
+    return this.state.bitlocker?.[azureADDeviceId] ?? [];
+  }
+
+  async deviceAction(deviceId: string, action: M365DeviceAction) {
+    const d = this.device(deviceId);
+    const at = new Date().toISOString();
+    if (action === "sync" || action === "restart") d.lastSyncDateTime = at;
+    if (action === "retire" || action === "wipe") this.state.devices = this.state.devices.filter((x) => x.id !== deviceId);
+    this.state.deviceLog!.push({ deviceId, action, at });
+    this.commit();
+  }
+
+  async listRemediations() {
+    return this.state.remediations ?? [];
+  }
+
+  async runRemediation(deviceId: string, remediationId: string) {
+    this.device(deviceId);
+    const script = this.state.remediations?.find((r) => r.id === remediationId);
+    if (!script) throw new ConnectorError(`Graph POST initiateOnDemandProactiveRemediation failed (404): Script ${remediationId} not found.`, 404);
+    this.state.deviceLog!.push({ deviceId, action: `remediation:${script.displayName}`, at: new Date().toISOString() });
+    this.commit();
+  }
+
+  async listPrivilegedUsers() {
+    return (this.state.roles ?? []).flatMap((r) => {
+      const u = this.state.users.find((x) => x.id === r.userId);
+      return u ? [{ role: r.role, userPrincipalName: u.userPrincipalName, displayName: u.displayName }] : [];
+    });
   }
 
   async serviceHealth() {

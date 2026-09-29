@@ -1,7 +1,39 @@
 import { ConnectorError } from "../types.js";
-import type { M365Api, M365AuthMethod, M365Device, M365Group, M365Sku, M365User, NewM365User } from "./api.js";
+import type {
+  M365Api,
+  M365AuthMethod,
+  M365BitLockerKey,
+  M365DetectedApp,
+  M365Device,
+  M365DeviceAction,
+  M365Group,
+  M365Remediation,
+  M365RoleHolder,
+  M365Sku,
+  M365User,
+  NewM365User,
+} from "./api.js";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
+/** Intune remediations (device health scripts) are only in the beta endpoint. */
+const GRAPH_BETA = "https://graph.microsoft.com/beta";
+const DEVICE_SELECT =
+  "id,deviceName,operatingSystem,osVersion,complianceState,lastSyncDateTime,userPrincipalName,manufacturer,model,serialNumber,azureADDeviceId,isEncrypted,freeStorageSpaceInBytes,totalStorageSpaceInBytes";
+/** Entra roles whose holders should be protected accounts by default. */
+export const PRIVILEGED_ROLES = [
+  "Global Administrator",
+  "Privileged Role Administrator",
+  "Privileged Authentication Administrator",
+  "Security Administrator",
+  "User Administrator",
+  "Exchange Administrator",
+  "SharePoint Administrator",
+  "Intune Administrator",
+  "Authentication Administrator",
+  "Helpdesk Administrator",
+  "Billing Administrator",
+  "Conditional Access Administrator",
+];
 const USER_SELECT = "id,displayName,userPrincipalName,mail,accountEnabled,jobTitle,department,usageLocation,assignedLicenses";
 
 export interface GraphCredentials {
@@ -44,12 +76,13 @@ export class GraphM365Api implements M365Api {
     return this.token.value;
   }
 
-  private async call<T = Json>(method: string, path: string, body?: unknown): Promise<T> {
+  private async call<T = Json>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
     const res = await this.fetchImpl(path.startsWith("http") ? path : `${GRAPH}${path}`, {
       method,
       headers: {
         authorization: `Bearer ${await this.accessToken()}`,
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
+        ...headers,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -89,7 +122,7 @@ export class GraphM365Api implements M365Api {
 
   private toGroup(g: Json): M365Group {
     const kind = (g.groupTypes ?? []).includes("Unified") ? "microsoft365" : g.securityEnabled ? "security" : "distribution";
-    return { id: g.id, displayName: g.displayName ?? "", mail: g.mail ?? null, kind };
+    return { id: g.id, displayName: g.displayName ?? "", mail: g.mail ?? null, kind, roleAssignable: Boolean(g.isAssignableToRole) };
   }
 
   async organization() {
@@ -117,7 +150,7 @@ export class GraphM365Api implements M365Api {
   }
 
   async getUserGroups(id: string) {
-    const items = await this.list<Json>(`/users/${encodeURIComponent(id)}/memberOf/microsoft.graph.group?$select=id,displayName,mail,groupTypes,securityEnabled`);
+    const items = await this.list<Json>(`/users/${encodeURIComponent(id)}/memberOf/microsoft.graph.group?$select=id,displayName,mail,groupTypes,securityEnabled,isAssignableToRole`);
     return items.map((g) => this.toGroup(g));
   }
 
@@ -171,7 +204,7 @@ export class GraphM365Api implements M365Api {
   }
 
   async listGroups(search?: string) {
-    let path = "/groups?$select=id,displayName,mail,groupTypes,securityEnabled&$top=100";
+    let path = "/groups?$select=id,displayName,mail,groupTypes,securityEnabled,isAssignableToRole&$top=100";
     if (search) path += `&$filter=${encodeURIComponent(`startswith(displayName,'${odataString(search)}')`)}`;
     return (await this.list<Json>(path, 200)).map((g) => this.toGroup(g));
   }
@@ -197,19 +230,87 @@ export class GraphM365Api implements M365Api {
     });
   }
 
-  async listDevices(userPrincipalName?: string): Promise<M365Device[]> {
-    let path = "/deviceManagement/managedDevices?$select=id,deviceName,operatingSystem,osVersion,complianceState,lastSyncDateTime,userPrincipalName";
-    if (userPrincipalName) path += `&$filter=${encodeURIComponent(`userPrincipalName eq '${odataString(userPrincipalName)}'`)}`;
-    const devices = await this.list<Json>(path, 200);
-    return devices.map((d) => ({
+  private toDevice(d: Json): M365Device {
+    return {
       id: d.id,
-      deviceName: d.deviceName,
-      operatingSystem: d.operatingSystem,
-      osVersion: d.osVersion,
-      complianceState: d.complianceState,
-      lastSyncDateTime: d.lastSyncDateTime,
-      userPrincipalName: d.userPrincipalName,
-    }));
+      deviceName: d.deviceName ?? "",
+      operatingSystem: d.operatingSystem ?? "",
+      osVersion: d.osVersion ?? "",
+      complianceState: d.complianceState ?? "unknown",
+      lastSyncDateTime: d.lastSyncDateTime ?? "",
+      userPrincipalName: (d.userPrincipalName ?? "").toLowerCase(),
+      manufacturer: d.manufacturer ?? undefined,
+      model: d.model ?? undefined,
+      serialNumber: d.serialNumber ?? undefined,
+      azureADDeviceId: d.azureADDeviceId ?? undefined,
+      isEncrypted: d.isEncrypted ?? undefined,
+      freeStorageSpaceInBytes: d.freeStorageSpaceInBytes ?? undefined,
+      totalStorageSpaceInBytes: d.totalStorageSpaceInBytes ?? undefined,
+    };
+  }
+
+  async listDevices(userPrincipalName?: string): Promise<M365Device[]> {
+    let path = `/deviceManagement/managedDevices?$select=${DEVICE_SELECT}`;
+    if (userPrincipalName) path += `&$filter=${encodeURIComponent(`userPrincipalName eq '${odataString(userPrincipalName)}'`)}`;
+    return (await this.list<Json>(path, 500)).map((d) => this.toDevice(d));
+  }
+
+  async getDevice(deviceId: string) {
+    return this.toDevice(await this.call("GET", `/deviceManagement/managedDevices/${encodeURIComponent(deviceId)}?$select=${DEVICE_SELECT}`));
+  }
+
+  async listDetectedApps(deviceId: string): Promise<M365DetectedApp[]> {
+    const apps = await this.list<Json>(`/deviceManagement/managedDevices/${encodeURIComponent(deviceId)}/detectedApps?$select=displayName,version`, 500);
+    return apps.map((a) => ({ name: a.displayName ?? "", version: a.version ?? "" }));
+  }
+
+  async getBitLockerKeys(azureADDeviceId: string): Promise<M365BitLockerKey[]> {
+    // The recovery-key API requires client identification headers.
+    const headers = { "ocp-client-name": "Haley", "ocp-client-version": "1.0" };
+    const listed: Json = await this.call(
+      "GET",
+      `/informationProtection/bitlocker/recoveryKeys?$filter=${encodeURIComponent(`deviceId eq '${odataString(azureADDeviceId)}'`)}`,
+      undefined,
+      headers,
+    );
+    const keys: M365BitLockerKey[] = [];
+    for (const k of (listed.value ?? []) as Json[]) {
+      const full: Json = await this.call("GET", `/informationProtection/bitlocker/recoveryKeys/${encodeURIComponent(k.id)}?$select=key`, undefined, headers);
+      keys.push({ id: k.id, volumeType: k.volumeType ?? "", createdDateTime: k.createdDateTime ?? "", key: String(full.key ?? "") });
+    }
+    return keys;
+  }
+
+  async deviceAction(deviceId: string, action: M365DeviceAction) {
+    const base = `/deviceManagement/managedDevices/${encodeURIComponent(deviceId)}`;
+    if (action === "sync") await this.call("POST", `${base}/syncDevice`);
+    else if (action === "restart") await this.call("POST", `${base}/rebootNow`);
+    else if (action === "retire") await this.call("POST", `${base}/retire`);
+    else await this.call("POST", `${base}/wipe`, { keepEnrollmentData: false, keepUserData: false });
+  }
+
+  async listRemediations(): Promise<M365Remediation[]> {
+    const scripts = await this.list<Json>(`${GRAPH_BETA}/deviceManagement/deviceHealthScripts?$select=id,displayName,description`, 200);
+    return scripts.map((s) => ({ id: s.id, displayName: s.displayName ?? "", description: s.description ?? "" }));
+  }
+
+  async runRemediation(deviceId: string, remediationId: string) {
+    await this.call("POST", `${GRAPH_BETA}/deviceManagement/managedDevices/${encodeURIComponent(deviceId)}/initiateOnDemandProactiveRemediation`, {
+      scriptPolicyId: remediationId,
+    });
+  }
+
+  async listPrivilegedUsers(): Promise<M365RoleHolder[]> {
+    const roles = await this.list<Json>("/directoryRoles?$expand=members");
+    const holders: M365RoleHolder[] = [];
+    for (const role of roles) {
+      if (!PRIVILEGED_ROLES.includes(role.displayName)) continue;
+      for (const m of (role.members ?? []) as Json[]) {
+        if (!m.userPrincipalName) continue;
+        holders.push({ role: role.displayName, userPrincipalName: String(m.userPrincipalName).toLowerCase(), displayName: m.displayName ?? "" });
+      }
+    }
+    return holders;
   }
 
   async serviceHealth() {
