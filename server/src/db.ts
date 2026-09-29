@@ -217,6 +217,13 @@ const MIGRATIONS: string[] = [
      PRIMARY KEY (ticket_id, connection_id),
      UNIQUE (connection_id, external_id)
    );`,
+  // 6: client policy rules can route an approval to named technicians; Microsoft 365 tenant discovery
+  `ALTER TABLE actions ADD COLUMN approvers TEXT NOT NULL DEFAULT '[]';
+   CREATE TABLE IF NOT EXISTS tenant_discoveries (
+     integration_id TEXT PRIMARY KEY REFERENCES integrations(id) ON DELETE CASCADE,
+     data TEXT NOT NULL,
+     created_at TEXT NOT NULL
+   );`,
 ];
 
 export function openDb(path: string): Db {

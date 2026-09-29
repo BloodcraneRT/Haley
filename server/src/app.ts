@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import cors from "@fastify/cors";
@@ -8,7 +8,7 @@ import { z } from "zod";
 import { PROVIDER_PRESETS, presetFor } from "./ai/providers.js";
 import { ModelRegistry } from "./ai/registry.js";
 import type { ChatMessage, LlmClient } from "./ai/types.js";
-import { AgentService, RunConflictError } from "./agent/runner.js";
+import { AgentService, ApproverNotAllowedError, RunConflictError } from "./agent/runner.js";
 import { TASK_TEMPLATES } from "./agent/templates.js";
 import type { HaleyConfig } from "./config.js";
 import { buildConnector, PROVIDERS, providerInfo } from "./connectors/registry.js";
@@ -28,6 +28,7 @@ import "./psa/syncro.js";
 import { PsaSync } from "./psa/sync.js";
 import type { PsaAdapter, PsaConnection } from "./psa/types.js";
 import { registerHooks } from "./routes/hooks.js";
+import { registerM365Onboarding } from "./routes/m365Onboarding.js";
 import { registerSecretLinks } from "./routes/secretLinks.js";
 import { nextOccurrence, Scheduler } from "./scheduler.js";
 import { slaFor } from "./sla.js";
@@ -102,6 +103,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
               return [];
             }
           }),
+        config.m365App,
       );
       connectorCache.set(integration.id, connector);
     }
@@ -164,6 +166,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof HttpError) return reply.status(err.statusCode).send({ error: err.message });
     if (err instanceof RunConflictError) return reply.status(409).send({ error: err.message });
+    if (err instanceof ApproverNotAllowedError) return reply.status(403).send({ error: err.message });
     if (err instanceof ConnectorError) return reply.status(502).send({ error: err.message });
     const status = (err as { statusCode?: number }).statusCode;
     if (status && status < 500) return reply.status(status).send({ error: (err as Error).message });
@@ -217,6 +220,20 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   // --------------------------------------------------------------- orgs
 
   const emails = z.array(z.string().trim().toLowerCase().email());
+  const patterns = z.array(z.string().trim().toLowerCase().min(1).max(200)).max(50).default([]);
+  const policyRuleInput = z.object({
+    id: z.string().trim().min(1).max(64).optional(),
+    name: z.string().trim().min(1).max(120),
+    enabled: z.boolean().default(true),
+    tools: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
+    risks: z.array(z.enum(["write", "destructive"])).default([]),
+    targets: patterns,
+    departments: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
+    requesters: patterns,
+    effect: z.enum(["allow", "approve", "deny"]),
+    approvers: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
+    minAssurance: z.enum(["email", "chat", "directory", "mfa", "technician"]).default("directory"),
+  });
   const settingsInput = z
     .object({
       emailDomains: z.array(z.string().trim().toLowerCase().min(3)),
@@ -231,8 +248,14 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
         z.enum(["urgent", "high", "normal", "low"]),
         z.object({ responseMinutes: z.number().int().min(1).max(100_000), resolutionMinutes: z.number().int().min(1).max(100_000) }),
       ),
+      policyRules: z.array(policyRuleInput).max(100),
     })
     .partial();
+  /** Gives new client rules a stable id. */
+  const withRuleIds = <T extends { policyRules?: Array<{ id?: string }> }>(settings: T | undefined): T | undefined => {
+    if (!settings?.policyRules) return settings;
+    return { ...settings, policyRules: settings.policyRules.map((r) => ({ ...r, id: r.id || `rule_${randomUUID().slice(0, 8)}` })) };
+  };
   const autonomy = z.enum(AUTONOMY_LEVELS as [string, ...string[]]);
   const orgInput = z.object({
     name: z.string().trim().min(1),
@@ -253,7 +276,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
 
   app.post("/api/orgs", async (req) => {
     const input = body(orgInput, req);
-    const org = store.createOrg({ ...input, autonomy: input.autonomy as never });
+    const org = store.createOrg({ ...input, settings: withRuleIds(input.settings) as never, autonomy: input.autonomy as never });
     store.audit({ orgId: org.id, actor: actor(req), action: "org.created", target: org.id, detail: { name: org.name } });
     return org;
   });
@@ -279,7 +302,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     if (patch.settings?.modelProfileId && !store.getModelProfile(patch.settings.modelProfileId)) {
       throw new HttpError(400, "That AI model doesn't exist.");
     }
-    const org = store.updateOrg(req.params.id, patch as never);
+    const org = store.updateOrg(req.params.id, { ...patch, settings: withRuleIds(patch.settings) } as never);
     if (!before || !org) throw notFound("Organization");
     const who = actor(req);
     if (before.autonomy !== org.autonomy) {
@@ -316,6 +339,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     return store.getIntegration(integration.id)!;
   };
 
+  registerM365Onboarding(app, { config, store, connectorFor, testIntegration, actor });
+
   app.post<{ Params: { id: string } }>("/api/orgs/:id/integrations", async (req) => {
     const org = store.getOrg(req.params.id);
     if (!org) throw notFound("Organization");
@@ -329,6 +354,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       req,
     );
     const info = providerInfo(input.provider)!;
+    // Admin-consent connections are only created by the Microsoft consent callback.
+    delete input.config.authMode;
     if (input.mode === "sandbox" && !info.supportsSandbox) throw new HttpError(400, `${info.name} has no sandbox mode.`);
     if (input.mode === "live") {
       const missing = info.fields.filter((f) => !f.optional && !input.config[f.key]?.trim()).map((f) => f.label);

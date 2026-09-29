@@ -25,6 +25,8 @@ export interface M365Group {
   displayName: string;
   mail: string | null;
   kind: "microsoft365" | "security" | "distribution";
+  /** Role-assignable groups hand out Entra admin roles to their members. */
+  roleAssignable?: boolean;
 }
 
 export interface M365AuthMethod {
@@ -40,6 +42,42 @@ export interface M365Device {
   complianceState: string;
   lastSyncDateTime: string;
   userPrincipalName: string;
+  manufacturer?: string;
+  model?: string;
+  serialNumber?: string;
+  /** Entra device id; BitLocker recovery keys are stored against it. */
+  azureADDeviceId?: string;
+  isEncrypted?: boolean;
+  freeStorageSpaceInBytes?: number;
+  totalStorageSpaceInBytes?: number;
+}
+
+export interface M365DetectedApp {
+  name: string;
+  version: string;
+}
+
+export interface M365BitLockerKey {
+  id: string;
+  volumeType: string;
+  createdDateTime: string;
+  key: string;
+}
+
+/** Intune remote actions. */
+export type M365DeviceAction = "sync" | "restart" | "retire" | "wipe";
+
+/** An Intune remediation (proactive remediation / device health script) that can be run on demand. */
+export interface M365Remediation {
+  id: string;
+  displayName: string;
+  description: string;
+}
+
+export interface M365RoleHolder {
+  role: string;
+  userPrincipalName: string;
+  displayName: string;
 }
 
 export interface M365ServiceHealth {
@@ -74,6 +112,14 @@ export interface M365Api {
   removeGroupMember(groupId: string, userId: string): Promise<void>;
   listAuthMethods(userId: string): Promise<M365AuthMethod[]>;
   listDevices(userPrincipalName?: string): Promise<M365Device[]>;
+  getDevice(deviceId: string): Promise<M365Device>;
+  listDetectedApps(deviceId: string): Promise<M365DetectedApp[]>;
+  getBitLockerKeys(azureADDeviceId: string): Promise<M365BitLockerKey[]>;
+  deviceAction(deviceId: string, action: M365DeviceAction): Promise<void>;
+  listRemediations(): Promise<M365Remediation[]>;
+  runRemediation(deviceId: string, remediationId: string): Promise<void>;
+  /** Members of privileged Entra roles (Global Administrator, User Administrator, ...). */
+  listPrivilegedUsers(): Promise<M365RoleHolder[]>;
   serviceHealth(): Promise<M365ServiceHealth[]>;
   setAutoReply(userId: string, reply: { enabled: boolean; internalMessage: string; externalMessage: string }): Promise<void>;
   issueTemporaryAccessPass(userId: string, lifetimeMinutes: number, usableOnce: boolean): Promise<{ pass: string; lifetimeMinutes: number }>;

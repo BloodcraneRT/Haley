@@ -20,6 +20,17 @@ export interface HaleyTool<I = any> {
   grantsAccess?: boolean;
   /** One-line, human-readable summary shown to technicians in the approval queue. */
   describe?: (input: I) => string;
+  /** Accounts the call affects when the input doesn't name them, e.g. a device's primary user. */
+  resolveTargets?: (input: I) => Promise<string[]>;
+  /**
+   * A hard safety rail that no autonomy level or client rule can relax:
+   *  technician_only  always waits for a technician's approval (e.g. wiping a device)
+   *  self_only        runs on its own only for the requester's own account; for anyone else a technician
+   *                   approves (e.g. a Temporary Access Pass, which gets around the target's MFA)
+   */
+  rail?: "technician_only" | "self_only";
+  /** Extra check on the actual input; returns a reason when the call must wait for a technician. */
+  guard?: (input: I) => Promise<string | null>;
   run: (input: I, ctx: ToolContext) => Promise<unknown>;
 }
 
@@ -30,6 +41,9 @@ export function defineTool<S extends z.ZodType>(tool: {
   risk: Risk;
   grantsAccess?: boolean;
   describe?: (input: z.infer<S>) => string;
+  resolveTargets?: (input: z.infer<S>) => Promise<string[]>;
+  rail?: "technician_only" | "self_only";
+  guard?: (input: z.infer<S>) => Promise<string | null>;
   run: (input: z.infer<S>, ctx: ToolContext) => Promise<unknown>;
 }): HaleyTool<z.infer<S>> {
   return tool as HaleyTool<z.infer<S>>;
@@ -43,6 +57,8 @@ export class SensitiveResult {
   constructor(
     readonly visible: unknown,
     readonly secrets: Record<string, string>,
+    /** Whose secret this is when the input doesn't name the account (e.g. the device owner for a BitLocker key). */
+    readonly owners?: string[],
   ) {}
 }
 
@@ -83,6 +99,8 @@ export interface Connector {
   tools: HaleyTool[];
   /** Present on identity-verification providers (Duo, Okta, Microsoft Authenticator). */
   verifier?: Verifier;
+  /** Microsoft 365: scan the tenant and suggest client settings. */
+  discover?: () => Promise<unknown>;
   test(): Promise<string>;
 }
 

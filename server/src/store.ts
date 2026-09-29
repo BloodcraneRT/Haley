@@ -174,6 +174,18 @@ export class Store {
     this.db.prepare("UPDATE integrations SET state = ? WHERE id = ?").run(json(state), id);
   }
 
+  /** Latest tenant discovery for an integration (Microsoft 365 onboarding). */
+  saveDiscovery(integrationId: string, data: unknown): void {
+    this.db
+      .prepare("INSERT INTO tenant_discoveries (integration_id, data, created_at) VALUES (?, ?, ?) ON CONFLICT(integration_id) DO UPDATE SET data = excluded.data, created_at = excluded.created_at")
+      .run(integrationId, json(data), now());
+  }
+
+  getDiscovery<T>(integrationId: string): T | null {
+    const row = this.db.prepare("SELECT data FROM tenant_discoveries WHERE integration_id = ?").get(integrationId) as Row | undefined;
+    return parse<T | null>(row?.data, null);
+  }
+
   setIntegrationStatus(id: string, status: Integration["status"], detail: string): void {
     this.db.prepare("UPDATE integrations SET status = ?, status_detail = ? WHERE id = ?").run(status, detail, id);
   }
@@ -608,12 +620,13 @@ export class Store {
     rationale: string;
     status: ActionStatus;
     policyReason?: string;
+    approvers?: string[];
   }): Action {
     const id = newId("act");
     this.db
       .prepare(
-        `INSERT INTO actions (id, run_id, org_id, tool_use_id, tool, input, risk, description, rationale, status, policy_reason, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO actions (id, run_id, org_id, tool_use_id, tool, input, risk, description, rationale, status, policy_reason, approvers, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -627,6 +640,7 @@ export class Store {
         input.rationale,
         input.status,
         input.policyReason ?? "",
+        json(input.approvers ?? []),
         now(),
       );
     return this.getAction(id)!;
@@ -723,6 +737,7 @@ export class Store {
       description: row.description as string,
       rationale: row.rationale as string,
       policy_reason: (row.policy_reason as string) ?? "",
+      approvers: parse<string[]>(row.approvers, []),
       status: row.status as ActionStatus,
       result: parse(row.result, null),
       has_secrets: Boolean(row.secrets_sealed),

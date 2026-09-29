@@ -1,6 +1,6 @@
 # Haley's trust model
 
-This page describes exactly what Haley can do on her own, what she can't, and why. MSPs can share it with a client's security team. The authority is the code: `server/src/agent/policy.ts` decides every call, and `server/test/unit.test.ts` pins the rules.
+This page describes exactly what Haley can do on her own, what she can't, and why. MSPs can share it with a client's security team. The authority is the code: `server/src/agent/policy.ts` decides every call, and `server/test/unit.test.ts` and `server/test/devices-policy.test.ts` pin the rules.
 
 ## Four inputs to every decision
 
@@ -10,7 +10,7 @@ Every tool call Haley makes is judged on:
    - `read`: no side effects.
    - `internal`: writes only inside Haley (ticket fields, notes, replies, knowledge base).
    - `write`: routine and reversible changes to a customer system, such as licenses, groups, new users and out-of-office.
-   - `destructive`: security-sensitive or hard to undo, such as password resets, Temporary Access Passes, blocking sign-in, revoking sessions and suspending users.
+   - `destructive`: security-sensitive or hard to undo, such as password resets, Temporary Access Passes, BitLocker recovery keys, blocking sign-in, revoking sessions, suspending users, and restarting, retiring or wiping devices.
 
    Tools that grant access to data (group or shared mailbox membership) are also marked as *access grants*.
 2. **The client's autonomy policy**: read only, supervised, autonomous or unattended.
@@ -45,6 +45,31 @@ These rules hold in every mode:
 - **Email alone never authorizes a security-sensitive change**, even from an authorized approver.
 - **Volume limits**: in unattended mode, at most N automatic changes per client per hour (default 20) and M security-sensitive self-service changes per person per day (default 3). Past either, requests fall back to approval.
 - **Kill switch**: pausing Haley for a client stops new runs, stops in-flight runs before their next step, and routes every new message to technicians.
+
+## Client policy rules
+
+Each client can add its own rules on top of the matrix (**Policy rules** on the client's page). They are checked in order and the first match wins. A rule can match on:
+- the tool (with `*` wildcards, such as `m365_*_device`);
+- the risk (write or destructive);
+- the target accounts (`jane@contoso.com`, `*@contoso.com`);
+- the target's Microsoft 365 department;
+- who asked.
+
+| Effect | What happens |
+|---|---|
+| **Deny** | The call is blocked. Haley recommends it to a technician instead. |
+| **Approve** | The call goes to the approval queue even if the matrix would have let it run. It can name the technicians who may approve, for example only the client's account manager. Anyone else gets a 403. |
+| **Allow** | The call runs without a sign-off where the matrix only asked for one because of the autonomy level: supervised mode, security-sensitive changes in autonomous mode, access grants, or someone else's account. The requester must still meet the rule's minimum identity level (directory by default). |
+
+"Allow" never overrides protected accounts, unverified or email-only identity for security-sensitive changes, the hourly and per-person limits, a denied identity verification, or the hard rails below. Rules only apply to changes; reads always run.
+
+## Hard rails
+
+These are enforced in code for every client, in every mode. No rule or setting can relax them.
+
+- **Wiping or retiring a device always needs a technician's approval**, even on a task a technician started.
+- **Temporary Access Passes and BitLocker recovery keys only go to the account's own owner without a technician.** Both let the holder get past that person's MFA or disk encryption, so a manager or authorized approver asking for someone else's goes to the approval queue.
+- **Adding someone to an admin group always needs a technician.** This covers Entra role-assignable groups and groups whose names mark them as admin, privileged or break-glass groups.
 
 ## Step-up verification (MFA push or SMS code)
 

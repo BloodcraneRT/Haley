@@ -32,6 +32,24 @@ const AUTONOMY_TEXT: Record<Org["autonomy"], string> = {
     "unattended: requests from verified requesters are fixed end to end without a technician, including self-service password resets and sign-outs on their own account. Changes to someone else's account need the requester to be an authorized approver; unverified requesters, protected accounts and unusual volumes fall back to technician approval automatically.",
 };
 
+function policyRulesText(org: Org): string {
+  const rules = (org.settings.policyRules ?? []).filter((r) => r.enabled);
+  if (!rules.length) return "";
+  const effect = { allow: "runs without approval", approve: "needs approval", deny: "is not allowed" } as const;
+  const lines = rules.map((r) => {
+    const scope = [
+      r.tools.length ? `tools ${r.tools.join(", ")}` : "",
+      r.targets.length ? `for ${r.targets.join(", ")}` : "",
+      r.departments.length ? `in ${r.departments.join(", ")}` : "",
+      r.requesters.length ? `asked by ${r.requesters.join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return `- ${r.name}: ${scope || "any change"} ${effect[r.effect]}`;
+  });
+  return `Client policy rules (enforced by Haley's policy engine; don't try to work around them):\n${lines.join("\n")}\n`;
+}
+
 export function orgContext(org: Org, integrations: Integration[]): string {
   const systems = integrations.length
     ? integrations.map((i) => `- ${i.label} (${i.provider}${i.mode === "sandbox" ? ", sandbox" : ""})`).join("\n")
@@ -42,7 +60,7 @@ Primary domain: ${org.domain || "unknown"}${org.settings.emailDomains.length ? `
 Autonomy policy: ${AUTONOMY_TEXT[org.autonomy]}
 Connected systems:
 ${systems}
-${org.settings.authorizedRequesters.length ? `Authorized approvers (may request changes to other people's accounts): ${org.settings.authorizedRequesters.join(", ")}\n` : ""}${org.settings.protectedAccounts.length ? `Protected accounts (changes always need a technician): ${org.settings.protectedAccounts.join(", ")}\n` : ""}${org.notes.trim() ? `Client notes from the MSP:\n${org.notes.trim()}` : ""}
+${org.settings.authorizedRequesters.length ? `Authorized approvers (may request changes to other people's accounts): ${org.settings.authorizedRequesters.join(", ")}\n` : ""}${org.settings.protectedAccounts.length ? `Protected accounts (changes always need a technician): ${org.settings.protectedAccounts.join(", ")}\n` : ""}${policyRulesText(org)}${org.notes.trim() ? `Client notes from the MSP:\n${org.notes.trim()}` : ""}
 </organization>`;
 }
 

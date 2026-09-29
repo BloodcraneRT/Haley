@@ -2,6 +2,7 @@ import type { Store } from "../store.js";
 import type { Integration } from "../types.js";
 import { LiveGoogleApi } from "./google/live.js";
 import { googleTools } from "./google/tools.js";
+import { discoverM365 } from "./m365/discovery.js";
 import { GraphM365Api } from "./m365/graph.js";
 import { m365Tools } from "./m365/tools.js";
 import { SandboxGoogleApi, type GoogleSandboxState } from "./sandbox/google.js";
@@ -10,6 +11,22 @@ import { ConnectorError, type Connector, type ProviderInfo, type StateStore } fr
 import { DuoVerifier } from "./verification/duo.js";
 import { OktaVerifier } from "./verification/okta.js";
 import { SmsCodeVerifier, type PhoneLookup } from "./verification/sms.js";
+
+/** Microsoft Graph application permissions Haley's Microsoft 365 tools use. */
+export const M365_APP_PERMISSIONS = [
+  "User.ReadWrite.All",
+  "Group.ReadWrite.All",
+  "Directory.Read.All",
+  "RoleManagement.Read.Directory",
+  "UserAuthenticationMethod.ReadWrite.All",
+  "DeviceManagementManagedDevices.ReadWrite.All",
+  "DeviceManagementManagedDevices.PrivilegedOperations.All",
+  "DeviceManagementConfiguration.Read.All",
+  "BitlockerKey.Read.All",
+  "ServiceHealth.Read.All",
+  "MailboxSettings.ReadWrite",
+  "Organization.Read.All",
+];
 
 export const PROVIDERS: ProviderInfo[] = [
   {
@@ -23,11 +40,20 @@ export const PROVIDERS: ProviderInfo[] = [
     ],
     setupSteps: [
       "In the customer's Entra admin center, go to App registrations → New registration (single tenant).",
-      "Under API permissions add Microsoft Graph application permissions: User.ReadWrite.All, Group.ReadWrite.All, Directory.Read.All, UserAuthenticationMethod.ReadWrite.All, DeviceManagementManagedDevices.Read.All, ServiceHealth.Read.All, MailboxSettings.ReadWrite, Organization.Read.All. Grant admin consent.",
+      `Under API permissions add Microsoft Graph application permissions: ${M365_APP_PERMISSIONS.join(", ")}. Grant admin consent.`,
       "For password resets, assign the app's service principal the 'User Administrator' or 'Privileged Authentication Administrator' role.",
       "Under Certificates & secrets create a client secret and paste the tenant ID, client ID and secret here.",
     ],
-    capabilities: ["Users & licenses", "Groups & shared mailboxes", "Password resets & sign-in blocks", "MFA method review", "Intune devices", "Service health", "Out-of-office"],
+    capabilities: [
+      "Users & licenses",
+      "Groups & shared mailboxes",
+      "Password resets & sign-in blocks",
+      "MFA method review",
+      "Intune devices, BitLocker keys & remote actions",
+      "Intune remediations",
+      "Service health",
+      "Out-of-office",
+    ],
     supportsSandbox: true,
     kind: "directory",
   },
@@ -164,11 +190,18 @@ export function directoryPhoneLookup(siblings: SiblingConnectors, orgId: string)
   };
 }
 
+/** The MSP's multi-tenant Entra app, used by clients connected through admin consent. */
+export interface MspM365App {
+  clientId: string;
+  clientSecret: string;
+}
+
 export function buildConnector(
   store: Store,
   integration: Integration,
   fetchImpl: typeof fetch = fetch,
   siblings: SiblingConnectors = () => [],
+  mspApp: MspM365App | null = null,
 ): Connector {
   const config = store.getIntegrationConfig(integration.id);
   const sandbox = integration.mode === "sandbox";
@@ -177,6 +210,10 @@ export function buildConnector(
     let api;
     if (sandbox) {
       api = new SandboxM365Api(stateStore<M365SandboxState>(store, integration.id), config.domain || undefined);
+    } else if (config.authMode === "msp_app") {
+      required(config, ["tenantId"]);
+      if (!mspApp) throw new ConnectorError("This client was connected with the MSP app, but HALEY_M365_CLIENT_ID / HALEY_M365_CLIENT_SECRET aren't set on the server.");
+      api = new GraphM365Api({ tenantId: config.tenantId, clientId: mspApp.clientId, clientSecret: mspApp.clientSecret }, fetchImpl);
     } else {
       required(config, ["tenantId", "clientId", "clientSecret"]);
       api = new GraphM365Api({ tenantId: config.tenantId, clientId: config.clientId, clientSecret: config.clientSecret }, fetchImpl);
@@ -186,6 +223,7 @@ export function buildConnector(
       provider: "m365",
       label: integration.label,
       tools: m365Tools(api),
+      discover: () => discoverM365(api),
       test: async () => {
         const [org, skus] = await Promise.all([api.organization(), api.listSkus()]);
         return `Connected to ${org.displayName || org.id} (${org.verifiedDomains.join(", ")}); ${skus.length} license SKUs visible.`;

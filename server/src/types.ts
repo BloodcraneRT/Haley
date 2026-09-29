@@ -90,6 +90,36 @@ export interface OrgSettings {
   sla: Record<TicketPriority, SlaTarget>;
   /** AI model profile for this client; empty uses the workspace default. */
   modelProfileId: string;
+  /** Client-specific rules layered on the autonomy policy, checked in order; the first match wins. */
+  policyRules: PolicyRule[];
+}
+
+export type PolicyEffect = "allow" | "approve" | "deny";
+
+/**
+ * A client policy rule. Empty match lists match anything. "deny" blocks the call, "approve" sends it to
+ * the approval queue (optionally to named approvers), and "allow" lets it run without approval where the
+ * autonomy policy would only have asked for a sign-off. "allow" never overrides protected accounts,
+ * identity checks, rate limits or Haley's hard safety rails.
+ */
+export interface PolicyRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  /** Tool names; "*" is a wildcard (e.g. "m365_*_device"). */
+  tools: string[];
+  risks: Risk[];
+  /** Target accounts: "jane@contoso.com", "*@contoso.com" or "@contoso.com". */
+  targets: string[];
+  /** The target account's directory department (Microsoft 365). */
+  departments: string[];
+  /** Who asked, same patterns as targets. */
+  requesters: string[];
+  effect: PolicyEffect;
+  /** For "approve": technicians (by the name they sign in with) who may approve. Empty means any technician. */
+  approvers: string[];
+  /** For "allow": the requester identity needed before the rule lets a change run on its own. */
+  minAssurance: Assurance;
 }
 
 export interface SlaTarget {
@@ -106,6 +136,7 @@ export const DEFAULT_ORG_SETTINGS: OrgSettings = {
   maxSelfServicePerUserPerDay: 3,
   paused: false,
   modelProfileId: "",
+  policyRules: [],
   sla: {
     urgent: { responseMinutes: 15, resolutionMinutes: 240 },
     high: { responseMinutes: 60, resolutionMinutes: 480 },
@@ -211,6 +242,8 @@ export interface Action {
   rationale: string;
   /** Why the policy held or blocked this call (empty when it ran automatically). */
   policy_reason: string;
+  /** Technicians allowed to approve this action (from a client policy rule). Empty means any technician. */
+  approvers: string[];
   status: ActionStatus;
   result: unknown;
   has_secrets: boolean;
