@@ -28,7 +28,7 @@ import type {
   TicketChannel,
   TicketStatus,
 } from "./types.js";
-import { DEFAULT_ORG_SETTINGS } from "./types.js";
+import { DEFAULT_BILLING_SETTINGS, DEFAULT_ORG_SETTINGS, type BillingSettings } from "./types.js";
 import type { ModelProfile } from "./ai/providers.js";
 import { DEFAULT_PSA_OPTIONS, type PsaConnection, type PsaKind, type PsaOptions, type TicketLink } from "./psa/types.js";
 
@@ -249,6 +249,7 @@ export class Store {
         sla_escalated: false,
         mfa_verified_at: null,
         mfa_method: "",
+        resolution_confirmed_at: null,
         created_at: ts,
         updated_at: ts,
       };
@@ -323,14 +324,19 @@ export class Store {
     return row ? this.toTicket(row) : null;
   }
 
-  /** Most recently updated open ticket matching a channel reference key, for threading follow-up messages. */
-  findOpenTicketByChannelRef(orgId: string, channel: TicketChannel, key: string, value: string): Ticket | null {
+  /**
+   * Most recently updated open ticket matching a channel reference key, for threading follow-up messages.
+   * A ticket resolved within `confirmSince` that the requester hasn't confirmed yet still counts, so their
+   * "yes, that fixed it" (or "no, still broken") lands on it instead of opening a new ticket.
+   */
+  findOpenTicketByChannelRef(orgId: string, channel: TicketChannel, key: string, value: string, confirmSince?: string): Ticket | null {
     const row = this.db
       .prepare(
-        `SELECT * FROM tickets WHERE org_id = ? AND channel = ? AND status NOT IN ('resolved', 'closed')
+        `SELECT * FROM tickets WHERE org_id = ? AND channel = ?
+           AND (status NOT IN ('resolved', 'closed') OR (status = 'resolved' AND resolution_confirmed_at IS NULL AND resolved_at >= ?))
            AND json_extract(channel_ref, '$.' || ?) = ? ORDER BY updated_at DESC LIMIT 1`,
       )
-      .get(orgId, channel, key, value) as Row | undefined;
+      .get(orgId, channel, confirmSince ?? "9999", key, value) as Row | undefined;
     return row ? this.toTicket(row) : null;
   }
 
@@ -349,6 +355,23 @@ export class Store {
       needs_followup: Boolean(row.needs_followup),
       sla_escalated: Boolean(row.sla_escalated),
     };
+  }
+
+  /**
+   * The requester confirmed Haley's fix. Their reply briefly reopened the ticket, so `resolvedAt` puts back
+   * when the fix was actually made; SLA and reports shouldn't count the wait for their answer.
+   */
+  markResolutionConfirmed(id: string, at: string, resolvedAt?: string): void {
+    this.db.prepare("UPDATE tickets SET resolution_confirmed_at = ?, resolved_at = COALESCE(?, resolved_at) WHERE id = ?").run(at, resolvedAt ?? null, id);
+  }
+
+  /** Tickets Haley resolved that have waited in "resolved" since before `before` (for auto-close). */
+  listResolvedAwaitingClose(before: string): Ticket[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM tickets WHERE status = 'resolved' AND assignee = 'haley' AND resolved_at IS NOT NULL AND resolved_at < ? ORDER BY resolved_at LIMIT 1000")
+        .all(before) as Row[]
+    ).map((r) => this.toTicket(r));
   }
 
   markMfaVerified(id: string, method: string, at: string): void {
@@ -443,6 +466,8 @@ export class Store {
         actor,
         `${field}: ${String(change.from)} → ${String(change.to)}`,
         { field, ...change },
+        // Same instant as the ticket's updated_at/resolved_at, so the event can stand in for them later.
+        next.updated_at,
       );
     }
     return next;
@@ -458,8 +483,9 @@ export class Store {
     author: string,
     body: string,
     meta: Record<string, unknown> = {},
+    at: string = now(),
   ): TicketEvent {
-    const event: TicketEvent = { id: newId("evt"), ticket_id: ticketId, kind, author, body, meta, created_at: now() };
+    const event: TicketEvent = { id: newId("evt"), ticket_id: ticketId, kind, author, body, meta, created_at: at };
     this.db
       .prepare("INSERT INTO ticket_events (id, ticket_id, kind, author, body, meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(event.id, ticketId, kind, author, body, json(meta), event.created_at);
@@ -518,15 +544,16 @@ export class Store {
     title: string;
     instruction: string;
     createdBy: string;
+    templateId?: string | null;
   }): Run {
     const ts = now();
     const id = newId("run");
     this.db
       .prepare(
-        `INSERT INTO runs (id, org_id, ticket_id, kind, mode, title, instruction, status, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
+        `INSERT INTO runs (id, org_id, ticket_id, kind, mode, title, instruction, status, created_by, template_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)`,
       )
-      .run(id, input.orgId, input.ticketId ?? null, input.kind, input.mode ?? "live", input.title, input.instruction, input.createdBy, ts, ts);
+      .run(id, input.orgId, input.ticketId ?? null, input.kind, input.mode ?? "live", input.title, input.instruction, input.createdBy, input.templateId ?? null, ts, ts);
     return this.getRun(id)!;
   }
 
@@ -534,7 +561,7 @@ export class Store {
     const row = this.db
       .prepare(
         `SELECT id, org_id, ticket_id, kind, mode, title, instruction, status, summary, error, iterations,
-                input_tokens, output_tokens, model, created_by, created_at, updated_at FROM runs WHERE id = ?`,
+                input_tokens, output_tokens, model, template_id, created_by, created_at, updated_at FROM runs WHERE id = ?`,
       )
       .get(id);
     return (row as unknown as Run) ?? null;
@@ -559,7 +586,7 @@ export class Store {
     return this.db
       .prepare(
         `SELECT id, org_id, ticket_id, kind, mode, title, instruction, status, summary, error, iterations,
-                input_tokens, output_tokens, model, created_by, created_at, updated_at
+                input_tokens, output_tokens, model, template_id, created_by, created_at, updated_at
          FROM runs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT ?`,
       )
       .all(...args) as unknown as Run[];
@@ -637,6 +664,57 @@ export class Store {
       .prepare("SELECT id FROM runs WHERE status IN ('queued', 'running')")
       .all()
       .map((r) => this.getRun((r as Row).id as string)!);
+  }
+
+  // ------------------------------------------------------------- usage & billing
+
+  recordModelUsage(input: { runId: string; orgId: string; model: string; inputTokens: number; outputTokens: number }): void {
+    this.db
+      .prepare("INSERT INTO model_usage (run_id, org_id, model, input_tokens, output_tokens, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(input.runId, input.orgId, input.model, input.inputTokens, input.outputTokens, now());
+  }
+
+  /** Token totals per client and model in [from, to). */
+  modelUsageSummary(from: string, to: string, orgId?: string): Array<{ org_id: string; model: string; calls: number; input_tokens: number; output_tokens: number }> {
+    const where = `created_at >= ? AND created_at < ?${orgId ? " AND org_id = ?" : ""}`;
+    const args: SQLInputValue[] = orgId ? [from, to, orgId] : [from, to];
+    return this.db
+      .prepare(
+        `SELECT org_id, model, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens
+         FROM model_usage WHERE ${where} GROUP BY org_id, model`,
+      )
+      .all(...args) as Array<{ org_id: string; model: string; calls: number; input_tokens: number; output_tokens: number }>;
+  }
+
+  /** Token totals per model for one run. */
+  runModelUsage(runId: string): Array<{ model: string; calls: number; input_tokens: number; output_tokens: number }> {
+    return this.db
+      .prepare("SELECT model, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens FROM model_usage WHERE run_id = ? GROUP BY model")
+      .all(runId) as Array<{ model: string; calls: number; input_tokens: number; output_tokens: number }>;
+  }
+
+  getBillingSettings(): BillingSettings {
+    const row = this.db.prepare("SELECT value FROM workspace_settings WHERE key = 'billing'").get() as Row | undefined;
+    return { ...DEFAULT_BILLING_SETTINGS, ...parse<Partial<BillingSettings>>(row?.value, {}) };
+  }
+
+  setBillingSettings(patch: Partial<BillingSettings>): BillingSettings {
+    const next = { ...this.getBillingSettings(), ...patch };
+    this.db
+      .prepare("INSERT INTO workspace_settings (key, value) VALUES ('billing', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(json(next));
+    return next;
+  }
+
+  /** Distinct technician names that approved, rejected, commented or started work in [from, to) (dashboard sign-in names). */
+  activeTechnicians(from: string, to: string): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT actor FROM audit_log WHERE created_at >= ? AND created_at < ?
+         AND actor NOT IN ('haley', 'system', 'microsoft', 'scheduler', 'technician', 'intake', 'requester') AND actor NOT LIKE '%@%'`,
+      )
+      .all(from, to) as Array<{ actor: string }>;
+    return rows.map((r) => r.actor).sort((a, b) => a.localeCompare(b));
   }
 
   // ------------------------------------------------------------- memory

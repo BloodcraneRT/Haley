@@ -13,7 +13,7 @@ import { RelativeTime } from "../components/RelativeTime";
 import { RevealSecretButton } from "../components/RevealSecret";
 import { usePoll } from "../hooks/usePoll";
 import { useApp } from "../lib/app-context";
-import { formatNumber, formatTokens, isRunActive } from "../lib/format";
+import { formatNumber, formatTokens, formatUsd, isRunActive } from "../lib/format";
 
 type ToolResult = Extract<TranscriptStep, { type: "tool_result" }>;
 
@@ -37,7 +37,7 @@ export function RunDetailPage() {
   }
   if (!detail.data) return detail.error ? <ErrorBanner error={detail.error} onRetry={detail.reload} /> : <Loading />;
 
-  const { run, actions } = detail.data;
+  const { run, actions, usage } = detail.data;
   const active = isRunActive(run.status);
   const pending = actions.filter((a) => a.status === "pending_approval");
   const done = run.status === "completed" || run.status === "failed";
@@ -49,7 +49,7 @@ export function RunDetailPage() {
     try {
       const next = run.ticket_id
         ? await api.runTicket(run.ticket_id, mode)
-        : await api.startTask({ orgId: run.org_id, title: run.title, instruction: run.instruction, mode });
+        : await api.startTask({ orgId: run.org_id, title: run.title, instruction: run.instruction, mode, ...(run.template_id ? { templateId: run.template_id } : {}) });
       toast(mode === "live" && plan ? "Running it for real." : "Started a new run.");
       refreshStats();
       navigate(`/runs/${next.id}`);
@@ -112,6 +112,23 @@ export function RunDetailPage() {
         <span title={`${formatNumber(run.input_tokens)} input · ${formatNumber(run.output_tokens)} output tokens`}>
           <Coins className="icon-sm" aria-hidden="true" /> <strong>{formatTokens(run.input_tokens)}</strong> in · <strong>{formatTokens(run.output_tokens)}</strong> out
         </span>
+        {usage && usage.modelCalls > 0 && (
+          <span
+            title={
+              usage.usd === null
+                ? `No price set for ${usage.unpricedModels.join(", ")}. Add prices on the AI models page.`
+                : "AI cost of this run at the prices on the AI models page"
+            }
+          >
+            {usage.usd === null ? (
+              <>cost not priced</>
+            ) : (
+              <>
+                AI cost <strong>{formatUsd(usage.usd)}</strong>
+              </>
+            )}
+          </span>
+        )}
         <span>
           <Zap className="icon-sm" aria-hidden="true" /> <strong>{actions.length}</strong> tool call{actions.length === 1 ? "" : "s"}
         </span>

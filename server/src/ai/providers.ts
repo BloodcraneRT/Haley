@@ -170,6 +170,10 @@ export interface ModelOptions {
   reasoningEffort?: string;
   apiVersion?: string;
   extraHeaders?: Record<string, string>;
+  /** Your price per million input tokens (USD), for usage and cost reporting. Not sent to the provider. */
+  inputUsdPerMTok?: number;
+  /** Your price per million output tokens (USD). */
+  outputUsdPerMTok?: number;
 }
 
 export interface ModelProfile {

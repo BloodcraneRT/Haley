@@ -93,10 +93,10 @@ export class AgentService {
     return this.store.getRun(run.id)!;
   }
 
-  startTaskRun(orgId: string, title: string, instruction: string, createdBy: string, mode: RunMode = "live"): Run {
+  startTaskRun(orgId: string, title: string, instruction: string, createdBy: string, mode: RunMode = "live", templateId: string | null = null): Run {
     const org = this.requireOrg(orgId);
     this.assertNotPaused(org);
-    const run = this.store.createRun({ orgId, kind: "task", mode, title, instruction, createdBy });
+    const run = this.store.createRun({ orgId, kind: "task", mode, title, instruction, createdBy, templateId });
     const intro = `${this.header(org)}\n\n<task requested_by="${createdBy}">\n${instruction}\n</task>${mode === "plan" ? `\n\n${PLAN_MODE_TEXT}` : ""}`;
     this.store.saveRunProgress(run.id, { messages: [userText(intro)] });
     this.store.audit({ orgId, actor: createdBy, action: "run.started", target: run.id, detail: { title } });
@@ -276,6 +276,13 @@ export class AgentService {
         addInputTokens: response.usage.inputTokens,
         addOutputTokens: response.usage.outputTokens,
         model: `${response.provider}/${response.model}`,
+      });
+      this.store.recordModelUsage({
+        runId,
+        orgId: run.org_id,
+        model: `${response.provider}/${response.model}`,
+        inputTokens: response.usage.inputTokens,
+        outputTokens: response.usage.outputTokens,
       });
 
       const text = textOf(response.parts);

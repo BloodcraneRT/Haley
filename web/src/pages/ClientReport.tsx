@@ -132,6 +132,13 @@ function ReportBody({ report: r, loading }: { report: ClientReport; loading: boo
         </div>
         <div className="report-hero-side">
           <HeroStat label="Resolved by Haley alone" value={formatPercent(t.automationRate)} hint={`${formatNumber(t.resolvedByHaleyAlone)} of ${formatNumber(t.resolved)} resolved tickets`} />
+          {t.confirmedByRequester !== undefined && t.resolvedByHaleyAlone > 0 && (
+            <HeroStat
+              label="Confirmed fixed by the user"
+              value={formatPercent(t.confirmationRate ?? null)}
+              hint={`${formatNumber(t.confirmedByRequester)} of ${formatNumber(t.resolvedByHaleyAlone)} tickets Haley resolved alone`}
+            />
+          )}
           <HeroStat label="Changes made automatically" value={formatNumber(r.changes.automatic)} hint={`of ${formatNumber(r.changes.executed)} changes to your systems`} />
         </div>
       </section>

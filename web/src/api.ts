@@ -160,6 +160,8 @@ export interface Ticket {
   needs_followup: boolean;
   first_response_at: string | null;
   resolved_at: string | null;
+  /** When the requester confirmed Haley's fix (null when unconfirmed or closed automatically). */
+  resolution_confirmed_at: string | null;
   sla_escalated: boolean;
   /** Last approved step-up verification (MFA push or SMS code) and the method used. */
   mfa_verified_at: string | null;
@@ -220,6 +222,8 @@ export interface Run {
   output_tokens: number;
   /** provider/model that served the latest turn (empty before the first turn). */
   model: string;
+  /** The recipe this task run started from, if any (credited in time saved). */
+  template_id?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -378,6 +382,9 @@ export interface ClientReport {
     stillOpen: number;
     resolvedByHaleyAlone: number;
     automationRate: number | null;
+    /** Of the tickets Haley resolved alone, how many the requester confirmed were fixed. */
+    confirmedByRequester?: number;
+    confirmationRate?: number | null;
     escalated: number;
     medianResolutionMinutes: number | null;
     byCategory: CountRow[];
@@ -400,14 +407,81 @@ export interface ClientReport {
     byTool: CountRow[];
   };
   knowledge: { articlesWrittenByHaley: number; articlesTotal: number };
-  timeSaved: { hours: number; assumptions: string };
+  timeSaved: { hours: number; recipeRuns?: number; assumptions: string };
 }
 
+/** server/src/types.ts BillingSettings */
+export interface BillingSettings {
+  aiMarkupPercent: number;
+  autoCloseResolvedDays: number;
+  minutesPerTicket: number;
+  minutesPerAction: number;
+}
+
+export interface UsageClientRow {
+  orgId: string;
+  name: string;
+  modelCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  unpricedTokens: number;
+  aiCostUsd: number;
+  billableAiUsd: number;
+  ticketsResolvedByHaley: number;
+  confirmedByRequester: number;
+  automaticChanges: number;
+  recipeRuns: number;
+  hoursSaved: number;
+}
+
+/** server/src/usage.ts usageReport() */
+export interface UsageReport {
+  period: { from: string; to: string; days: number };
+  settings: BillingSettings;
+  clients: UsageClientRow[];
+  totals: {
+    modelCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    unpricedTokens: number;
+    aiCostUsd: number;
+    billableAiUsd: number;
+    ticketsResolvedByHaley: number;
+    confirmedByRequester: number;
+    hoursSaved: number;
+  };
+  unpricedModels: string[];
+  technicians: { names: string[]; count: number; note: string };
+}
+
+export type RecipeCategory =
+  | "Identity & access"
+  | "Licensing & cost"
+  | "Email & collaboration"
+  | "Security"
+  | "Devices"
+  | "RMM & endpoints"
+  | "Documentation & reporting";
+
+/** A recipe from the "Ask Haley" library. */
 export interface TaskTemplate {
   id: string;
   name: string;
   description: string;
   instruction: string;
+  category: RecipeCategory;
+  /** Provider ids; each group needs one of its providers connected. */
+  requires: string[][];
+  tools: string[];
+  /** Changes customer systems: preview in plan mode first. */
+  changes: boolean;
+  /** Technician minutes to do it by hand. */
+  estimatedMinutes: number;
+  tags: string[];
+  /** False when the selected client lacks an integration the recipe needs. */
+  available: boolean;
+  /** Provider names the client is missing, e.g. "Microsoft 365" or "Microsoft 365 or Google Workspace". */
+  missing: string[];
 }
 
 export interface ToolInfo {
@@ -472,6 +546,9 @@ export interface ModelOptions {
   reasoningEffort?: string;
   apiVersion?: string;
   extraHeaders?: Record<string, string>;
+  /** Your price in USD per million tokens, for AI cost reporting (never sent to the provider). */
+  inputUsdPerMTok?: number;
+  outputUsdPerMTok?: number;
 }
 
 export interface ModelProfile {
@@ -672,6 +749,8 @@ export interface TicketDetail {
 
 export interface RunDetail {
   run: RunWithOrg;
+  /** Model calls, tokens and AI cost (null when any model used has no price). */
+  usage?: { modelCalls: number; inputTokens: number; outputTokens: number; usd: number | null; unpricedModels: string[] };
   actions: Action[];
   transcript: TranscriptStep[];
 }
@@ -798,6 +877,29 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
   return data as T;
 }
 
+/** Fetches a file with the session's credentials and hands it to the browser as a download. */
+async function download(path: string, filename: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (user) headers["x-haley-user"] = user;
+  let res: Response;
+  try {
+    res = await fetch(path, { headers });
+  } catch {
+    throw new ApiError(0, "Can't reach the Haley server. Check that it is running.");
+  }
+  if (!res.ok) {
+    if (res.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    throw new ApiError(res.status, `Download failed (${res.status} ${res.statusText})`);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 const get = <T>(path: string, query?: Query) => request<T>("GET", withQuery(path, query));
 const post = <T>(path: string, body?: unknown) => request<T>("POST", path, body);
 const patch = <T>(path: string, body: unknown) => request<T>("PATCH", path, body);
@@ -864,7 +966,7 @@ export const api = {
   health: () => get<Health>("/api/health"),
   stats: () => get<Stats>("/api/stats"),
   providers: () => get<ProviderInfo[]>("/api/providers"),
-  templates: () => get<TaskTemplate[]>("/api/templates"),
+  templates: (orgId?: string) => get<TaskTemplate[]>("/api/templates", orgId ? { orgId } : undefined),
   loadDemo: () => post<{ ok: true; orgIds: string[] }>("/api/demo"),
 
   orgs: () => get<OrgSummary[]>("/api/orgs"),
@@ -903,7 +1005,7 @@ export const api = {
 
   runs: (q: { orgId?: string; kind?: RunKind } = {}) => get<RunWithOrg[]>("/api/runs", q),
   run: (id: string) => get<RunDetail>(`/api/runs/${enc(id)}`),
-  startTask: (input: { orgId: string; title: string; instruction: string; mode?: RunMode }) => post<Run>("/api/runs", input),
+  startTask: (input: { orgId: string; title: string; instruction: string; mode?: RunMode; templateId?: string }) => post<Run>("/api/runs", input),
 
   schedules: (q: { orgId?: string } = {}) => get<ScheduleListItem[]>("/api/schedules", q),
   createSchedule: (input: ScheduleInput) => post<Schedule>("/api/schedules", input),
@@ -912,6 +1014,11 @@ export const api = {
   runSchedule: (id: string) => post<{ scheduleId: string; runId: string }>(`/api/schedules/${enc(id)}/run`),
 
   report: (orgId: string, days: number) => get<ClientReport>(`/api/orgs/${enc(orgId)}/report`, { days }),
+
+  usage: (month: string) => get<UsageReport>("/api/usage", { month }),
+  downloadUsageCsv: (month: string) => download(withQuery("/api/usage.csv", { month }), `haley-usage-${month}.csv`),
+  billingSettings: () => get<BillingSettings>("/api/billing/settings"),
+  updateBillingSettings: (input: Partial<BillingSettings>) => patch<BillingSettings>("/api/billing/settings", input),
 
   channels: () => get<ChannelInfo[]>("/api/channels"),
   simulate: (input: SimulateInput) => post<SimulateResult>("/api/simulate", input),

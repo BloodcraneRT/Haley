@@ -20,6 +20,7 @@ export interface TickResult {
   started: Array<{ scheduleId: string; runId: string }>;
   skipped: Array<{ scheduleId: string; reason: string }>;
   escalated: string[];
+  closed: string[];
 }
 
 /**
@@ -47,12 +48,13 @@ export class Scheduler {
   }
 
   async tick(nowMs = Date.now()): Promise<TickResult> {
-    const result: TickResult = { started: [], skipped: [], escalated: [] };
+    const result: TickResult = { started: [], skipped: [], escalated: [], closed: [] };
     if (this.running) return result;
     this.running = true;
     try {
       for (const schedule of this.store.dueSchedules(new Date(nowMs).toISOString())) this.fire(schedule, nowMs, result);
       this.sweepSla(nowMs, result);
+      this.closeUnconfirmed(nowMs, result);
       if (this.psa) await this.psa.syncAll();
     } finally {
       this.running = false;
@@ -60,9 +62,23 @@ export class Scheduler {
     return result;
   }
 
+  /** Tickets Haley resolved that nobody replied to for the workspace's auto-close period are closed, unconfirmed. */
+  private closeUnconfirmed(nowMs: number, result: TickResult) {
+    const days = this.store.getBillingSettings().autoCloseResolvedDays;
+    if (!days) return;
+    for (const ticket of this.store.listResolvedAwaitingClose(new Date(nowMs - days * 86_400_000).toISOString())) {
+      if (this.agent.activeRun(ticket.id)) continue;
+      this.store.updateTicket(ticket.id, { status: "closed" }, "system");
+      this.store.addTicketEvent(ticket.id, "agent_note", "system", `Closed automatically: no reply from the requester ${days} day${days === 1 ? "" : "s"} after Haley resolved it.`, {
+        autoClosed: true,
+      });
+      result.closed.push(ticket.id);
+    }
+  }
+
   /** Starts a schedule now (from the tick or the "Run now" button). */
   runNow(scheduleId: string, nowMs = Date.now()): TickResult {
-    const result: TickResult = { started: [], skipped: [], escalated: [] };
+    const result: TickResult = { started: [], skipped: [], escalated: [], closed: [] };
     const schedule = this.store.getSchedule(scheduleId);
     if (schedule) this.fire(schedule, nowMs, result, false);
     return result;

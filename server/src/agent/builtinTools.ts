@@ -248,6 +248,32 @@ function ticketTools(store: Store, run: Run, ticketId: string, delivery_: ReplyD
       },
     }),
     defineTool({
+      name: "confirm_resolution",
+      description:
+        "Close the ticket as confirmed fixed, after you resolved it and the requester has since replied that it's working. Only for their clear confirmation (\"yes, that worked\", \"all good, thanks\"); if they say it's still broken, keep working instead.",
+      input: z.object({ evidence: z.string().min(2).max(300).describe("The requester's words confirming the fix") }),
+      risk: "internal",
+      describe: (i) => `Close as confirmed: ${i.evidence.slice(0, 80)}`,
+      run: async ({ evidence }) => {
+        const ticket = store.getTicket(ticketId)!;
+        if (ticket.resolution_confirmed_at) return { ok: true, status: ticket.status, note: "Already confirmed." };
+        const events = store.listTicketEvents(ticketId);
+        const resolvedAt = events.findLastIndex((e) => e.kind === "status_change" && e.author === AGENT && e.meta.to === "resolved");
+        if (resolvedAt < 0) throw new Error("Resolve the ticket and ask the requester to confirm first.");
+        // Only the requester's own reply after the fix counts, never your own reading of the situation.
+        const confirmed = events
+          .slice(resolvedAt + 1)
+          .some((e) => e.kind === "comment" && e.meta.fromRequester === true && !e.meta.untrustedContinuation);
+        if (!confirmed) throw new Error("The requester hasn't replied since you resolved it. Wait for them; the ticket closes on its own if they don't.");
+        const at = new Date().toISOString();
+        store.updateTicket(ticketId, { status: "closed" }, AGENT);
+        store.markResolutionConfirmed(ticketId, at, events[resolvedAt].created_at);
+        store.addTicketEvent(ticketId, "action", AGENT, `Requester confirmed the fix: "${evidence}"`, { runId: run.id, resolutionConfirmed: true });
+        store.audit({ orgId: run.org_id, actor: AGENT, action: "ticket.resolution_confirmed", target: ticketId });
+        return { ok: true, status: "closed" };
+      },
+    }),
+    defineTool({
       name: "escalate_to_human",
       description: "Hand the ticket to a human technician with a handoff note (what you checked, what you found, suggested next step).",
       input: z.object({ reason: z.string().min(1), handoffNote: z.string().min(1) }),

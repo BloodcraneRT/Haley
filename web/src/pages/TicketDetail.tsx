@@ -145,6 +145,11 @@ export function TicketDetailPage() {
         subtitle={
           <span className="row row-wrap" style={{ gap: 8 }}>
             <TicketStatusPill status={ticket.status} />
+            {ticket.resolution_confirmed_at && (
+              <Pill tone="green" title={`The requester confirmed the fix ${new Date(ticket.resolution_confirmed_at).toLocaleString()}`}>
+                Confirmed fixed
+              </Pill>
+            )}
             {ticket.channel && <ChannelBadge channel={ticket.channel} externalNumber={psaRef(ticket) ? ticket.channel_ref.externalNumber : undefined} />}
             {ticket.assurance && <IdentityBadge ticket={ticket} />}
             <span>

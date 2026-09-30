@@ -19,6 +19,8 @@ const SECRET_LABELS: Record<string, string> = {
 
 /** New tickets per requester per hour that Haley picks up automatically; beyond this they queue for technicians. */
 export const MAX_NEW_TICKETS_PER_REQUESTER_PER_HOUR = 10;
+/** How long after Haley resolves a chat ticket the requester's next message still continues it (to confirm or reopen). */
+export const RESOLUTION_REPLY_WINDOW_MS = 24 * 3_600_000;
 
 function titleFrom(text: string): string {
   const line = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "Help request";
@@ -168,7 +170,10 @@ export class ChannelHub implements ReplyDelivery {
       const byNumber = this.store.getTicketByNumber(msg.ticketNumber);
       if (byNumber && byNumber.org_id === org.id) ticket = byNumber;
     }
-    if (!ticket && msg.thread) ticket = this.store.findOpenTicketByChannelRef(org.id, msg.channel, msg.thread.key, msg.thread.value);
+    if (!ticket && msg.thread) {
+      const confirmSince = new Date(Date.now() - RESOLUTION_REPLY_WINDOW_MS).toISOString();
+      ticket = this.store.findOpenTicketByChannelRef(org.id, msg.channel, msg.thread.key, msg.thread.value, confirmSince);
+    }
 
     if (ticket && this.canContinue(ticket, sender.email, sender.assurance)) {
       return this.appendToTicket(ticket, { channel: msg.channel, author, email: sender.email, assurance: sender.assurance, text: msg.text });

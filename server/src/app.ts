@@ -9,7 +9,7 @@ import { PROVIDER_PRESETS, presetFor } from "./ai/providers.js";
 import { ModelRegistry } from "./ai/registry.js";
 import type { ChatMessage, LlmClient } from "./ai/types.js";
 import { AgentService, ApproverNotAllowedError, RunConflictError } from "./agent/runner.js";
-import { TASK_TEMPLATES } from "./agent/templates.js";
+import { TASK_TEMPLATES, templateAvailability } from "./agent/templates.js";
 import type { HaleyConfig } from "./config.js";
 import { buildConnector, PROVIDERS, providerInfo, validateProviderConfig } from "./connectors/registry.js";
 import { ConnectorError, type Connector } from "./connectors/types.js";
@@ -22,6 +22,7 @@ import { ChannelHub } from "./channels/hub.js";
 import { SlackChannel } from "./channels/slack.js";
 import { TeamsChannel } from "./channels/teams.js";
 import { clientReport } from "./report.js";
+import { runCost, usageCsv, usageReport } from "./usage.js";
 import { PSA_PROVIDERS, buildPsaAdapter } from "./psa/registry.js";
 import "./psa/dynamics.js";
 import "./psa/syncro.js";
@@ -218,7 +219,13 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     return { ...store.stats(), slaBreached, schedules: store.listSchedules().filter((s) => s.enabled && s.next_run_at).length };
   });
   app.get("/api/providers", async () => PROVIDERS);
-  app.get("/api/templates", async () => TASK_TEMPLATES);
+  app.get("/api/templates", async (req) => {
+    const { orgId } = query(z.object({ orgId: z.string().optional() }), req);
+    if (!orgId) return TASK_TEMPLATES.map((t) => ({ ...t, available: true, missing: [] }));
+    if (!store.getOrg(orgId)) throw notFound("Organization");
+    const connected = store.listIntegrations(orgId).map((i) => i.provider);
+    return TASK_TEMPLATES.map((t) => ({ ...t, ...templateAvailability(t, connected, (id) => providerInfo(id)?.name ?? id) }));
+  });
 
   app.post("/api/demo", async () => {
     if (store.listOrgs().length > 0) throw new HttpError(409, "Demo data can only be loaded into an empty workspace.");
@@ -619,19 +626,32 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
 
   app.post("/api/runs", async (req) => {
     const input = body(
-      z.object({ orgId: z.string(), title: z.string().trim().min(1), instruction: z.string().trim().min(1), mode: z.enum(["live", "plan"]).default("live") }),
+      z.object({
+        orgId: z.string(),
+        title: z.string().trim().min(1),
+        instruction: z.string().trim().min(1),
+        mode: z.enum(["live", "plan"]).default("live"),
+        templateId: z.string().trim().min(1).max(64).optional(),
+      }),
       req,
     );
     if (!store.getOrg(input.orgId)) throw notFound("Organization");
-    return agent.startTaskRun(input.orgId, input.title, input.instruction, actor(req), input.mode);
+    return agent.startTaskRun(input.orgId, input.title, input.instruction, actor(req), input.mode, input.templateId && TASK_TEMPLATES.some((t) => t.id === input.templateId) ? input.templateId : null);
   });
 
   app.get<{ Params: { id: string } }>("/api/runs/:id", async (req) => {
     const run = store.getRun(req.params.id);
     if (!run) throw notFound("Run");
     const actions = store.listActions({ runId: run.id });
+    const usage = store.runModelUsage(run.id);
     return {
       run: { ...run, org_name: store.getOrg(run.org_id)?.name ?? "" },
+      usage: {
+        modelCalls: usage.reduce((n, u) => n + u.calls, 0),
+        inputTokens: usage.reduce((n, u) => n + u.input_tokens, 0),
+        outputTokens: usage.reduce((n, u) => n + u.output_tokens, 0),
+        ...runCost(store, run.id),
+      },
       actions,
       transcript: buildTranscript(store.getRunMessages<ChatMessage>(run.id), actions),
     };
@@ -656,6 +676,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       reasoningEffort: z.string().max(20),
       apiVersion: z.string().max(40),
       extraHeaders: z.record(z.string(), z.string()),
+      inputUsdPerMTok: z.number().min(0).max(10_000),
+      outputUsdPerMTok: z.number().min(0).max(10_000),
     })
     .partial();
   const providerIds = PROVIDER_PRESETS.map((p) => p.id) as [string, ...string[]];
@@ -944,15 +966,72 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   app.get<{ Params: { id: string } }>("/api/orgs/:id/report", async (req) => {
     const org = store.getOrg(req.params.id);
     if (!org) throw notFound("Organization");
+    const billing = store.getBillingSettings();
     const q = query(
       z.object({
         days: z.coerce.number().int().min(1).max(730).default(90),
-        minutesPerTicket: z.coerce.number().min(0).max(600).default(20),
-        minutesPerAction: z.coerce.number().min(0).max(120).default(5),
+        minutesPerTicket: z.coerce.number().min(0).max(600).default(billing.minutesPerTicket),
+        minutesPerAction: z.coerce.number().min(0).max(120).default(billing.minutesPerAction),
       }),
       req,
     );
     return clientReport(store, org, q);
+  });
+
+  // ------------------------------------------------------ usage & billing
+
+  const billingSettings = z.object({
+    aiMarkupPercent: z.number().min(0).max(1000),
+    autoCloseResolvedDays: z.number().int().min(0).max(90),
+    minutesPerTicket: z.number().min(0).max(600),
+    minutesPerAction: z.number().min(0).max(120),
+  });
+
+  /** A billing period: ?month=YYYY-MM, or ?from=&to= dates; defaults to the current month so far. */
+  const usagePeriod = (req: FastifyRequest) => {
+    const q = query(
+      z.object({
+        month: z
+          .string()
+          .regex(/^\d{4}-(0[1-9]|1[0-2])$/)
+          .optional(),
+        from: z.iso.date().optional(),
+        to: z.iso.date().optional(),
+      }),
+      req,
+    );
+    if (q.month) {
+      const [y, m] = q.month.split("-").map(Number);
+      return { from: new Date(Date.UTC(y, m - 1, 1)), to: new Date(Date.UTC(y, m, 1)) };
+    }
+    const today = new Date();
+    const from = q.from ? new Date(`${q.from}T00:00:00Z`) : new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+    // `to` is inclusive for callers, so the period ends at the start of the next day.
+    const to = q.to ? new Date(new Date(`${q.to}T00:00:00Z`).getTime() + 86_400_000) : today;
+    if (to <= from) throw new HttpError(400, "The end date must be on or after the start date.");
+    if (to.getTime() - from.getTime() > 366 * 86_400_000) throw new HttpError(400, "Pick a period of a year or less.");
+    return { from, to };
+  };
+
+  app.get("/api/usage", async (req) => {
+    const { from, to } = usagePeriod(req);
+    return usageReport(store, from, to);
+  });
+
+  app.get("/api/usage.csv", async (req, reply) => {
+    const { from, to } = usagePeriod(req);
+    const name = `haley-usage-${from.toISOString().slice(0, 10)}.csv`;
+    return reply.header("content-type", "text/csv; charset=utf-8").header("content-disposition", `attachment; filename="${name}"`).send(usageCsv(usageReport(store, from, to)));
+  });
+
+  app.get("/api/billing/settings", async () => store.getBillingSettings());
+
+  app.patch("/api/billing/settings", async (req) => {
+    const patch = body(billingSettings.partial(), req);
+    const before = store.getBillingSettings();
+    const next = store.setBillingSettings(patch);
+    store.audit({ actor: actor(req), action: "billing.settings_changed", target: "billing", detail: { from: before, to: next } });
+    return next;
   });
 
   // ---------------------------------------------------------- approvals
