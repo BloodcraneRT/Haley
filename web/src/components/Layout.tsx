@@ -15,10 +15,11 @@ import {
   Ticket,
   Zap,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { aiReady, useApp } from "../lib/app-context";
 import { Avatar } from "./Avatar";
+import { Loading } from "./Feedback";
 
 function NavItem({ to, icon, children, badge, end }: { to: string; icon: ReactNode; children: ReactNode; badge?: number; end?: boolean }) {
   return (
@@ -185,7 +186,9 @@ export function Layout() {
           </div>
         )}
         <main id="main" className="content" tabIndex={-1}>
-          <Outlet />
+          <Suspense fallback={<Loading label="Loading page…" />}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>

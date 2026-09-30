@@ -27,12 +27,12 @@
 
 1. A run starts from a ticket or a task. The first user message holds today's date, the organization context (autonomy policy, connected systems, MSP notes) and the ticket with its history. The system prompt (`agent/prompts.ts`) is identical for every run so it caches.
 2. Each model turn is appended to `runs.messages` exactly as returned: the history is append-only, which keeps prompt caching and thinking-block replay valid.
-3. For every `tool_use` block the runner validates the input with the tool's zod schema, then asks `policy.decide(autonomy, risk)`:
+3. For every `tool_use` block the runner validates the input with the tool's zod schema, resolves targets and safety checks, then evaluates the client's current policy and requester authority. Pause is checked before every call and again after asynchronous lookups:
    - **run**: executes now and records an `actions` row.
    - **block**: records a blocked action and returns an error result telling the model to recommend the step instead.
    - **approve**: records a `pending_approval` action and keeps going through the other calls in the turn.
 4. If anything is pending, the run is saved as `awaiting_approval` together with the results already produced (`runs.pending`), and the ticket moves to `awaiting_approval`.
-5. When the last pending action of a run is approved or rejected, `resume()` executes the approved ones, turns rejections into error results that carry the technician's note, sends all results back **in the order the model called them**, and continues the loop.
+5. When the last pending action of a run is approved or rejected, `resume()` checks the kill switch and current policy before executing the approved ones. New blocks, failed verification and changed named approvers invalidate the old approval. Rejections become error results that carry the technician's note; all results return **in the order the model called them**, and the loop continues.
 6. The loop ends on `end_turn` (the final text becomes the technician summary on the ticket), on a refusal, context or iteration limit (the run fails and the ticket is escalated), or on an API error.
 
 ### Any model: `server/src/ai/`
@@ -63,7 +63,7 @@ On first start, a Claude profile is created from `HALEY_MODEL`, `HALEY_EFFORT` a
 
 1. **Verify the caller.** Each webhook checks its own proof: a shared secret for email, Slack's HMAC signature with a replay window, the Bot Framework JWT for Teams (checked against Microsoft's published signing keys), and HMAC for the chat bridge.
 2. **Resolve the client and the person.** The client comes from the email domain, the Slack workspace, the Entra tenant or the bridge. The person's **assurance level** comes from DMARC/DKIM alignment, the Slack profile email (guests excluded), or the Teams Entra object ID matched in the client's directory.
-3. **Thread.** A message continues an open ticket if it matches the email subject tag or message ID, the Slack thread or DM, the Teams conversation, or the bridge thread. Otherwise it opens a ticket, sends an acknowledgement and starts Haley.
+3. **Thread.** A message continues an open ticket if it matches the email subject tag or message ID, the Slack thread or DM, the Teams conversation, or the bridge thread, and establishes the same requester with at least the original channel's identity assurance. Unverified messages cannot reuse an earlier MFA step-up. Otherwise it opens a separate ticket, sends an acknowledgement and starts Haley. PSA comments that cannot establish a safe continuation remain visible to technicians but are excluded from later agent context.
 4. **Follow-ups.** A message on a busy ticket sets `needs_followup`, and a fresh pass starts when the current run ends. Messages on escalated tickets wait for the technician.
 5. **Replies.** `reply_to_requester`, technician replies and automatic notices ("needs a quick sign-off", "passed to the IT team") all go out on the ticket's channel, and the delivery result is stored on the timeline.
 

@@ -33,21 +33,13 @@ export function clientReport(store: Store, org: Org, options: ReportOptions) {
   const inPeriod = (iso: string | null) => Boolean(iso) && iso! >= from.toISOString() && iso! <= to.toISOString();
 
   const all = store.listTickets({ orgId: org.id, limit: 100_000 });
-  const eventCache = new Map<string, ReturnType<Store["listTicketEvents"]>>();
-  const eventsOf = (ticketId: string) => {
-    if (!eventCache.has(ticketId)) eventCache.set(ticketId, store.listTicketEvents(ticketId));
-    return eventCache.get(ticketId)!;
-  };
+  const activity = store.ticketActivityForReport(org.id);
   const opened = all.filter((t) => inPeriod(t.created_at));
   const resolved = all.filter((t) => inPeriod(t.resolved_at));
 
   const handledByHaleyAlone = resolved.filter((t) => {
-    const events = eventsOf(t.id);
-    const escalated = events.some((e) => e.kind === "escalation");
-    const technicianTouched = events.some(
-      (e) => (e.kind === "comment" || e.kind === "reply") && e.author !== "haley" && !e.meta.channel && !e.meta.auto && e.author !== t.requester_name,
-    );
-    return !escalated && !technicianTouched;
+    const flags = activity.get(t.id);
+    return flags?.resolvedByHaley && !flags.escalated && !flags.technicianTouched;
   });
 
   const resolutionMinutes = resolved.map((t) => (Date.parse(t.resolved_at!) - Date.parse(t.created_at)) / 60_000);
@@ -74,7 +66,7 @@ export function clientReport(store: Store, org: Org, options: ReportOptions) {
       stillOpen: all.filter((t) => !["resolved", "closed"].includes(t.status)).length,
       resolvedByHaleyAlone: handledByHaleyAlone.length,
       automationRate: pct(handledByHaleyAlone.length, resolved.length),
-      escalated: opened.filter((t) => eventsOf(t.id).some((e) => e.kind === "escalation")).length,
+      escalated: opened.filter((t) => activity.get(t.id)?.escalated).length,
       medianResolutionMinutes: median(resolutionMinutes),
       byCategory: count(opened, (t) => t.category),
       byChannel: count(opened, (t) => t.channel),

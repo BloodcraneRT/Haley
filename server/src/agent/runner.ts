@@ -77,7 +77,8 @@ export class AgentService {
             : "Work this ticket.",
       createdBy,
     });
-    const intro = `${this.header(org)}\n\n${ticketContext(ticket, this.store.listTicketEvents(ticketId))}\n\n${
+    const history = this.store.listTicketEvents(ticketId).filter((event) => !event.meta.untrustedContinuation);
+    const intro = `${this.header(org)}\n\n${ticketContext(ticket, history)}\n\n${
       followUp
         ? `This is a follow-up you scheduled earlier on this ticket. Do this now: ${followUp}${mode === "plan" ? `\n\n${PLAN_MODE_TEXT}` : ""}`
         : mode === "plan"
@@ -206,6 +207,7 @@ export class AgentService {
     const pending = this.store.getRunPending(runId);
     if (!pending) return;
     const run = this.store.getRun(runId)!;
+    this.assertNotPaused(this.requireOrg(run.org_id));
     const tools = this.toolsFor(run);
     const actions = new Map(this.store.listActions({ runId }).map((a) => [a.tool_use_id, a]));
     const blocks: Part[] = [];
@@ -217,7 +219,16 @@ export class AgentService {
         if (!action || !tool) {
           result = { content: "This tool is no longer available (the integration may have been removed).", is_error: true };
         } else if (action.status === "approved") {
-          result = await this.execute(run, action, tool, action.input);
+          const decision = await this.policyFor(run, tool, action.input, tools);
+          const approverAllowed = !decision.approvers?.length || decision.approvers.some((name) => name.toLowerCase() === action.decided_by?.toLowerCase());
+          if (decision.outcome === "block" || !approverAllowed) {
+            const reason = decision.outcome === "block" ? decision.reason : `Current client policy requires approval by ${decision.approvers!.join(", ")}. Request a new approval.`;
+            this.store.finishAction(action.id, { status: "blocked", result: { error: reason } });
+            this.store.audit({ orgId: run.org_id, actor: AGENT, action: "action.blocked", target: action.id, detail: { tool: tool.name, reason } });
+            result = { content: `Blocked by current policy: ${reason}`, is_error: true };
+          } else {
+            result = await this.execute(run, action, tool, action.input);
+          }
         } else {
           result = {
             content: `A technician (${action.decided_by}) rejected this action.${action.decision_note ? ` Their note: ${action.decision_note}` : ""}`,
@@ -235,7 +246,6 @@ export class AgentService {
 
   private async loop(runId: string): Promise<void> {
     let run = this.store.getRun(runId)!;
-    const org = this.requireOrg(run.org_id);
     const tools = this.toolsFor(run);
     const toolSpecs = [...tools.values()].map(toToolSpec);
     const messages = this.store.getRunMessages<ChatMessage>(runId);
@@ -279,7 +289,7 @@ export class AgentService {
         case "context_exceeded":
           return this.fail(runId, `The model ran out of room (${response.stopReason}). A technician should review.`, true);
         case "tool_use": {
-          const paused = await this.handleToolUse(run, org, tools, response, text, messages);
+          const paused = await this.handleToolUse(run, tools, response, text, messages);
           if (paused) return;
           continue;
         }
@@ -292,7 +302,6 @@ export class AgentService {
   /** Executes or queues each tool call. Returns true when the run paused for approval. */
   private async handleToolUse(
     run: Run,
-    org: Org,
     tools: Map<string, HaleyTool>,
     response: ModelResponse,
     rationale: string,
@@ -303,6 +312,7 @@ export class AgentService {
     let awaiting = 0;
 
     for (const call of calls) {
+      this.assertNotPaused(this.requireOrg(run.org_id));
       const tool = tools.get(call.name);
       if (!tool) {
         pending.results[call.id] = { content: `Unknown tool ${call.name}.`, is_error: true };
@@ -313,40 +323,8 @@ export class AgentService {
         pending.results[call.id] = { content: `Invalid input: ${z.prettifyError(parsed.error)}`, is_error: true };
         continue;
       }
-      const targets = tool.resolveTargets ? await tool.resolveTargets(parsed.data).catch(() => targetsOf(parsed.data)) : targetsOf(parsed.data);
-      const protectedList = org.settings.protectedAccounts.map((a) => a.toLowerCase());
-      const requester = this.requesterFor(run, org);
-      let decision: Decision = decide({
-        autonomy: org.autonomy,
-        risk: tool.risk,
-        grantsAccess: Boolean(tool.grantsAccess),
-        requester,
-        targets,
-        protectedTargets: targets.filter((t) => protectedList.includes(t)),
-        changesLastHour: this.store.countAgentChangesSince(org.id, new Date(Date.now() - 3_600_000).toISOString()),
-        maxChangesPerHour: org.settings.maxAutoChangesPerHour,
-        selfServiceToday: requester.email
-          ? this.store.countSelfServiceSince(org.id, requester.email, new Date(Date.now() - 86_400_000).toISOString())
-          : 0,
-        maxSelfServicePerDay: org.settings.maxSelfServicePerUserPerDay,
-      });
-      if (tool.risk === "write" || tool.risk === "destructive") {
-        const rules = org.settings.policyRules ?? [];
-        const departments = rules.some((r) => r.enabled && r.departments.length) ? await this.departmentsOf(targets, tools) : [];
-        decision = applyRules(decision, rules, { tool: tool.name, risk: tool.risk, targets, departments, requester });
-        const guardReason = tool.guard ? await tool.guard(parsed.data).catch(() => null) : null;
-        decision = applyRails(decision, tool.rail, guardReason, targets, requester);
-      }
+      const decision = await this.policyFor(run, tool, parsed.data, tools);
       const description = tool.describe?.(parsed.data) ?? tool.name;
-      // After the account owner rejected identity verification, Haley makes no customer changes on this ticket at all.
-      if (
-        run.ticket_id &&
-        (tool.risk === "write" || tool.risk === "destructive") &&
-        this.store.listVerifications({ ticketId: run.ticket_id }).some((v) => v.outcome === "denied")
-      ) {
-        decision.outcome = "block";
-        decision.reason = "Identity verification failed on this ticket (possible impersonation), so Haley can't change anything here.";
-      }
 
       if (run.mode === "plan" && tool.risk !== "read") {
         const live =
@@ -438,7 +416,48 @@ export class AgentService {
     return false;
   }
 
+  /** Rechecks current client policy after every asynchronous safety lookup, including approval resumes. */
+  private async policyFor(run: Run, tool: HaleyTool, input: unknown, tools: Map<string, HaleyTool>): Promise<Decision> {
+    this.assertNotPaused(this.requireOrg(run.org_id));
+    let targetCheckFailure: string | null = null;
+    const targets = tool.resolveTargets ? await tool.resolveTargets(input).catch((err) => {
+      targetCheckFailure = `Couldn't confirm the affected account (${errorMessage(err)}); a technician must review.`;
+      return targetsOf(input);
+    }) : targetsOf(input);
+    const changesCustomer = tool.risk === "write" || tool.risk === "destructive";
+    const guardReason = changesCustomer && tool.guard
+      ? await tool.guard(input).catch((err) => `Couldn't complete the tool's safety check (${errorMessage(err)}); a technician must review.`)
+      : null;
+    const currentRules = this.requireOrg(run.org_id).settings.policyRules ?? [];
+    const departments = changesCustomer && currentRules.some((r) => r.enabled && r.departments.length)
+      ? await this.departmentsOf(targets, tools).catch((err) => {
+        targetCheckFailure = `Couldn't check the target's department (${errorMessage(err)}); a technician must review.`;
+        return [];
+      }) : [];
+    const org = this.requireOrg(run.org_id);
+    this.assertNotPaused(org);
+    const requester = this.requesterFor(run, org);
+    const protectedList = org.settings.protectedAccounts.map((account) => account.toLowerCase());
+    let decision = decide({
+      autonomy: org.autonomy, risk: tool.risk, grantsAccess: Boolean(tool.grantsAccess), requester, targets,
+      protectedTargets: targets.filter((target) => protectedList.includes(target)),
+      changesLastHour: this.store.countAgentChangesSince(org.id, new Date(Date.now() - 3_600_000).toISOString()),
+      maxChangesPerHour: org.settings.maxAutoChangesPerHour,
+      selfServiceToday: requester.email ? this.store.countSelfServiceSince(org.id, requester.email, new Date(Date.now() - 86_400_000).toISOString()) : 0,
+      maxSelfServicePerDay: org.settings.maxSelfServicePerUserPerDay,
+    });
+    if (changesCustomer) {
+      decision = applyRules(decision, org.settings.policyRules ?? [], { tool: tool.name, risk: tool.risk, targets, departments, requester });
+      decision = applyRails(decision, tool.rail, targetCheckFailure ?? guardReason, targets, requester);
+      if (run.ticket_id && this.store.listVerifications({ ticketId: run.ticket_id }).some((verification) => verification.outcome === "denied")) {
+        decision = { outcome: "block", reason: "Identity verification failed on this ticket (possible impersonation), so Haley can't change anything here." };
+      }
+    }
+    return decision;
+  }
+
   private async execute(run: Run, action: Action, tool: HaleyTool, input: unknown): Promise<ToolResult> {
+    this.assertNotPaused(this.requireOrg(run.org_id));
     const ctx: ToolContext = { orgId: run.org_id, runId: run.id, ticketId: run.ticket_id };
     const changesCustomer = tool.risk === "write" || tool.risk === "destructive";
     try {
@@ -486,7 +505,7 @@ export class AgentService {
     const ctx: ToolContext = { orgId: "", runId: "", ticketId: null };
     const departments: string[] = [];
     for (const target of targets) {
-      const user = (await lookup.run({ user: target }, ctx).catch(() => null)) as { department?: string | null } | null;
+      const user = (await lookup.run({ user: target }, ctx)) as { department?: string | null } | null;
       if (!user?.department) return [];
       departments.push(user.department.toLowerCase());
     }

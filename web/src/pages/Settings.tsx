@@ -104,10 +104,10 @@ export function SettingsPage() {
               </dd>
             </dl>
           </div>
-          {health.authRequired && session.token && (
+          {(session.token || user) && (
             <div className="card-footer">
               <span className="muted" style={{ fontSize: "var(--text-sm)" }}>
-                Signed in with an API token.
+                {health.authRequired && session.token ? "Signed in with an API token." : `Using this browser as ${user}.`}
               </span>
               <span className="spacer" />
               <button className="btn btn-sm" onClick={signOut}>

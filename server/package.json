@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --disable-warning=ExperimentalWarning src/index.ts",
-    "start": "node --enable-source-maps --disable-warning=ExperimentalWarning dist/index.js",
+    "dev": "tsx watch --env-file-if-exists=../.env --env-file-if-exists=.env --disable-warning=ExperimentalWarning src/index.ts",
+    "start": "node --env-file-if-exists=../.env --env-file-if-exists=.env --enable-source-maps --disable-warning=ExperimentalWarning dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run"

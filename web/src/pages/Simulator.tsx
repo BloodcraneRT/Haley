@@ -81,6 +81,9 @@ export function SimulatorPage() {
   const [error, setError] = useState<string | null>(null);
   const listRef = useRef<HTMLOListElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const conversation = useRef(0);
+  const currentOrg = useRef(orgId);
+  currentOrg.current = orgId;
 
   // Pick a client automatically when there's only one, and a plausible address on its domain.
   useEffect(() => {
@@ -119,6 +122,7 @@ export function SimulatorPage() {
   }
 
   const reset = () => {
+    conversation.current++;
     setThreadId(null);
     setTicketId(null);
     setOutbox(null);
@@ -137,8 +141,11 @@ export function SimulatorPage() {
     setSending(true);
     setDraft("");
     setOutbox({ text: body, ticketId, mineBefore: mine });
+    const generation = conversation.current;
+    const current = () => generation === conversation.current && orgId === currentOrg.current;
     try {
       const res = await api.simulate({ orgId, email: email.trim(), name: name.trim(), assurance, text: body, threadId: threadId ?? undefined });
+      if (!current()) return;
       setThreadId(res.threadId);
       // A resolved conversation continues on a new ticket.
       setOutbox({ text: body, ticketId: res.ticketId, mineBefore: res.ticketId === ticketId ? mine : 0 });
@@ -146,6 +153,7 @@ export function SimulatorPage() {
       else await detail.reload();
       if (res.created) refreshStats();
     } catch (err) {
+      if (!current()) return;
       setOutbox(null);
       setDraft(body);
       setError(errorMessage(err));
@@ -194,7 +202,7 @@ export function SimulatorPage() {
               <h2 id="sim-setup-title">Who's asking</h2>
               <span className="spacer" />
               {started && (
-                <button className="btn btn-sm" onClick={reset}>
+                <button className="btn btn-sm" onClick={reset} disabled={sending}>
                   <RotateCcw className="icon-sm" aria-hidden="true" /> New conversation
                 </button>
               )}
@@ -202,7 +210,7 @@ export function SimulatorPage() {
             <div className="card-body stack">
               <div className="field">
                 <label htmlFor="sim-org">Client</label>
-                <OrgSelect id="sim-org" orgs={orgs.data} value={orgId} onChange={(v) => { setOrg(v); reset(); }} />
+                <OrgSelect id="sim-org" orgs={orgs.data} value={orgId} onChange={(v) => { setOrg(v); reset(); }} disabled={sending} />
               </div>
               <div className="form-grid sim-person">
                 <div className="field">

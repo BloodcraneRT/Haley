@@ -29,6 +29,9 @@ export function usePoll<T>(fetcher: () => Promise<T>, deps: DependencyList, inte
   intervalRef.current = interval;
   const dataRef = useRef<T | undefined>(undefined);
   const generation = useRef(0);
+  const requestId = useRef(0);
+  const mutationId = useRef(0);
+  const inFlight = useRef<{ gen: number; promise: Promise<void> } | undefined>(undefined);
   const timer = useRef<number | undefined>(undefined);
 
   const schedule = useCallback((gen: number, run: (gen: number) => Promise<void>) => {
@@ -47,30 +50,45 @@ export function usePoll<T>(fetcher: () => Promise<T>, deps: DependencyList, inte
   }, []);
 
   const run = useCallback(
-    async (gen: number): Promise<void> => {
+    (gen: number, force = false): Promise<void> => {
+      // Explicit reloads can supersede a pre-write request; automatic refreshes reuse it.
+      if (!force && inFlight.current?.gen === gen) return inFlight.current.promise;
       window.clearTimeout(timer.current);
-      try {
-        const next = await fetcherRef.current();
-        if (gen !== generation.current) return;
-        dataRef.current = next;
-        setData(next);
-        setError(undefined);
-      } catch (err) {
-        if (gen !== generation.current) return;
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setError(err instanceof Error ? err : new Error(String(err)));
-      } finally {
-        if (gen === generation.current) {
-          setLoading(false);
-          schedule(gen, run);
+      const id = ++requestId.current;
+      const mutation = mutationId.current;
+      const fetch = fetcherRef.current;
+      const current = () => gen === generation.current && id === requestId.current && mutation === mutationId.current;
+      const promise = (async () => {
+        try {
+          // Defer invocation so even a synchronously thrown fetch error settles after registration.
+          const next = await Promise.resolve().then(fetch);
+          if (!current()) return;
+          dataRef.current = next;
+          setData(next);
+          setError(undefined);
+        } catch (err) {
+          if (!current()) return;
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          setError(err instanceof Error ? err : new Error(String(err)));
+        } finally {
+          if (gen === generation.current && id === requestId.current) {
+            inFlight.current = undefined;
+            setLoading(false);
+            schedule(gen, run);
+          }
         }
-      }
+      })();
+      inFlight.current = { gen, promise };
+      return promise;
     },
     [schedule],
   );
 
   useEffect(() => {
     const gen = ++generation.current;
+    dataRef.current = undefined;
+    setData(undefined);
+    setError(undefined);
     setLoading(true);
     void run(gen);
     return () => {
@@ -83,15 +101,18 @@ export function usePoll<T>(fetcher: () => Promise<T>, deps: DependencyList, inte
   // Refresh promptly when the tab becomes visible again.
   useEffect(() => {
     const onVisible = () => {
-      if (!document.hidden && intervalRef.current) void run(generation.current);
+      const i = intervalRef.current;
+      const ms = typeof i === "function" ? i(dataRef.current) : i;
+      if (!document.hidden && ms) void run(generation.current);
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [run]);
 
-  const reload = useCallback(() => run(generation.current), [run]);
+  const reload = useCallback(() => run(generation.current, true), [run]);
 
   const mutate = useCallback((update: (data: T | undefined) => T | undefined) => {
+    mutationId.current++;
     const next = update(dataRef.current);
     dataRef.current = next;
     setData(next);

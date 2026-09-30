@@ -50,6 +50,7 @@ import { RelativeTime } from "../components/RelativeTime";
 import { RunRow } from "../components/RunRow";
 import { SchedulesSection } from "../components/Schedules";
 import { usePoll } from "../hooks/usePoll";
+import { useDraft } from "../hooks/useDraft";
 import { useApp } from "../lib/app-context";
 import { AUTONOMY_META, isRunActive, PROVIDER_NAMES } from "../lib/format";
 
@@ -356,28 +357,25 @@ export function ClientDetailPage() {
 
 function OrgDetailsForm({ org, onSaved }: { org: OrgDetail; onSaved: () => void }) {
   const { toast } = useApp();
-  const [name, setName] = useState(org.name);
-  const [domain, setDomain] = useState(org.domain);
-  const [notes, setNotes] = useState(org.notes);
+  const saved = useMemo(() => ({ name: org.name, domain: org.domain, notes: org.notes }), [org.name, org.domain, org.notes]);
+  const { draft: { name, domain, notes }, setDraft, patch, dirty, reset } = useDraft(saved);
   const [busy, setBusy] = useState(false);
-
-  // Pick up server-side changes when not editing.
-  const dirty = name !== org.name || domain !== org.domain || notes !== org.notes;
-  useEffect(() => {
-    if (!dirty) {
-      setName(org.name);
-      setDomain(org.domain);
-      setNotes(org.notes);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [org.name, org.domain, org.notes]);
 
   const save = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return toast("Name can't be empty.", "error");
     setBusy(true);
     try {
-      await api.updateOrg(org.id, { name: name.trim(), domain: domain.trim(), notes });
+      await api.updateOrg(org.id, {
+        ...patch,
+        ...(patch.name !== undefined ? { name: name.trim() } : {}),
+        ...(patch.domain !== undefined ? { domain: domain.trim() } : {}),
+      });
+      setDraft((d) => ({
+        ...d,
+        ...(d.name === name ? { name: name.trim() } : {}),
+        ...(d.domain === domain ? { domain: domain.trim() } : {}),
+      }));
       toast("Client details saved.");
       onSaved();
     } catch (err) {
@@ -395,11 +393,11 @@ function OrgDetailsForm({ org, onSaved }: { org: OrgDetail; onSaved: () => void 
       <div className="card-body stack">
         <div className="field">
           <label htmlFor="org-name">Name</label>
-          <input id="org-name" className="input" value={name} onChange={(e) => setName(e.target.value)} required />
+          <input id="org-name" className="input" value={name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} required />
         </div>
         <div className="field">
           <label htmlFor="org-domain">Primary domain</label>
-          <input id="org-domain" className="input" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="contoso.com" />
+          <input id="org-domain" className="input" value={domain} onChange={(e) => setDraft((d) => ({ ...d, domain: e.target.value }))} placeholder="contoso.com" />
         </div>
         <div className="field">
           <label htmlFor="org-notes">Notes for Haley</label>
@@ -408,7 +406,7 @@ function OrgDetailsForm({ org, onSaved }: { org: OrgDetail; onSaved: () => void 
             className="textarea"
             rows={6}
             value={notes}
-            onChange={(e) => setNotes(e.target.value)}
+            onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
             placeholder="Key contacts, approval rules, office hours…"
           />
           <span className="help">Included in Haley's context on every ticket and task.</span>
@@ -423,11 +421,7 @@ function OrgDetailsForm({ org, onSaved }: { org: OrgDetail; onSaved: () => void 
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            onClick={() => {
-              setName(org.name);
-              setDomain(org.domain);
-              setNotes(org.notes);
-            }}
+            onClick={reset}
           >
             Discard
           </button>

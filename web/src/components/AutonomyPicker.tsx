@@ -1,5 +1,5 @@
 import { Bot, CircleCheck, Eye, ShieldCheck, Zap } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { AUTONOMY_LEVELS, type Autonomy, type OrgSettings } from "../api";
 import { AUTONOMY_META } from "../lib/format";
 
@@ -7,8 +7,19 @@ const ICONS: Record<Autonomy, typeof Eye> = { read_only: Eye, supervised: Shield
 const ORDER: Autonomy[] = AUTONOMY_LEVELS;
 
 export function AutonomyPicker({ value, onChange, disabled }: { value: Autonomy; onChange: (a: Autonomy) => void; disabled?: boolean }) {
+  const group = useRef<HTMLDivElement>(null);
+  const keyboardFocus = useRef(false);
+  useEffect(() => {
+    if (!disabled && keyboardFocus.current) {
+      // Saving temporarily disables the buttons; restore keyboard focus when they become available.
+      if (document.activeElement === document.body || group.current?.contains(document.activeElement)) {
+        group.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[ORDER.indexOf(value)]?.focus();
+      }
+      keyboardFocus.current = false;
+    }
+  }, [disabled, value]);
   return (
-    <div className="autonomy-options" role="radiogroup" aria-label="Autonomy">
+    <div ref={group} className="autonomy-options" role="radiogroup" aria-label="Autonomy">
       {ORDER.map((a) => {
         const meta = AUTONOMY_META[a];
         const Icon = ICONS[a];
@@ -24,13 +35,18 @@ export function AutonomyPicker({ value, onChange, disabled }: { value: Autonomy;
             onClick={() => onChange(a)}
             onKeyDown={(e) => {
               const i = ORDER.indexOf(a);
+              let next: number;
               if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-                e.preventDefault();
-                onChange(ORDER[(i + 1) % ORDER.length]);
+                next = (i + 1) % ORDER.length;
               } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-                e.preventDefault();
-                onChange(ORDER[(i + ORDER.length - 1) % ORDER.length]);
-              }
+                next = (i + ORDER.length - 1) % ORDER.length;
+              } else if (e.key === "Home") next = 0;
+              else if (e.key === "End") next = ORDER.length - 1;
+              else return;
+              e.preventDefault();
+              keyboardFocus.current = ORDER[next] !== value;
+              group.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus();
+              onChange(ORDER[next]);
             }}
             tabIndex={selected ? 0 : -1}
           >

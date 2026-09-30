@@ -33,7 +33,7 @@ export function RevealSecretButton({ actionId, size = "sm" }: { actionId: string
     <>
       <button className={`btn ${size === "sm" ? "btn-sm" : ""}`} onClick={reveal} disabled={busy}>
         {busy ? <Spinner /> : <KeyRound className="icon-sm" aria-hidden="true" />}
-        Reveal temporary password
+        Reveal credentials
       </button>
       <Modal
         open={secrets !== null}
@@ -50,7 +50,7 @@ export function RevealSecretButton({ actionId, size = "sm" }: { actionId: string
           <ShieldAlert className="icon" aria-hidden="true" />
           <span>
             This reveal was recorded in the audit log{user ? ` as ${user}` : ""}. Deliver it to the user by phone or SMS, never by email to
-            the same mailbox. It won't be shown again after you close this.
+            the same mailbox. Closing clears this dialog; each reveal is audited.
           </span>
         </div>
         <div className="secret-box">

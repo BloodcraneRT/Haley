@@ -19,6 +19,10 @@ Every tool call Haley makes is judged on:
 
 Calls that don't pass never fail silently. They go to the technician approval queue with the reason attached, or, in read-only mode, they come back to Haley as "recommend this instead".
 
+Account-changing tools resolve Microsoft 365 object IDs and Google aliases to the actual account email before applying account rules. Failed target, department or admin checks require technician review instead of authorizing an automatic change. The same canonical account owns any resulting credential.
+
+Haley checks the kill switch after asynchronous policy lookups and before execution. Approved actions are checked against the current policy when the run resumes; a new block, failed verification or changed named approver prevents the old approval from executing the action. A change already sent to a provider cannot be recalled by the kill switch.
+
 ## Identity assurance
 
 | Level | How the requester reached Haley | What it proves |
@@ -45,6 +49,8 @@ These rules hold in every mode:
 - **Email alone never authorizes a security-sensitive change**, even from an authorized approver.
 - **Volume limits**: in unattended mode, at most N automatic changes per client per hour (default 20) and M security-sensitive self-service changes per person per day (default 3). Past either, requests fall back to approval.
 - **Kill switch**: pausing Haley for a client stops new runs, stops in-flight runs before their next step, and routes every new message to technicians.
+
+Policy and requester authority are checked again after asynchronous directory lookups for each new tool call. Pausing also stops a newly returned batch of tool calls and prevents approved actions from executing while the client is paused.
 
 ## Client policy rules
 
@@ -104,6 +110,8 @@ Ticket text, emails and chat messages come from end users. Haley treats them as 
 - Credentials never enter the model's context.
 - Tools only reach the ticket's own client.
 - Follow-ups Haley schedules for herself run with the original requester's authority, not a technician's.
+- A reply only continues a ticket when it comes from the same requester with at least the original channel's identity assurance. An unverified message cannot reuse an earlier MFA step-up. Other messages open a separate ticket; unmatched PSA comments stay on the technician timeline and are excluded from Haley's context.
+- Ticket runs can read shared knowledge articles but can only create or update articles for their own client. Global procedures can be authored through technician tasks.
 
 ## Accountability
 

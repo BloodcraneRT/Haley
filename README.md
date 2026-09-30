@@ -47,12 +47,14 @@ Requires Node.js 22.13 or later.
 
 ```bash
 npm run install:all
-cp .env.example .env            # optional for local dev
+cp .env.example .env            # optional; dev/start load it automatically
 export ANTHROPIC_API_KEY=sk-ant-...
 
 npm run dev:server              # API on http://localhost:8787
 npm run dev:web                 # dashboard on http://localhost:5173
 ```
+
+`dev:server` and `start` load the root `.env`, then an optional `server/.env`. Server-specific values override the root file; existing environment variables take precedence over both.
 
 Open the dashboard and click **Load demo workspace**. Then try the **End-user simulator**: set Contoso to Unattended and message Haley as `megan.bowen@contoso.example`. It creates two sandbox clients (Contoso on Microsoft 365, Acme Health Clinic on Google Workspace), some runbooks, and realistic tickets, including a lockout, a mailbox access request, an Exchange degradation, and a new hire. Open a ticket and click **Run Haley**.
 

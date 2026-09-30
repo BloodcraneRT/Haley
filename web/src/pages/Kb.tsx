@@ -1,35 +1,31 @@
 import { BookOpen, Globe, Plus, Search, Sparkles } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import { EmptyState, ErrorBanner, Loading } from "../components/Feedback";
 import { PageHeader } from "../components/PageHeader";
 import { RelativeTime } from "../components/RelativeTime";
 import { usePoll } from "../hooks/usePoll";
+import { useDebouncedQuery } from "../hooks/useDebouncedQuery";
 
 /** Scope filter: "" = everything, "global" = MSP-wide runbooks only, otherwise an org id (its articles plus global ones). */
 export function KbPage() {
   const [params, setParams] = useSearchParams();
   const scope = params.get("orgId") ?? "";
   const q = params.get("q") ?? "";
-  const [search, setSearch] = useState(q);
   const [includeGlobal, setIncludeGlobal] = useState(true);
   const orgs = usePoll(() => api.orgs(), []);
   const articles = usePoll(() => api.kb({ orgId: scope && scope !== "global" ? scope : undefined, q: q || undefined }), [scope, q]);
 
   const update = (key: string, value: string) => {
-    const next = new URLSearchParams(params);
-    if (value) next.set(key, value);
-    else next.delete(key);
-    setParams(next, { replace: true });
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      if (value) next.set(key, value);
+      else next.delete(key);
+      return next;
+    }, { replace: true });
   };
-
-  useEffect(() => {
-    if (search === q) return;
-    const t = window.setTimeout(() => update("q", search.trim()), 250);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search]);
+  const [search, setSearch] = useDebouncedQuery(q, (value) => update("q", value));
 
   // The API always mixes global articles into org-scoped results; narrow client-side.
   const list = (articles.data ?? []).filter((a) => {

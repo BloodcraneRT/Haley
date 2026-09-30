@@ -1,7 +1,8 @@
 import { CirclePause, CirclePlay, OctagonPause, Plus, X } from "lucide-react";
-import { useEffect, useId, useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useId, useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
 import { api, errorMessage, TICKET_PRIORITIES, type OrgDetail, type OrgSettings, type TicketPriority } from "../api";
 import { useApp } from "../lib/app-context";
+import { useDraft } from "../hooks/useDraft";
 import { formatMinutes, PRIORITY_META } from "../lib/format";
 import { Spinner } from "./Feedback";
 import { Modal } from "./Modal";
@@ -247,16 +248,9 @@ const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export function SafetySettingsForm({ org, onSaved, pause }: { org: OrgDetail; onSaved: () => void; pause: ReturnType<typeof usePauseControl> }) {
   const { toast } = useApp();
   const saved = useMemo(() => toDraft(org.settings), [org.settings]);
-  const [draft, setDraft] = useState<Draft>(saved);
+  const { draft, setDraft, patch, dirty, reset } = useDraft(saved);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(saved);
-
-  // Pick up server-side changes when not editing.
-  useEffect(() => {
-    if (!dirty) setDraft(saved);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saved]);
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -279,7 +273,8 @@ export function SafetySettingsForm({ org, onSaved, pause }: { org: OrgDetail; on
     setBusy(true);
     setError(null);
     try {
-      await api.updateOrg(org.id, { settings: { ...draft, teamsTenantId: tenant } });
+      await api.updateOrg(org.id, { settings: { ...patch, ...(patch.teamsTenantId !== undefined ? { teamsTenantId: tenant } : {}) } });
+      setDraft((d) => d.teamsTenantId === draft.teamsTenantId ? { ...d, teamsTenantId: tenant } : d);
       toast("Self-service & safety settings saved.");
       onSaved();
     } catch (err) {
@@ -453,7 +448,7 @@ export function SafetySettingsForm({ org, onSaved, pause }: { org: OrgDetail; on
         </span>
         <span className="spacer" />
         {dirty && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setDraft(saved)}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={reset}>
             Discard
           </button>
         )}

@@ -112,6 +112,16 @@ export class ChannelHub implements ReplyDelivery {
   }
 
   /**
+   * A continuation can reuse the requester's authority only when the channel still establishes
+   * the same person at least as strongly. Unverified messages cannot reuse a prior MFA step-up.
+   */
+  private canContinue(ticket: Ticket, email: string | null, assurance: Assurance): boolean {
+    if (!email || email.toLowerCase() !== ticket.requester_email.toLowerCase()) return false;
+    if (ASSURANCE_RANK[assurance] < ASSURANCE_RANK[ticket.assurance]) return false;
+    return assurance !== "none" || effectiveAssurance(ticket) === "none";
+  }
+
+  /**
    * A new message on an existing ticket: record it, reopen if needed, and give Haley another pass
    * (now, or when her current pass ends). Technician-owned tickets just get the message.
    */
@@ -122,14 +132,18 @@ export class ChannelHub implements ReplyDelivery {
     if (!this.runs) throw new Error("ChannelHub is not attached to the agent");
     const org = this.store.getOrg(ticket.org_id);
     const fromRequester = Boolean(msg.email) && msg.email!.toLowerCase() === ticket.requester_email.toLowerCase();
+    const trusted = this.canContinue(ticket, msg.email, msg.assurance);
     this.store.addTicketEvent(ticket.id, "comment", msg.author, msg.text, {
       channel: msg.channel,
       fromRequester,
       senderEmail: msg.email,
       assurance: msg.assurance,
+      ...(!trusted ? { untrustedContinuation: true } : {}),
     });
+    // PSA comments still belong on the technician timeline, but must not enter owner-authorized runs.
+    if (!trusted) return { ticketId: ticket.id, ticketNumber: ticket.number, created: false, runId: null };
     if (["resolved", "closed", "waiting_on_customer"].includes(ticket.status) && ticket.assignee === "haley") {
-      this.store.setTicketStatus(ticket.id, "in_progress", msg.channel);
+      this.store.setTicketStatus(ticket.id, "in_progress", "haley");
     }
     // A technician owns escalated tickets (and all tickets while Haley is paused); the message is on the timeline for them.
     if (ticket.status === "escalated" || ticket.assignee !== "haley" || org?.settings.paused) {
@@ -156,7 +170,9 @@ export class ChannelHub implements ReplyDelivery {
     }
     if (!ticket && msg.thread) ticket = this.store.findOpenTicketByChannelRef(org.id, msg.channel, msg.thread.key, msg.thread.value);
 
-    if (ticket) return this.appendToTicket(ticket, { channel: msg.channel, author, email: sender.email, assurance: sender.assurance, text: msg.text });
+    if (ticket && this.canContinue(ticket, sender.email, sender.assurance)) {
+      return this.appendToTicket(ticket, { channel: msg.channel, author, email: sender.email, assurance: sender.assurance, text: msg.text });
+    }
 
     const flooding =
       Boolean(sender.email) &&

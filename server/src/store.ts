@@ -306,6 +306,12 @@ export class Store {
     return (this.db.prepare(sql).all(...args) as Row[]).map((r) => this.toTicket(r));
   }
 
+  /** Exact client queue counts, independent of the dashboard's ticket-list limit. */
+  countOpenTicketsByOrg(): Map<string, number> {
+    const rows = this.db.prepare("SELECT org_id, COUNT(*) AS n FROM tickets WHERE status NOT IN ('resolved', 'closed') GROUP BY org_id").all() as Row[];
+    return new Map(rows.map((r) => [r.org_id as string, Number(r.n)]));
+  }
+
   getTicket(id: string): Ticket | null {
     const row = this.db.prepare("SELECT * FROM tickets WHERE id = ?").get(id) as Row | undefined;
     return row ? this.toTicket(row) : null;
@@ -474,6 +480,31 @@ export class Store {
     return (this.db.prepare("SELECT * FROM ticket_events WHERE ticket_id = ? ORDER BY created_at, rowid").all(ticketId) as Row[]).map(
       (r) => ({ ...(r as unknown as TicketEvent), meta: parse(r.meta, {}) }),
     );
+  }
+
+  /** Reporting needs activity flags, not every timeline body in a query per ticket. */
+  ticketActivityForReport(orgId: string): Map<string, { resolvedByHaley: boolean; escalated: boolean; technicianTouched: boolean }> {
+    const rows = this.db.prepare(`
+      SELECT e.ticket_id,
+        MAX(CASE WHEN e.kind = 'status_change' AND e.author = 'haley'
+          AND json_extract(e.meta, '$.to') IN ('resolved', 'closed') THEN 1 ELSE 0 END) AS resolved_by_haley,
+        MAX(CASE WHEN e.kind = 'escalation' OR
+          (e.kind = 'status_change' AND json_extract(e.meta, '$.to') = 'escalated')
+          THEN 1 ELSE 0 END) AS escalated,
+        MAX(CASE WHEN json_extract(e.meta, '$.fromTechnician') = 1 OR (e.author NOT IN ('haley', 'system') AND (
+          (e.kind IN ('comment', 'reply') AND e.author <> t.requester_name
+            AND json_extract(e.meta, '$.channel') IS NULL AND COALESCE(json_extract(e.meta, '$.auto'), 0) = 0)
+          OR e.kind IN ('status_change', 'field_change', 'agent_note')
+          OR (e.kind = 'action' AND json_extract(e.meta, '$.decision') IN ('approved', 'rejected'))
+        )) THEN 1 ELSE 0 END) AS technician_touched
+      FROM ticket_events e JOIN tickets t ON t.id = e.ticket_id
+      WHERE t.org_id = ? GROUP BY e.ticket_id
+    `).all(orgId) as Row[];
+    return new Map(rows.map((r) => [r.ticket_id as string, {
+      resolvedByHaley: Boolean(r.resolved_by_haley),
+      escalated: Boolean(r.escalated),
+      technicianTouched: Boolean(r.technician_touched),
+    }]));
   }
 
   // ---------------------------------------------------------------- runs
@@ -1185,7 +1216,7 @@ export class Store {
       awaitingApproval: one("SELECT COUNT(*) AS n FROM actions WHERE status = 'pending_approval'"),
       escalated: one("SELECT COUNT(*) AS n FROM tickets WHERE status = 'escalated'"),
       resolvedThisWeek: one(
-        "SELECT COUNT(*) AS n FROM tickets WHERE status IN ('resolved', 'closed') AND updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days')",
+        "SELECT COUNT(*) AS n FROM tickets WHERE status IN ('resolved', 'closed') AND resolved_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days')",
       ),
       actionsExecutedThisWeek: one(
         "SELECT COUNT(*) AS n FROM actions WHERE status = 'executed' AND risk IN ('write', 'destructive') AND executed_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-7 days')",

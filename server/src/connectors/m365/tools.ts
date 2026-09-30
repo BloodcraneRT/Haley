@@ -41,6 +41,8 @@ async function resolveDevice(api: M365Api, device: string): Promise<M365Device> 
 const ADMIN_GROUP = /admin|privileged|break[- ]?glass/i;
 
 export function m365Tools(api: M365Api): HaleyTool[] {
+  // IDs and aliases must be checked against the actual account used by protected/self-service policy.
+  const accountOf = async ({ user: reference }: { user: string }) => [(await api.getUser(reference)).userPrincipalName.toLowerCase()];
   const device = z.string().min(1).describe("Intune device name (e.g. CON-LT-014), serial number or device id");
   const ownerOf = async ({ device: d }: { device: string }) => {
     const found = await resolveDevice(api, d);
@@ -270,6 +272,7 @@ export function m365Tools(api: M365Api): HaleyTool[] {
       description: "Assign a license SKU (by skuPartNumber like SPE_E3 / O365_BUSINESS_PREMIUM, or skuId) to a user. Check seat availability first.",
       input: z.object({ user, sku: z.string().min(1) }),
       risk: "write",
+      resolveTargets: accountOf,
       describe: (i) => `Assign license ${i.sku} to ${i.user}`,
       run: async ({ user, sku }) => {
         const match = await resolveSku(api, sku);
@@ -286,6 +289,7 @@ export function m365Tools(api: M365Api): HaleyTool[] {
       description: "Remove a license SKU from a user.",
       input: z.object({ user, sku: z.string().min(1) }),
       risk: "write",
+      resolveTargets: accountOf,
       describe: (i) => `Remove license ${i.sku} from ${i.user}`,
       run: async ({ user, sku }) => {
         const match = await resolveSku(api, sku);
@@ -299,11 +303,12 @@ export function m365Tools(api: M365Api): HaleyTool[] {
       description: "Add a user to a group (by group id, display name or email). Use for shared mailbox / distribution list / Teams / app access requests.",
       input: z.object({ user, group: z.string().min(1) }),
       risk: "write",
+      resolveTargets: accountOf,
       grantsAccess: true,
       describe: (i) => `Add ${i.user} to group "${i.group}"`,
       guard: async ({ group }) => {
-        const g = await resolveGroup(api, group).catch(() => null);
-        if (g && (g.roleAssignable || ADMIN_GROUP.test(g.displayName))) {
+        const g = await resolveGroup(api, group);
+        if (g.roleAssignable || ADMIN_GROUP.test(g.displayName)) {
           return `"${g.displayName}" grants admin rights, so adding someone to it always needs a technician.`;
         }
         return null;
@@ -319,6 +324,7 @@ export function m365Tools(api: M365Api): HaleyTool[] {
       description: "Remove a user from a group (by group id, display name or email).",
       input: z.object({ user, group: z.string().min(1) }),
       risk: "write",
+      resolveTargets: accountOf,
       describe: (i) => `Remove ${i.user} from group "${i.group}"`,
       run: async ({ user, group }) => {
         const [u, g] = await Promise.all([api.getUser(user), resolveGroup(api, group)]);
@@ -336,6 +342,7 @@ export function m365Tools(api: M365Api): HaleyTool[] {
         externalMessage: z.string().default(""),
       }),
       risk: "write",
+      resolveTargets: accountOf,
       describe: (i) => `${i.enabled ? "Enable" : "Disable"} automatic replies for ${i.user}`,
       run: async ({ user, ...reply }) => {
         const u = await api.getUser(user);
@@ -349,6 +356,7 @@ export function m365Tools(api: M365Api): HaleyTool[] {
         "Reset a user's password to a generated temporary password and require a change at next sign-in. The password goes to the technician, never to you. Verify the requester's identity per policy first.",
       input: z.object({ user, forceChangeAtNextSignIn: z.boolean().default(true) }),
       risk: "destructive",
+      resolveTargets: accountOf,
       describe: (i) => `Reset password for ${i.user}`,
       run: async ({ user, forceChangeAtNextSignIn }) => {
         const u = await api.getUser(user);
@@ -357,6 +365,7 @@ export function m365Tools(api: M365Api): HaleyTool[] {
         return new SensitiveResult(
           { ok: true, user: u.userPrincipalName, temporaryPassword: "[delivered securely to the technician]" },
           { temporaryPassword: password, userPrincipalName: u.userPrincipalName },
+          [u.userPrincipalName.toLowerCase()],
         );
       },
     }),
@@ -370,6 +379,7 @@ export function m365Tools(api: M365Api): HaleyTool[] {
         usableOnce: z.boolean().default(true),
       }),
       risk: "destructive",
+      resolveTargets: accountOf,
       rail: "self_only",
       describe: (i) => `Issue a Temporary Access Pass for ${i.user}`,
       run: async ({ user, lifetimeMinutes, usableOnce }) => {
@@ -378,6 +388,7 @@ export function m365Tools(api: M365Api): HaleyTool[] {
         return new SensitiveResult(
           { ok: true, user: u.userPrincipalName, lifetimeMinutes: tap.lifetimeMinutes, usableOnce, temporaryAccessPass: "[held]" },
           { temporaryAccessPass: tap.pass, userPrincipalName: u.userPrincipalName },
+          [u.userPrincipalName.toLowerCase()],
         );
       },
     }),
@@ -386,6 +397,7 @@ export function m365Tools(api: M365Api): HaleyTool[] {
       description: "Block (enabled=false) or unblock (enabled=true) a user's sign-in. Blocking is the first step of offboarding or a compromise response.",
       input: z.object({ user, enabled: z.boolean() }),
       risk: "destructive",
+      resolveTargets: accountOf,
       describe: (i) => `${i.enabled ? "Unblock" : "Block"} sign-in for ${i.user}`,
       run: async ({ user, enabled }) => {
         const u = await api.getUser(user);
@@ -398,6 +410,7 @@ export function m365Tools(api: M365Api): HaleyTool[] {
       description: "Sign a user out everywhere by revoking all refresh tokens and sessions. Use after a password reset for a suspected compromise.",
       input: z.object({ user }),
       risk: "destructive",
+      resolveTargets: accountOf,
       describe: (i) => `Revoke all sign-in sessions for ${i.user}`,
       run: async ({ user }) => {
         const u = await api.getUser(user);

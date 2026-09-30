@@ -132,7 +132,7 @@ function knowledgeTools(store: Store, run: Run): HaleyTool[] {
     defineTool({
       name: "save_knowledge_article",
       description:
-        "Create or update (pass id) a Markdown knowledge base article for this client: runbooks, environment documentation, resolutions. Use scope 'global' only for procedures that apply to every client.",
+        "Create or update (pass id) a Markdown knowledge base article for this client: runbooks, environment documentation, resolutions. Ticket runs can author only client articles and must leave global articles unchanged. Technician tasks may use scope 'global' for procedures that apply to every client.",
       input: z.object({
         id: z.string().optional().describe("Existing article id to update"),
         title: z.string().min(3),
@@ -143,9 +143,11 @@ function knowledgeTools(store: Store, run: Run): HaleyTool[] {
       risk: "internal",
       describe: (i) => `${i.id ? "Update" : "Create"} KB article "${i.title}"`,
       run: async ({ id, title, body, tags, scope }) => {
+        if (run.ticket_id && scope === "global") throw new Error("Ticket runs can save articles only for their own client. A technician task must author global procedures.");
         if (id) {
           const existing = store.getArticle(id);
           if (!existing || (existing.org_id && existing.org_id !== run.org_id)) throw new Error(`No article ${id}`);
+          if (run.ticket_id && !existing.org_id) throw new Error("Ticket runs can read global articles but cannot change them.");
         }
         const article = store.saveArticle({
           id,
@@ -169,7 +171,7 @@ function ticketTools(store: Store, run: Run, ticketId: string, delivery_: ReplyD
       description: "Re-read the current ticket and its full history (use to pick up new comments).",
       input: z.object({}),
       risk: "read",
-      run: async () => ({ ticket: store.getTicket(ticketId), history: store.listTicketEvents(ticketId) }),
+      run: async () => ({ ticket: store.getTicket(ticketId), history: store.listTicketEvents(ticketId).filter((event) => !event.meta.untrustedContinuation) }),
     }),
     defineTool({
       name: "update_ticket",

@@ -9,6 +9,7 @@ import { PageHeader } from "../components/PageHeader";
 import { ChannelBadge, IdentityBadge, Priority, psaRef, psaShortRef, SlaIndicator, TicketStatusPill } from "../components/Pill";
 import { RelativeTime } from "../components/RelativeTime";
 import { usePoll } from "../hooks/usePoll";
+import { useDebouncedQuery } from "../hooks/useDebouncedQuery";
 import { aiReady, useApp } from "../lib/app-context";
 import { PRIORITY_META, TICKET_STATUS_META } from "../lib/format";
 
@@ -20,7 +21,6 @@ export function TicketsPage() {
   const q = params.get("q") ?? "";
   const slaBreached = params.get("sla") === "breached";
   const creating = params.get("new") === "1";
-  const [search, setSearch] = useState(q);
 
   const orgs = usePoll(() => api.orgs(), []);
   const tickets = usePoll(
@@ -30,19 +30,14 @@ export function TicketsPage() {
   );
 
   const update = (key: string, value: string | null) => {
-    const next = new URLSearchParams(params);
-    if (value === null || value === "") next.delete(key);
-    else next.set(key, value);
-    setParams(next, { replace: true });
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      if (value === null || value === "") next.delete(key);
+      else next.set(key, value);
+      return next;
+    }, { replace: true });
   };
-
-  // Debounce search typing into the URL (which triggers the fetch).
-  useEffect(() => {
-    if (search === q) return;
-    const t = window.setTimeout(() => update("q", search.trim() || null), 250);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search]);
+  const [search, setSearch] = useDebouncedQuery(q, (value) => update("q", value));
 
   const all = tickets.data ?? [];
   const list = slaBreached ? all.filter((t) => t.sla && (t.sla.response === "breached" || t.sla.resolution === "breached")) : all;

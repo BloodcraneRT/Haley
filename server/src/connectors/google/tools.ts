@@ -6,6 +6,7 @@ import type { GoogleApi } from "./api.js";
 const email = z.string().email().describe("The user's primary email address");
 
 export function googleTools(api: GoogleApi): HaleyTool[] {
+  const accountOf = async (input: { email?: string; userEmail?: string }) => [(await api.getUser((input.email ?? input.userEmail)!)).primaryEmail.toLowerCase()];
   return [
     defineTool({
       name: "gws_list_users",
@@ -69,6 +70,7 @@ export function googleTools(api: GoogleApi): HaleyTool[] {
         role: z.enum(["MEMBER", "MANAGER", "OWNER"]).default("MEMBER"),
       }),
       risk: "write",
+      resolveTargets: accountOf,
       grantsAccess: true,
       describe: (i) => `Add ${i.userEmail} to ${i.groupEmail} as ${i.role}`,
       run: async ({ groupEmail, userEmail, role }) => {
@@ -81,6 +83,7 @@ export function googleTools(api: GoogleApi): HaleyTool[] {
       description: "Remove a user from a Google Group.",
       input: z.object({ groupEmail: z.string().email(), userEmail: z.string().email() }),
       risk: "write",
+      resolveTargets: accountOf,
       describe: (i) => `Remove ${i.userEmail} from ${i.groupEmail}`,
       run: async ({ groupEmail, userEmail }) => {
         await api.removeGroupMember(groupEmail, userEmail);
@@ -92,6 +95,7 @@ export function googleTools(api: GoogleApi): HaleyTool[] {
       description: "Move a user to a different organizational unit (changes which policies apply to them).",
       input: z.object({ email, orgUnitPath: z.string().min(1) }),
       risk: "write",
+      resolveTargets: accountOf,
       describe: (i) => `Move ${i.email} to org unit ${i.orgUnitPath}`,
       run: async ({ email, orgUnitPath }) => {
         await api.moveToOrgUnit(email, orgUnitPath);
@@ -104,13 +108,16 @@ export function googleTools(api: GoogleApi): HaleyTool[] {
         "Reset a user's password to a generated temporary password (change required at next login). The password goes to the technician, never to you. Verify the requester's identity per policy first.",
       input: z.object({ email, changeAtNextLogin: z.boolean().default(true) }),
       risk: "destructive",
+      resolveTargets: accountOf,
       describe: (i) => `Reset password for ${i.email}`,
       run: async ({ email, changeAtNextLogin }) => {
+        const user = await api.getUser(email);
         const password = generateTempPassword();
-        await api.resetPassword(email, password, changeAtNextLogin);
+        await api.resetPassword(user.primaryEmail, password, changeAtNextLogin);
         return new SensitiveResult(
-          { ok: true, user: email, temporaryPassword: "[delivered securely to the technician]" },
-          { temporaryPassword: password, primaryEmail: email },
+          { ok: true, user: user.primaryEmail, temporaryPassword: "[delivered securely to the technician]" },
+          { temporaryPassword: password, primaryEmail: user.primaryEmail },
+          [user.primaryEmail.toLowerCase()],
         );
       },
     }),
@@ -119,6 +126,7 @@ export function googleTools(api: GoogleApi): HaleyTool[] {
       description: "Suspend (suspended=true) or restore (suspended=false) a user. Suspension blocks sign-in and is the first step of offboarding.",
       input: z.object({ email, suspended: z.boolean() }),
       risk: "destructive",
+      resolveTargets: accountOf,
       describe: (i) => `${i.suspended ? "Suspend" : "Restore"} ${i.email}`,
       run: async ({ email, suspended }) => {
         await api.setSuspended(email, suspended);
@@ -130,6 +138,7 @@ export function googleTools(api: GoogleApi): HaleyTool[] {
       description: "Sign a user out of all web and device sessions and reset their sign-in cookies.",
       input: z.object({ email }),
       risk: "destructive",
+      resolveTargets: accountOf,
       describe: (i) => `Sign ${i.email} out of all sessions`,
       run: async ({ email }) => {
         await api.signOut(email);

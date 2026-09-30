@@ -62,6 +62,7 @@ export function RunDetailPage() {
 
   return (
     <>
+      {detail.error && <ErrorBanner error={`Refresh failed. Showing the last loaded run. ${detail.error.message}`} onRetry={detail.reload} />}
       <PageHeader
         docTitle={run.title}
         breadcrumb={

@@ -1,30 +1,34 @@
 import { RefreshCw, ServerCrash } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { lazy, useCallback, useEffect, useState, type ReactNode } from "react";
 import { BrowserRouter, Route, Routes, useParams } from "react-router-dom";
 import { api, errorMessage, session, UNAUTHORIZED_EVENT, type Health } from "./api";
 import { Loading } from "./components/Feedback";
 import { Layout } from "./components/Layout";
 import { AppProvider } from "./lib/app-context";
-import { ApprovalsPage } from "./pages/Approvals";
-import { AuditPage } from "./pages/Audit";
-import { ChannelsPage } from "./pages/Channels";
-import { ClientDetailPage } from "./pages/ClientDetail";
-import { ClientReportPage } from "./pages/ClientReport";
-import { ClientsPage } from "./pages/Clients";
-import { DashboardPage } from "./pages/Dashboard";
-import { KbArticlePage, KbNewPage } from "./pages/KbArticle";
-import { KbPage } from "./pages/Kb";
-import { ModelsPage } from "./pages/Models";
-import { NotFoundPage } from "./pages/NotFound";
-import { PsaMappingPage, PsaPage } from "./pages/Psa";
-import { RunDetailPage } from "./pages/RunDetail";
-import { RunsPage } from "./pages/Runs";
-import { SettingsPage } from "./pages/Settings";
 import { SignIn } from "./pages/SignIn";
-import { SimulatorPage } from "./pages/Simulator";
-import { TasksPage } from "./pages/Tasks";
-import { TicketDetailPage } from "./pages/TicketDetail";
-import { TicketsPage } from "./pages/Tickets";
+
+// Load each workspace screen when needed; the shell and sign-in stay immediately available.
+const ApprovalsPage = lazy(() => import("./pages/Approvals").then((m) => ({ default: m.ApprovalsPage })));
+const AuditPage = lazy(() => import("./pages/Audit").then((m) => ({ default: m.AuditPage })));
+const ChannelsPage = lazy(() => import("./pages/Channels").then((m) => ({ default: m.ChannelsPage })));
+const ClientDetailPage = lazy(() => import("./pages/ClientDetail").then((m) => ({ default: m.ClientDetailPage })));
+const ClientReportPage = lazy(() => import("./pages/ClientReport").then((m) => ({ default: m.ClientReportPage })));
+const ClientsPage = lazy(() => import("./pages/Clients").then((m) => ({ default: m.ClientsPage })));
+const DashboardPage = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.DashboardPage })));
+const KbArticlePage = lazy(() => import("./pages/KbArticle").then((m) => ({ default: m.KbArticlePage })));
+const KbNewPage = lazy(() => import("./pages/KbArticle").then((m) => ({ default: m.KbNewPage })));
+const KbPage = lazy(() => import("./pages/Kb").then((m) => ({ default: m.KbPage })));
+const ModelsPage = lazy(() => import("./pages/Models").then((m) => ({ default: m.ModelsPage })));
+const NotFoundPage = lazy(() => import("./pages/NotFound").then((m) => ({ default: m.NotFoundPage })));
+const PsaMappingPage = lazy(() => import("./pages/Psa").then((m) => ({ default: m.PsaMappingPage })));
+const PsaPage = lazy(() => import("./pages/Psa").then((m) => ({ default: m.PsaPage })));
+const RunDetailPage = lazy(() => import("./pages/RunDetail").then((m) => ({ default: m.RunDetailPage })));
+const RunsPage = lazy(() => import("./pages/Runs").then((m) => ({ default: m.RunsPage })));
+const SettingsPage = lazy(() => import("./pages/Settings").then((m) => ({ default: m.SettingsPage })));
+const SimulatorPage = lazy(() => import("./pages/Simulator").then((m) => ({ default: m.SimulatorPage })));
+const TasksPage = lazy(() => import("./pages/Tasks").then((m) => ({ default: m.TasksPage })));
+const TicketDetailPage = lazy(() => import("./pages/TicketDetail").then((m) => ({ default: m.TicketDetailPage })));
+const TicketsPage = lazy(() => import("./pages/Tickets").then((m) => ({ default: m.TicketsPage })));
 
 /** Remounts detail pages when the :id changes so no state leaks between records. */
 function Keyed({ children }: { children: ReactNode }) {
@@ -69,6 +73,7 @@ export function App() {
 
   const signOut = useCallback(() => {
     session.setToken("");
+    session.setUser("");
     void start();
   }, [start]);
 

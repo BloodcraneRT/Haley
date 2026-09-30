@@ -7,6 +7,7 @@ export function OrgSelect({
   id,
   allLabel,
   required,
+  disabled,
   className = "select",
 }: {
   orgs: Pick<Org, "id" | "name">[];
@@ -16,10 +17,11 @@ export function OrgSelect({
   /** When set, adds an "all" option with an empty value. */
   allLabel?: string;
   required?: boolean;
+  disabled?: boolean;
   className?: string;
 }) {
   return (
-    <select id={id} className={className} value={value} onChange={(e) => onChange(e.target.value)} required={required}>
+    <select id={id} className={className} value={value} onChange={(e) => onChange(e.target.value)} required={required} disabled={disabled}>
       {allLabel !== undefined ? <option value="">{allLabel}</option> : !value && <option value="">Choose a client…</option>}
       {orgs.map((o) => (
         <option key={o.id} value={o.id}>

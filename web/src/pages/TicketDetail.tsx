@@ -125,6 +125,7 @@ export function TicketDetailPage() {
 
   return (
     <>
+      {detail.error && <ErrorBanner error={`Refresh failed. Showing the last loaded ticket. ${detail.error.message}`} onRetry={detail.reload} />}
       <PageHeader
         docTitle={`#${ticket.number} ${ticket.title}`}
         breadcrumb={

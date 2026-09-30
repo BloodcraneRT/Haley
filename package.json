@@ -9,7 +9,7 @@
     "dev:web": "npm --prefix web run dev",
     "build": "npm --prefix web run build && npm --prefix server run build",
     "start": "npm --prefix server start",
-    "test": "npm --prefix server test",
+    "test": "npm --prefix server test && npm --prefix web test",
     "typecheck": "npm --prefix server run typecheck && npm --prefix web run typecheck"
   },
   "engines": {

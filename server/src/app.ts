@@ -266,11 +266,17 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   });
 
   app.get("/api/orgs", async () => {
-    const tickets = store.listTickets({ status: "open", limit: 10_000 });
+    const openCounts = store.countOpenTicketsByOrg();
+    const integrationsByOrg = new Map<string, Integration[]>();
+    for (const integration of store.listIntegrations()) {
+      const integrations = integrationsByOrg.get(integration.org_id) ?? [];
+      integrations.push(integration);
+      integrationsByOrg.set(integration.org_id, integrations);
+    }
     return store.listOrgs().map((org) => ({
       ...org,
-      integrations: store.listIntegrations(org.id),
-      openTickets: tickets.filter((t) => t.org_id === org.id).length,
+      integrations: integrationsByOrg.get(org.id) ?? [],
+      openTickets: openCounts.get(org.id) ?? 0,
     }));
   });
 
