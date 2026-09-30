@@ -222,6 +222,8 @@ export interface Run {
   output_tokens: number;
   /** provider/model that served the latest turn (empty before the first turn). */
   model: string;
+  /** The recipe this task run started from, if any (credited in time saved). */
+  template_id?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;

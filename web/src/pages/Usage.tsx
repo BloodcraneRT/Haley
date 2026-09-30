@@ -54,7 +54,7 @@ export function UsagePage() {
         subtitle="What Haley did for each client and what it cost, for invoices and QBRs."
         actions={
           <div className="row row-wrap" style={{ gap: 8 }}>
-            <select className="select" aria-label="Billing month" value={month} onChange={(e) => setMonth(e.target.value)}>
+            <select className="select usage-month" aria-label="Billing month" value={month} onChange={(e) => setMonth(e.target.value)}>
               {months.map((m, i) => (
                 <option key={m} value={m}>
                   {monthLabel(m)}

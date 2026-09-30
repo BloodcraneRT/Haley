@@ -49,7 +49,7 @@ export function RunDetailPage() {
     try {
       const next = run.ticket_id
         ? await api.runTicket(run.ticket_id, mode)
-        : await api.startTask({ orgId: run.org_id, title: run.title, instruction: run.instruction, mode });
+        : await api.startTask({ orgId: run.org_id, title: run.title, instruction: run.instruction, mode, ...(run.template_id ? { templateId: run.template_id } : {}) });
       toast(mode === "live" && plan ? "Running it for real." : "Started a new run.");
       refreshStats();
       navigate(`/runs/${next.id}`);

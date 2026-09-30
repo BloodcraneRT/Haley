@@ -17,9 +17,23 @@
   white-space: nowrap;
 }
 
+/* .col-num elsewhere is a narrow, muted, monospace id column; here it holds the figures. */
 .usage-table td.col-num,
 .usage-table th.col-num {
+  width: auto;
+  text-align: right;
   white-space: nowrap;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-table td.col-num {
+  color: var(--text);
+}
+
+.usage-month {
+  width: auto;
+  min-width: 200px;
 }
 
 .usage-notes {
