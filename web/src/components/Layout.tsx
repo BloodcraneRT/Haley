@@ -4,6 +4,7 @@ import {
   BrainCircuit,
   Building,
   CircleAlert,
+  Coins,
   Inbox,
   LayoutDashboard,
   Menu,
@@ -104,6 +105,9 @@ export function Layout() {
           </NavItem>
           <NavItem to="/models" icon={<BrainCircuit className="icon" aria-hidden="true" />}>
             AI models
+          </NavItem>
+          <NavItem to="/usage" icon={<Coins className="icon" aria-hidden="true" />}>
+            Usage &amp; billing
           </NavItem>
           <NavItem to="/kb" icon={<BookOpen className="icon" aria-hidden="true" />}>
             Knowledge base

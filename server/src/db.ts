@@ -239,6 +239,23 @@ const MIGRATIONS: string[] = [
      updated_at TEXT NOT NULL
    );
    CREATE INDEX IF NOT EXISTS idx_client_memories_org ON client_memories(org_id, status);`,
+  // 8: billing metrics: model usage per call, the recipe a run came from, confirmed resolutions, workspace settings
+  `CREATE TABLE IF NOT EXISTS model_usage (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+     org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+     model TEXT NOT NULL,
+     input_tokens INTEGER NOT NULL,
+     output_tokens INTEGER NOT NULL,
+     created_at TEXT NOT NULL
+   );
+   CREATE INDEX IF NOT EXISTS idx_model_usage_org ON model_usage(org_id, created_at);
+   ALTER TABLE runs ADD COLUMN template_id TEXT;
+   ALTER TABLE tickets ADD COLUMN resolution_confirmed_at TEXT;
+   CREATE TABLE IF NOT EXISTS workspace_settings (
+     key TEXT PRIMARY KEY,
+     value TEXT NOT NULL
+   );`,
 ];
 
 export function openDb(path: string): Db {

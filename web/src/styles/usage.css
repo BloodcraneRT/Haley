@@ -1,0 +1,38 @@
+/* Usage & billing page, and the cost figures shown on runs and models. */
+
+.input-suffix {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.input-suffix .input {
+  flex: 1;
+  min-width: 0;
+}
+
+.input-suffix > span {
+  font-size: var(--text-sm);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.usage-table td.col-num,
+.usage-table th.col-num {
+  white-space: nowrap;
+}
+
+.usage-notes {
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  max-width: 80ch;
+}
+
+.usage-notes code {
+  font-size: 0.95em;
+}
+
+.usage-body.is-refreshing {
+  opacity: 0.6;
+  transition: opacity 0.2s ease;
+}

@@ -1,3 +1,4 @@
+import { TASK_TEMPLATES } from "./agent/templates.js";
 import { slaFor } from "./sla.js";
 import type { Store } from "./store.js";
 import type { Org } from "./types.js";
@@ -8,6 +9,15 @@ export interface ReportOptions {
   minutesPerTicket: number;
   /** Technician minutes per change Haley made on her own (license, group, reset...). */
   minutesPerAction: number;
+  /** End of the period (default now); the period is the `days` before it. */
+  to?: Date;
+}
+
+/** Technician minutes a recipe takes by hand, from the recipe library (0 when unknown). */
+export function recipeMinutes(templateId: string | null | undefined): number {
+  if (!templateId) return 0;
+  const template = TASK_TEMPLATES.find((t) => t.id === templateId) as { estimatedMinutes?: number } | undefined;
+  return template?.estimatedMinutes ?? 0;
 }
 
 const count = <T>(items: T[], key: (item: T) => string) => {
@@ -28,7 +38,7 @@ function median(values: number[]): number | null {
  * Everything is derived from tickets, actions and the KB, so it reflects what actually happened.
  */
 export function clientReport(store: Store, org: Org, options: ReportOptions) {
-  const to = new Date();
+  const to = options.to ?? new Date();
   const from = new Date(to.getTime() - options.days * 86_400_000);
   const inPeriod = (iso: string | null) => Boolean(iso) && iso! >= from.toISOString() && iso! <= to.toISOString();
 
@@ -55,7 +65,15 @@ export function clientReport(store: Store, org: Org, options: ReportOptions) {
   const autoChanges = executedChanges.filter((a) => !a.decided_by);
 
   const articles = store.searchArticles({ orgId: org.id, limit: 100_000 }).filter((a) => a.org_id === org.id);
-  const minutesSaved = handledByHaleyAlone.length * options.minutesPerTicket + autoChanges.length * options.minutesPerAction;
+  // Recipes count only when a live run finished with every change it attempted done.
+  const recipeRuns = store
+    .listRuns({ orgId: org.id, kind: "task", limit: 100_000 })
+    .filter((r) => r.template_id && r.mode === "live" && r.status === "completed" && inPeriod(r.updated_at))
+    .filter((r) => !actions.some((a) => a.run_id === r.id && ["failed", "rejected", "blocked", "pending_approval"].includes(a.status)));
+  const recipeMinutesSaved = recipeRuns.reduce((sum, r) => sum + recipeMinutes(r.template_id), 0);
+  const minutesSaved =
+    handledByHaleyAlone.length * options.minutesPerTicket + autoChanges.length * options.minutesPerAction + recipeMinutesSaved;
+  const confirmed = handledByHaleyAlone.filter((t) => t.resolution_confirmed_at);
 
   return {
     org: { id: org.id, name: org.name, autonomy: org.autonomy },
@@ -66,6 +84,9 @@ export function clientReport(store: Store, org: Org, options: ReportOptions) {
       stillOpen: all.filter((t) => !["resolved", "closed"].includes(t.status)).length,
       resolvedByHaleyAlone: handledByHaleyAlone.length,
       automationRate: pct(handledByHaleyAlone.length, resolved.length),
+      /** Of the tickets Haley resolved alone, how many the requester confirmed were fixed. */
+      confirmedByRequester: confirmed.length,
+      confirmationRate: pct(confirmed.length, handledByHaleyAlone.length),
       escalated: opened.filter((t) => activity.get(t.id)?.escalated).length,
       medianResolutionMinutes: median(resolutionMinutes),
       byCategory: count(opened, (t) => t.category),
@@ -93,7 +114,10 @@ export function clientReport(store: Store, org: Org, options: ReportOptions) {
     },
     timeSaved: {
       hours: Math.round((minutesSaved / 60) * 10) / 10,
-      assumptions: `${options.minutesPerTicket} technician minutes per ticket Haley resolved without a technician, plus ${options.minutesPerAction} per change she made automatically.`,
+      recipeRuns: recipeRuns.length,
+      assumptions: `${options.minutesPerTicket} technician minutes per ticket Haley resolved without a technician, plus ${options.minutesPerAction} per change she made automatically${
+        recipeRuns.length ? `, plus each completed recipe's hands-on estimate (${recipeRuns.length} run${recipeRuns.length === 1 ? "" : "s"})` : ""
+      }.`,
     },
   };
 }

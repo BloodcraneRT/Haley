@@ -64,6 +64,13 @@ export function formatPercent(value: number | null | undefined): string {
   return value == null ? "—" : `${Math.round(value * 10) / 10}%`;
 }
 
+export function formatUsd(n: number | null | undefined): string {
+  if (n == null) return "—";
+  if (n === 0) return "$0";
+  if (n < 0.01) return "<$0.01";
+  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: n < 100 ? 2 : 0 }).format(n);
+}
+
 export function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 10_000) return `${Math.round(n / 1000)}k`;

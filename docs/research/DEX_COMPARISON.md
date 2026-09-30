@@ -79,7 +79,8 @@ Dex is the same product idea as Haley, built by the team behind SysAid, with far
 | Memory and learning | **Yes** | Knowledge base only |
 | Ready-made recipes | **About 130** | A few demo runbooks |
 | Compliance | SysAid certifications; SOC 2 in progress | None yet |
-| Pricing | Per technician; end users free | Not set |
+| Usage metrics | Time vs manual, per-tenant usage | **AI cost per run and per client (your prices, optional markup), hours saved, requester-confirmed resolutions, CSV export** |
+| Pricing | Per technician; end users free | Options and recommendation in [PRICING.md](../PRICING.md) |
 
 ## Where Haley is ahead (keep and market)
 
@@ -109,8 +110,12 @@ Dex is the same product idea as Haley, built by the team behind SysAid, with far
 5. **A generic REST connector (done),** read-only by default, with writes going through the policy engine.
 6. **Per-client memory (done):** learnings saved after each run and fed back into later ones.
 7. **Recipe library:** around 30 tested runbooks with a plan-mode preview (licence clean-up, offboarding, shared mailbox access, BitLocker, stale devices).
-8. **Metrics MSPs can bill from:** time saved vs manual per run, AI cost per run and per client, and a resolution check with the user before closing a ticket.
-9. **Packaging:** per-technician pricing with end users free. Or lean on self-hosting, bring-your-own-model, and per-client pass-through costs.
+8. **Metrics MSPs can bill from (done).**
+   - Every model call is recorded against its run and client. AI cost uses the prices you enter per model, with an optional markup for pass-through.
+   - Time saved counts tickets resolved alone, automatic changes, and each completed recipe's manual estimate.
+   - Haley asks the requester to confirm the fix, closes the ticket as confirmed when they do, and auto-closes it after N days when they don't.
+   - A monthly usage page per client, with CSV export.
+9. **Packaging (done):** options and a recommendation are in [PRICING.md](../PRICING.md). In short: a per-technician plan with end users free and bring-your-own-model allowed, plus a self-hosted licence. The usage report already supplies AI cost per client, the markup, and technician counts.
 10. **Trust:** an encryption key per organization, a data-retention setting, a written security overview, and a SOC 2 roadmap.
 
 ## What not to copy

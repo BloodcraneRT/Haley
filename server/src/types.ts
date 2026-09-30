@@ -195,6 +195,8 @@ export interface Ticket {
   /** Last approved MFA push for the requester (step-up verification) and the method used. */
   mfa_verified_at: string | null;
   mfa_method: string;
+  /** The requester confirmed the fix worked (after Haley resolved it). */
+  resolution_confirmed_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -225,6 +227,8 @@ export interface Run {
   output_tokens: number;
   /** Provider/model that served the latest turn. */
   model: string;
+  /** Recipe (task template) the run was started from, if any. */
+  template_id: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -313,3 +317,22 @@ export interface ClientMemory {
   created_at: string;
   updated_at: string;
 }
+
+/** Workspace-wide billing and reporting settings. */
+export interface BillingSettings {
+  /** Markup applied to AI cost when it's passed through to clients, in percent. */
+  aiMarkupPercent: number;
+  /** Close tickets Haley resolved after this many days without a reply (0 turns it off). */
+  autoCloseResolvedDays: number;
+  /** Technician minutes a ticket Haley resolved alone would otherwise have taken. */
+  minutesPerTicket: number;
+  /** Technician minutes per change Haley made on her own. */
+  minutesPerAction: number;
+}
+
+export const DEFAULT_BILLING_SETTINGS: BillingSettings = {
+  aiMarkupPercent: 0,
+  autoCloseResolvedDays: 3,
+  minutesPerTicket: 20,
+  minutesPerAction: 5,
+};

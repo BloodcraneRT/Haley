@@ -40,6 +40,7 @@ import { Switch } from "../components/Switch";
 import { usePoll } from "../hooks/usePoll";
 import { aiReady, useApp } from "../lib/app-context";
 import { formatNumber, LICENSE_META } from "../lib/format";
+import "../styles/usage.css";
 
 // ------------------------------------------------------------------ helpers
 
@@ -109,6 +110,7 @@ function optionChips(p: ModelProfile): string[] {
   if (o.apiVersion) chips.push(`API ${o.apiVersion}`);
   if (p.provider === "anthropic" && o.refusalFallbacks === false) chips.push("Refusal fallbacks off");
   if (o.extraHeaders && Object.keys(o.extraHeaders).length) chips.push(`${Object.keys(o.extraHeaders).length} extra header(s)`);
+  if (o.inputUsdPerMTok !== undefined && o.outputUsdPerMTok !== undefined) chips.push(`$${o.inputUsdPerMTok} / $${o.outputUsdPerMTok} per M tokens`);
   return chips;
 }
 
@@ -596,6 +598,8 @@ interface Draft {
   tokenParam: "" | "max_tokens" | "max_completion_tokens";
   reasoningEffort: string;
   apiVersion: string;
+  inputPrice: string;
+  outputPrice: string;
 }
 
 function draftFor(profile: ModelProfile | null, preset: ModelProviderPreset | undefined): Draft {
@@ -617,6 +621,8 @@ function draftFor(profile: ModelProfile | null, preset: ModelProviderPreset | un
     tokenParam: o.tokenParam ?? "",
     reasoningEffort: o.reasoningEffort ?? "",
     apiVersion: o.apiVersion ?? "",
+    inputPrice: o.inputUsdPerMTok !== undefined ? String(o.inputUsdPerMTok) : "",
+    outputPrice: o.outputUsdPerMTok !== undefined ? String(o.outputUsdPerMTok) : "",
   };
 }
 
@@ -707,6 +713,14 @@ function ModelDialog({
       if (d.tokenParam) options.tokenParam = d.tokenParam;
       if (d.reasoningEffort) options.reasoningEffort = d.reasoningEffort;
       if (azure && d.apiVersion.trim()) options.apiVersion = d.apiVersion.trim();
+    }
+    if (d.inputPrice.trim() || d.outputPrice.trim()) {
+      const input = Number(d.inputPrice);
+      const output = Number(d.outputPrice);
+      const ok = (n: number) => d.inputPrice.trim() !== "" && d.outputPrice.trim() !== "" && Number.isFinite(n) && n >= 0 && n <= 10_000;
+      if (!ok(input) || !ok(output)) return setError("Enter both prices per million tokens (0–10,000), or leave both empty.");
+      options.inputUsdPerMTok = input;
+      options.outputUsdPerMTok = output;
     }
     const name = d.name.trim() || autoName(preset, d.model);
     setBusy(true);
@@ -945,6 +959,40 @@ function ModelDialog({
                     placeholder="Provider default"
                   />
                   <span className="help">Per response, 256–200,000.</span>
+                </div>
+                <div className="field">
+                  <label htmlFor="md-price-in">
+                    Input price <span className="muted">(optional)</span>
+                  </label>
+                  <div className="input-suffix">
+                    <input
+                      id="md-price-in"
+                      className="input num"
+                      inputMode="decimal"
+                      value={d.inputPrice}
+                      onChange={(e) => set({ inputPrice: e.target.value.replace(/[^\d.]/g, "") })}
+                      placeholder="Not priced"
+                    />
+                    <span aria-hidden="true">$ / M tokens</span>
+                  </div>
+                  <span className="help">What you pay per million input tokens. Used for AI cost on the Usage page; never sent to the provider.</span>
+                </div>
+                <div className="field">
+                  <label htmlFor="md-price-out">
+                    Output price <span className="muted">(optional)</span>
+                  </label>
+                  <div className="input-suffix">
+                    <input
+                      id="md-price-out"
+                      className="input num"
+                      inputMode="decimal"
+                      value={d.outputPrice}
+                      onChange={(e) => set({ outputPrice: e.target.value.replace(/[^\d.]/g, "") })}
+                      placeholder="Not priced"
+                    />
+                    <span aria-hidden="true">$ / M tokens</span>
+                  </div>
+                  <span className="help">Per million output tokens. Use 0 for both on a model you host yourself.</span>
                 </div>
                 {anthropic ? (
                   <div className="field">

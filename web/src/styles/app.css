@@ -5419,3 +5419,202 @@ a.psa-source-chip:hover {
     flex-direction: column;
   }
 }
+
+/* ------------------------------------------------------------------ recipe library (Ask Haley) */
+
+.recipe-toolbar {
+  align-items: flex-end;
+  margin-bottom: var(--space-3);
+}
+
+.recipe-client {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 0 1 260px;
+  min-width: 0;
+}
+
+.recipe-toolbar .input-with-icon {
+  flex: 1 1 280px;
+  max-width: 440px;
+}
+
+.recipe-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: var(--space-4);
+}
+
+.recipe-cats .chip-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.recipe-cat-count {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.recipe-cats .chip-button.is-on .recipe-cat-count {
+  color: inherit;
+}
+
+.recipe-note {
+  margin: calc(-1 * var(--space-2)) 0 var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.recipe-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5, 20px);
+}
+
+.recipe-group-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.recipe-group-title .icon-sm {
+  color: var(--text-3);
+}
+
+.recipe {
+  gap: 7px;
+}
+
+.recipe-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.recipe-head .template-name {
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.recipe-head .template-icon {
+  flex: none;
+}
+
+.recipe .template-desc {
+  flex: 1;
+}
+
+.recipe-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: var(--text-xs);
+  color: var(--text-3);
+}
+
+.recipe-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.recipe-category {
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.recipe-missing {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  font-weight: 560;
+  color: var(--text-2);
+}
+
+.template.recipe:disabled {
+  cursor: not-allowed;
+  background: var(--surface-sunken);
+  box-shadow: none;
+  border-style: dashed;
+}
+
+.template.recipe:disabled .template-name,
+.template.recipe:disabled .template-desc,
+.template.recipe:disabled .recipe-meta,
+.template.recipe:disabled .template-icon {
+  opacity: 0.6;
+}
+
+.template.recipe:disabled .template-icon {
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+
+.recipe-custom[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.recipe-for {
+  font-size: var(--text-sm);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recipe-form-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .recipe-client,
+  .recipe-toolbar .input-with-icon {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  /* One scrollable row of category chips instead of four wrapped rows. */
+  .recipe-cats {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin-inline: -16px;
+    padding: 0 16px 4px;
+    scrollbar-width: none;
+  }
+
+  .recipe-cats::-webkit-scrollbar {
+    display: none;
+  }
+
+  .recipes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .card-header .recipe-form-meta {
+    display: none;
+  }
+}
+
+.recipe-client .select {
+  flex: none;
+  width: 100%;
+  min-width: 0;
+}
