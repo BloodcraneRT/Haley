@@ -7,7 +7,7 @@
 
 export type Autonomy = "read_only" | "supervised" | "autonomous" | "unattended";
 export const AUTONOMY_LEVELS: Autonomy[] = ["read_only", "supervised", "autonomous", "unattended"];
-export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code";
+export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code" | "ninjaone" | "itglue" | "hudu" | "rest";
 /** directory: tools Haley acts with; channel: how end users reach Haley; verification: step-up MFA. */
 export type ProviderKind = "directory" | "channel" | "verification";
 
@@ -21,7 +21,7 @@ export const ASSURANCE_LEVELS: Assurance[] = ["none", "email", "chat", "director
 export const MFA_WINDOW_MINUTES = 30;
 
 /** Where a ticket came from; replies go back the same way. */
-export type TicketChannel = "portal" | "api" | "email" | "slack" | "teams" | "chat" | "syncro" | "dynamics";
+export type TicketChannel = "portal" | "api" | "email" | "slack" | "teams" | "chat" | "syncro" | "dynamics" | "connectwise" | "autotask" | "halopsa";
 export type RunMode = "live" | "plan";
 export type Cadence = "once" | "daily" | "weekly" | "monthly";
 export const CADENCES: Cadence[] = ["once", "daily", "weekly", "monthly"];
@@ -524,7 +524,7 @@ export interface ModelTestResult {
 
 // ------------------------------------------------------------------ PSA sync (server/src/psa)
 
-export type PsaKind = "syncro" | "dynamics";
+export type PsaKind = "syncro" | "dynamics" | "connectwise" | "autotask" | "halopsa";
 
 export interface PsaProviderInfo {
   id: PsaKind;
@@ -745,6 +745,24 @@ function withQuery(path: string, query?: Query): string {
   return qs ? `${path}?${qs}` : path;
 }
 
+/**
+ * A short fact Haley keeps about a client and sees on every run. Notes she saves from an end user's ticket
+ * are "pending" (unused) until a technician confirms them.
+ */
+export interface ClientMemory {
+  id: string;
+  org_id: string;
+  content: string;
+  status: "active" | "pending";
+  source: "agent" | "technician";
+  run_id: string | null;
+  ticket_id: string | null;
+  created_by: string;
+  reviewed_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -868,6 +886,12 @@ export const api = {
   discoverM365: (integrationId: string) => post<M365Discovery>(`/api/integrations/${enc(integrationId)}/discover`),
   m365Discovery: (integrationId: string) => get<M365Discovery>(`/api/integrations/${enc(integrationId)}/discovery`),
   applyM365Discovery: (orgId: string, input: ApplyDiscoveryInput) => post<Org>(`/api/orgs/${enc(orgId)}/m365/apply-discovery`, input),
+
+  memories: (orgId: string) => get<ClientMemory[]>(`/api/orgs/${enc(orgId)}/memories`),
+  addMemory: (orgId: string, content: string) => post<ClientMemory>(`/api/orgs/${enc(orgId)}/memories`, { content }),
+  /** Edit a note, or confirm a pending one with `status: "active"`. */
+  updateMemory: (id: string, input: { content?: string; status?: "active" }) => patch<ClientMemory>(`/api/memories/${enc(id)}`, input),
+  deleteMemory: (id: string) => del<{ ok: true }>(`/api/memories/${enc(id)}`),
 
   tickets: (q: { orgId?: string; status?: string; search?: string } = {}) => get<TicketWithOrg[]>("/api/tickets", q),
   ticket: (id: string) => get<TicketDetail>(`/api/tickets/${enc(id)}`),

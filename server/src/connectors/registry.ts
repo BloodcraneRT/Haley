@@ -11,6 +11,11 @@ import { ConnectorError, type Connector, type ProviderInfo, type StateStore } fr
 import { DuoVerifier } from "./verification/duo.js";
 import { OktaVerifier } from "./verification/okta.js";
 import { SmsCodeVerifier, type PhoneLookup } from "./verification/sms.js";
+import { ninjaHost, NinjaOneApi } from "./ninjaone/api.js";
+import { ninjaOneTools } from "./ninjaone/tools.js";
+import { ItGlueApi, itglueHost, itGlueTools } from "./itglue/tools.js";
+import { HuduApi, huduBase, huduTools } from "./hudu/tools.js";
+import { parseRestConfig, RestApi, restTools, urlFor } from "./rest/tools.js";
 
 /** Microsoft Graph application permissions Haley's Microsoft 365 tools use. */
 export const M365_APP_PERMISSIONS = [
@@ -144,7 +149,109 @@ export const PROVIDERS: ProviderInfo[] = [
     supportsSandbox: true,
     kind: "verification",
   },
+  {
+    id: "ninjaone",
+    name: "NinjaOne RMM",
+    description:
+      "This client's devices in NinjaOne: inventory, health, alerts and pending patches, plus running the MSP's existing automation scripts and normal reboots. Scoped to one NinjaOne organization.",
+    fields: [
+      { key: "clientId", label: "Client ID" },
+      { key: "clientSecret", label: "Client secret", secret: true },
+      { key: "region", label: "Instance", placeholder: "app, us2, eu, ca or oc", help: "The first part of your NinjaOne URL: app.ninjarmm.com → app, eu.ninjarmm.com → eu." },
+      { key: "organizationId", label: "NinjaOne organization ID", placeholder: "123", help: "The number in the organization's URL in NinjaOne (…/#/customerDashboard/123/overview)." },
+    ],
+    setupSteps: [
+      "In NinjaOne go to Administration → Apps → API → Client app IDs → Add.",
+      "Choose Application platform: API Services (machine-to-machine), scopes Monitoring and Management, and allowed grant type Client Credentials. Save and copy the client ID and secret (the secret is shown once).",
+      "Open the client's organization in NinjaOne and copy its ID from the URL.",
+      "One NinjaOne API app can serve every client; Haley only reads and acts on devices in the organization you enter here.",
+    ],
+    capabilities: ["Device inventory & health", "Disk space & pending patches", "Active alerts", "Run existing automation scripts", "Normal reboots"],
+    supportsSandbox: false,
+    kind: "directory",
+  },
+  {
+    id: "itglue",
+    name: "IT Glue",
+    description: "Read-only access to this client's IT Glue documents and configurations, so Haley follows your documented procedures. Passwords are never read.",
+    fields: [
+      { key: "apiKey", label: "API key", secret: true, placeholder: "ITG.…" },
+      { key: "region", label: "Data center", placeholder: "us, eu or au", optional: true, help: "Defaults to us (api.itglue.com)." },
+      { key: "organizationId", label: "IT Glue organization ID", placeholder: "1234567", help: "The number after your IT Glue domain in the organization's URL." },
+    ],
+    setupSteps: [
+      "In IT Glue go to Account → Settings → API Keys and generate a key. Leave \"Allow access to passwords\" off: Haley never reads passwords.",
+      "Open the client's organization in IT Glue and copy its ID from the URL (https://yourcompany.itglue.com/1234567).",
+      "Paste the key, your data center (us, eu or au) and the organization ID here.",
+    ],
+    capabilities: ["Search documents", "Read document sections", "Configurations (documented devices)", "Never reads passwords"],
+    supportsSandbox: false,
+    kind: "directory",
+  },
+  {
+    id: "hudu",
+    name: "Hudu",
+    description: "Read-only access to this client's Hudu knowledge base articles and assets, so Haley follows your documented procedures. Asset passwords are never read.",
+    fields: [
+      { key: "baseUrl", label: "Hudu URL", placeholder: "https://docs.yourmsp.com" },
+      { key: "apiKey", label: "API key", secret: true },
+      { key: "companyId", label: "Hudu company ID", placeholder: "42", help: "The number in the company's URL in Hudu." },
+    ],
+    setupSteps: [
+      "In Hudu go to Admin → API Keys and create a key. If your Hudu version supports it, restrict the key to this company and leave password access off.",
+      "Open the client's company in Hudu and copy its ID from the URL.",
+      "Paste your Hudu URL (https only), the key and the company ID here.",
+    ],
+    capabilities: ["Search knowledge base articles", "Read articles", "Search assets", "Never reads passwords"],
+    supportsSandbox: false,
+    kind: "directory",
+  },
+  {
+    id: "rest",
+    name: "Other REST API",
+    description:
+      "Connect a SaaS app that has a JSON REST API and a static API key or token. Haley can read from it, and only if you allow writes, change or delete data (every change is policy-gated).",
+    fields: [
+      { key: "name", label: "Short name", placeholder: "hibob", help: "Lowercase letters, digits and _ (max 20). Haley's tools are named api_<name>_get, api_<name>_write and api_<name>_delete." },
+      { key: "description", label: "What this API is", optional: true, multiline: true, placeholder: "HiBob HR: employees, departments and managers", help: "Shown to Haley so she knows when to use it." },
+      { key: "baseUrl", label: "Base URL", placeholder: "https://api.example.com/v1", help: "https only, public hostname. Paths Haley calls are appended to this." },
+      { key: "authHeader", label: "Auth header name", optional: true, placeholder: "Authorization" },
+      { key: "authValue", label: "Auth header value", secret: true, placeholder: "Bearer …" },
+      { key: "allowedPaths", label: "Allowed path prefixes", optional: true, placeholder: "/users,/groups", help: "Comma-separated. Leave empty to allow any path under the base URL." },
+      { key: "allowWrites", label: "Allow writes", optional: true, placeholder: "false", help: "\"true\" gives Haley POST/PUT/PATCH and DELETE tools. Off by default." },
+    ],
+    setupSteps: [
+      "Create an API key or token in the app, scoped as narrowly as it allows (read-only unless Haley should make changes).",
+      "Enter the API's base URL and the header the app expects (e.g. Authorization: Bearer <token>, or X-API-Key: <key>).",
+      "Optionally limit Haley to specific path prefixes, and set Allow writes to true only if she should change data. Writes need approval under your autonomy policy; deletes are treated as security-sensitive.",
+      "Haley doesn't follow redirects and refuses non-https, IP-address and internal hostnames.",
+    ],
+    capabilities: ["Read any allowed endpoint", "Optional writes (policy-gated)", "Deletes treated as security-sensitive", "Credentials never shown to the model"],
+    supportsSandbox: false,
+    kind: "directory",
+  },
 ];
+
+/** Checks provider-specific config values before an integration is stored. Returns a reason, or null. */
+export function validateProviderConfig(provider: string, config: Record<string, string>): string | null {
+  try {
+    if (provider === "ninjaone") {
+      ninjaHost(config.region);
+      if (!/^\d+$/.test(config.organizationId?.trim() ?? "")) return "NinjaOne organization ID must be a number.";
+    } else if (provider === "itglue") {
+      itglueHost(config.region);
+      if (!/^\d+$/.test(config.organizationId?.trim() ?? "")) return "IT Glue organization ID must be a number.";
+    } else if (provider === "hudu") {
+      huduBase(config.baseUrl ?? "");
+      if (!/^\d+$/.test(config.companyId?.trim() ?? "")) return "Hudu company ID must be a number.";
+    } else if (provider === "rest") {
+      parseRestConfig(config);
+    }
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  return null;
+}
 
 export function providerInfo(id: string): ProviderInfo | undefined {
   return PROVIDERS.find((p) => p.id === id);
@@ -314,6 +421,81 @@ export function buildConnector(
         const data = (await res.json().catch(() => ({}))) as { friendly_name?: string; status?: string; message?: string };
         if (!res.ok) throw new ConnectorError(`Twilio rejected the credentials: ${data.message ?? res.statusText}`, res.status);
         return `Twilio account "${data.friendly_name}" (${data.status}). Codes go to the phone on each user's account.`;
+      },
+    };
+  }
+
+  if (integration.provider === "ninjaone") {
+    required(config, ["clientId", "clientSecret", "organizationId"]);
+    const orgId = Number(config.organizationId.trim());
+    if (!Number.isInteger(orgId) || orgId <= 0) throw new ConnectorError("NinjaOne organization ID must be a number.");
+    const api = new NinjaOneApi({ host: ninjaHost(config.region), clientId: config.clientId.trim(), clientSecret: config.clientSecret.trim() }, fetchImpl);
+    return {
+      integrationId: integration.id,
+      provider: "ninjaone",
+      label: integration.label,
+      tools: ninjaOneTools(api, orgId),
+      test: async () => {
+        const org = await api.organization(orgId);
+        const devices = await api.organizationDevices(orgId);
+        const offline = devices.filter((d) => d.offline).length;
+        return `Connected to ${api.host}; organization "${org.name}" has ${devices.length} devices (${offline} offline).`;
+      },
+    };
+  }
+
+  if (integration.provider === "itglue") {
+    required(config, ["apiKey", "organizationId"]);
+    const orgId = config.organizationId.trim();
+    if (!/^\d+$/.test(orgId)) throw new ConnectorError("IT Glue organization ID must be a number.");
+    const api = new ItGlueApi({ host: itglueHost(config.region), apiKey: config.apiKey.trim() }, fetchImpl);
+    return {
+      integrationId: integration.id,
+      provider: "itglue",
+      label: integration.label,
+      tools: itGlueTools(api, orgId),
+      test: async () => {
+        const { data } = await api.get<{ data: { id: string; attributes: Record<string, unknown> } }>(`/organizations/${orgId}`);
+        return `Connected; IT Glue organization "${data.attributes.name}" (${data.id}). Documents and configurations are read-only; passwords are never read.`;
+      },
+    };
+  }
+
+  if (integration.provider === "hudu") {
+    required(config, ["baseUrl", "apiKey", "companyId"]);
+    const companyId = Number(config.companyId.trim());
+    if (!Number.isInteger(companyId) || companyId <= 0) throw new ConnectorError("Hudu company ID must be a number.");
+    const api = new HuduApi({ baseUrl: huduBase(config.baseUrl), apiKey: config.apiKey.trim() }, fetchImpl);
+    return {
+      integrationId: integration.id,
+      provider: "hudu",
+      label: integration.label,
+      tools: huduTools(api, companyId),
+      test: async () => {
+        const { company } = await api.get<{ company?: { id: number; name?: string } }>(`/companies/${companyId}`);
+        if (!company) throw new ConnectorError(`Hudu company ${companyId} wasn't found.`);
+        return `Connected; Hudu company "${company.name}" (${company.id}). Articles and assets are read-only; passwords are never read.`;
+      },
+    };
+  }
+
+  if (integration.provider === "rest") {
+    const api = new RestApi(parseRestConfig(config), fetchImpl);
+    return {
+      integrationId: integration.id,
+      provider: "rest",
+      label: integration.label,
+      tools: restTools(api),
+      test: async () => {
+        const path = api.config.allowedPaths[0];
+        const url = path ? urlFor(api.config, path) : api.config.baseUrl;
+        const res = await api.call("GET", url);
+        if (res.status === 401 || res.status === 403) {
+          throw new ConnectorError(`${url.host} rejected the credentials (HTTP ${res.status}).`, res.status);
+        }
+        if (res.status >= 500) throw new ConnectorError(`${url.host} returned HTTP ${res.status}.`, res.status);
+        const tools = api.config.allowWrites ? "read, write and delete tools" : "a read-only tool";
+        return `Reached ${url.host}${url.pathname}: HTTP ${res.status}. Haley has ${tools} (api_${api.config.name}_*).`;
       },
     };
   }

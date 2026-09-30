@@ -7,6 +7,7 @@ import type {
   ActionStatus,
   AuditEntry,
   Assurance,
+  ClientMemory,
   Cadence,
   Autonomy,
   Integration,
@@ -636,6 +637,54 @@ export class Store {
       .prepare("SELECT id FROM runs WHERE status IN ('queued', 'running')")
       .all()
       .map((r) => this.getRun((r as Row).id as string)!);
+  }
+
+  // ------------------------------------------------------------- memory
+
+  createMemory(input: {
+    orgId: string;
+    content: string;
+    status: ClientMemory["status"];
+    source: ClientMemory["source"];
+    createdBy: string;
+    runId?: string | null;
+    ticketId?: string | null;
+  }): ClientMemory {
+    const id = newId("mem");
+    const ts = now();
+    this.db
+      .prepare(
+        `INSERT INTO client_memories (id, org_id, content, status, source, run_id, ticket_id, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(id, input.orgId, input.content, input.status, input.source, input.runId ?? null, input.ticketId ?? null, input.createdBy, ts, ts);
+    return this.getMemory(id)!;
+  }
+
+  getMemory(id: string): ClientMemory | null {
+    return (this.db.prepare("SELECT * FROM client_memories WHERE id = ?").get(id) as unknown as ClientMemory | undefined) ?? null;
+  }
+
+  /** Newest first. */
+  listMemories(orgId: string, status?: ClientMemory["status"]): ClientMemory[] {
+    return (
+      status
+        ? this.db.prepare("SELECT * FROM client_memories WHERE org_id = ? AND status = ? ORDER BY updated_at DESC, rowid DESC").all(orgId, status)
+        : this.db.prepare("SELECT * FROM client_memories WHERE org_id = ? ORDER BY updated_at DESC, rowid DESC").all(orgId)
+    ) as unknown as ClientMemory[];
+  }
+
+  updateMemory(id: string, patch: { content?: string; status?: ClientMemory["status"]; reviewedBy?: string }): ClientMemory | null {
+    const current = this.getMemory(id);
+    if (!current) return null;
+    this.db
+      .prepare("UPDATE client_memories SET content = ?, status = ?, reviewed_by = COALESCE(?, reviewed_by), updated_at = ? WHERE id = ?")
+      .run(patch.content ?? current.content, patch.status ?? current.status, patch.reviewedBy ?? null, now(), id);
+    return this.getMemory(id);
+  }
+
+  deleteMemory(id: string): boolean {
+    return this.db.prepare("DELETE FROM client_memories WHERE id = ?").run(id).changes > 0;
   }
 
   // ------------------------------------------------------------- actions

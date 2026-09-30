@@ -105,9 +105,9 @@ Dex is the same product idea as Haley, built by the team behind SysAid, with far
    - Allow, require approval or deny, matched by tool, risk, target, department and requester.
    - Approvals routed to named approvers.
    - Hardcoded rails that no rule can loosen: no MFA bypass for someone else, no admin-role grants, no wiping without a technician.
-4. **Top MSP integrations:** ConnectWise Manage, Autotask and HaloPSA on the existing PSA sync framework; NinjaOne; IT Glue and Hudu as knowledge sources.
-5. **A generic REST connector,** read-only by default, with writes going through the policy engine.
-6. **Per-client memory:** learnings saved after each run and fed back into later ones.
+4. **Top MSP integrations (done):** ConnectWise Manage, Autotask and HaloPSA on the existing PSA sync framework; NinjaOne; IT Glue and Hudu as knowledge sources.
+5. **A generic REST connector (done),** read-only by default, with writes going through the policy engine.
+6. **Per-client memory (done):** learnings saved after each run and fed back into later ones.
 7. **Recipe library:** around 30 tested runbooks with a plan-mode preview (licence clean-up, offboarding, shared mailbox access, BitLocker, stale devices).
 8. **Metrics MSPs can bill from:** time saved vs manual per run, AI cost per run and per client, and a resolution check with the user before closing a ticket.
 9. **Packaging:** per-technician pricing with end users free. Or lean on self-hosting, bring-your-own-model, and per-client pass-through costs.

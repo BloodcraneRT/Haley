@@ -1,6 +1,6 @@
 import type { TicketPriority, TicketStatus } from "../types.js";
 
-export type PsaKind = "syncro" | "dynamics";
+export type PsaKind = "syncro" | "dynamics" | "connectwise" | "autotask" | "halopsa";
 
 export interface ExternalComment {
   id: string;

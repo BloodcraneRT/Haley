@@ -112,6 +112,7 @@ Ticket text, emails and chat messages come from end users. Haley treats them as 
 - Follow-ups Haley schedules for herself run with the original requester's authority, not a technician's.
 - A reply only continues a ticket when it comes from the same requester with at least the original channel's identity assurance. An unverified message cannot reuse an earlier MFA step-up. Other messages open a separate ticket; unmatched PSA comments stay on the technician timeline and are excluded from Haley's context.
 - Ticket runs can read shared knowledge articles but can only create or update articles for their own client. Global procedures can be authored through technician tasks.
+- **Client memory** (short notes Haley sees on every later run for a client) can't be planted by an end user. Notes Haley saves while working an end user's ticket stay *pending* and never reach the model until a technician confirms them on the client's page. Notes that look like credentials or codes are refused. Memory is per client and never shared across clients.
 
 ## Accountability
 

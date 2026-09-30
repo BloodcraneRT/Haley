@@ -1,4 +1,4 @@
-> Source-verified API notes behind Haley's SyncroMSP, Dynamics 365, Duo, Okta and Twilio integrations (compiled September 2026). Items marked UNVERIFIED weren't confirmed in official docs; the adapters handle them defensively and they are worth re-checking against a live account.
+> Source-verified API notes behind Haley's SyncroMSP, ConnectWise PSA, Autotask PSA, HaloPSA, Dynamics 365, Duo, Okta and Twilio integrations (compiled September 2026). Items marked UNVERIFIED weren't confirmed in official docs; the adapters handle them defensively and they are worth re-checking against a live account.
 
 # API specs (source-verified 2026-09-27)
 
@@ -534,3 +534,175 @@ Fields:
 Server auth: service account with domain-wide delegation (Admin console > Security > Access and data control > API controls > Manage Domain Wide Delegation > Add new > Client ID + scopes), then JWT-bearer token with `sub` = an admin user having user-read privileges (need for `sub` impersonation standard for Directory API; guide does not state it explicitly -> **UNVERIFIED**).
 
 ---
+
+## 7. ConnectWise PSA (Manage) REST API 3.0
+
+Sources:
+- Official OpenAPI schema as shipped in the `connectwise-rest` npm package (generated from ConnectWise's spec; `dist/ManageTypes.d.ts`, content type `application/vnd.connectwise.com+json; version=2025.16`): https://www.npmjs.com/package/connectwise-rest (README: https://github.com/covenanttechnologysolutions/connectwise-rest)
+- ConnectWise Developer Network (login required, not fetched): https://developer.connectwise.com/Products/ConnectWise_PSA/REST
+
+### Base URL and auth
+```
+https://{site}/v4_6_release/apis/3.0          // site = api-na.myconnectwise.net, api-eu…, api-au…, or on-premises host
+Authorization: Basic base64("{companyId}+{publicKey}:{privateKey}")
+clientId: {developer clientId GUID}
+```
+- `v4_6_release` is the library's default entry point; the auth string and required `clientId` header are as documented by the library and widely used. Keys come from System > Members > API Members > API Keys (private key shown once).
+- Rate limits: not documented in the schema (**UNVERIFIED**); adapter reports 429 readably and the next sync resumes.
+
+### Paging / queries (schema: `getServiceTickets` query params)
+`conditions`, `childConditions`, `customFieldConditions`, `orderBy`, `fields`, `page`, `pageSize`, `pageId`. Responses are bare JSON arrays. `pageSize` max 1000 (library default; **UNVERIFIED** in the spec). Adapter uses `pageSize=100`, stops on a short page.
+- Condition syntax `lastUpdated > [2026-09-27T09:00:00Z]`, strings double-quoted (`board/name="Help Desk"`): conventional, **UNVERIFIED** against the (login-only) docs. Adapter orders by `id asc` so paging is stable while tickets change, then sorts by `_info.lastUpdated` itself.
+
+### Tickets (`Ticket` schema)
+`id`, `summary` (max 100, required), `recordType`, `board` (BoardReference {id,name}), `status` (ServiceStatusReference {id,name,sort}), `company` (required; {id,identifier,name}), `contact`, `contactName`, `contactEmailAddress` (max 250), `priority` (PriorityReference), `closedFlag`, `closedDate`, `_info` (string map incl. `lastUpdated`, `dateEntered`).
+- `initialDescription` / `initialInternalAnalysis` / `initialResolution`: "Only available for POST, will not be returned in the response." So the description is read back as the first Discussion note.
+- `processNotifications` on Ticket: "Can be set to false to skip notification processing when adding or updating a ticket (Defaults to True)."
+- `GET /service/tickets`, `GET/PATCH /service/tickets/{id}`, `POST /service/tickets` (Haley sends `summary`, `initialDescription`, `board:{name}`, `company:{id}`, `contactEmailAddress`, `priority:{id}`). Board by name in a reference: **UNVERIFIED** (commonly used).
+- PATCH body is JSON Patch (`PatchOperation`: `{op: "add"|"replace"|"remove", path, value}`). Status: `[{"op":"replace","path":"status","value":{"id":N}}]`.
+- Statuses are per board: `GET /service/boards/{id}/statuses` (fields `id`, `name`, `inactive`, `closedStatus`). Adapter resolves the configured name (or stock names: New / In Progress / Waiting Customer… / Resolved, Completed, Closed, >Closed) to an id on the ticket's own board; a board without a waiting status falls back to in-progress.
+- Priorities: `GET /service/priorities`; stock names "Priority 1 - Emergency Response" … "Priority 4 - Schedule Maintenance" (**UNVERIFIED**, matched by keyword).
+- Companies: `GET /company/companies` (`id`, `identifier`, `name`, `website`, `deletedFlag`). No email field, so domains come from `website`.
+
+### Notes (`ServiceNote` schema; `GET/POST /service/tickets/{parentId}/notes`)
+`id`, `ticketId`, `text`, `detailDescriptionFlag` (Discussion), `internalAnalysisFlag` (Internal), `resolutionFlag`, `issueFlag`, `member` (MemberReference), `contact` (ContactReference), `customerUpdatedFlag`, `processNotifications`, `dateCreated`, `createdBy`, `internalFlag`, `externalFlag`.
+- Customer-authored = no `member` and a `contact` (or `externalFlag`): how email-connector replies and portal updates appear (**UNVERIFIED** heuristic; Haley's own notes are excluded by id anyway).
+- Whether a Discussion note emails the contact depends on the board's notification setup plus `processNotifications` (**UNVERIFIED**). Adapter defaults to `processNotifications: false` and `notifiesCustomer = false` (Haley emails the requester); the `emailContacts` setting flips both.
+
+---
+
+## 8. Autotask PSA REST API v1.0
+
+Sources:
+- Zone lookup: https://autotask.net/help/developerhelp/Content/APIs/REST/API_Calls/REST_ZoneInformation.htm
+- Auth headers: https://autotask.net/help/DeveloperHelp/Content/APIs/REST/General_Topics/REST_Security_Auth.htm
+- Queries: https://autotask.net/help/DeveloperHelp/Content/APIs/REST/API_Calls/REST_Basic_Query_Calls.htm and https://autotask.net/help/DeveloperHelp/Content/APIs/REST/API_Calls/REST_Advanced_Query_Features.htm
+- Picklists: https://autotask.net/help/developerhelp/Content/APIs/REST/API_Calls/REST_EntityInformationCall.htm
+- Entities: https://autotask.net/help/DeveloperHelp/Content/APIs/REST/Entities/TicketsEntity.htm, https://autotask.net/help/DeveloperHelp/Content/APIs/REST/Entities/TicketNotesEntity.htm
+
+### Zone and auth
+```
+GET https://webservices.autotask.net/atservicesrest/v1.0/zoneInformation?user={apiUsername}
+-> { "zoneName": "America East", "url": "https://webservices3.autotask.net/atservicesrest/", "webUrl": "...", "ci": 20264 }
+```
+"ZoneInformation requests do not require authentication" - Haley sends no credentials to it. Base = `{url}v1.0`.
+Headers on every other call: `ApiIntegrationCode` (API tracking identifier), `UserName` (API-only user), `Secret`, `Content-Type: application/json`. Requires the API User security level.
+
+### Queries and paging
+- `POST /{Entity}/query` body `{"filter":[{"op":"gt","field":"lastActivityDate","value":"2026-09-27T09:00:00.000Z"}]}`; ops `eq, noteq, gt, gte, lt, lte, beginsWith, endsWith, contains, exist, notExist, in, notIn`.
+- Response `{ items: [...], pageDetails: { count, requestCount (500), prevPageUrl, nextPageUrl } }`; `MaxRecords` 1-500; results "sorted by internal ID from lowest to highest". `nextPageUrl` carries `paging=` and `search=` in its query string; adapter GETs it (method not stated in the docs, **UNVERIFIED**).
+- `POST /{Entity}/query/count` -> `{ queryCount }` (used by Test).
+- Single record: `GET /{Entity}/{id}` -> `{ item }`. Create -> `{ itemId }`. Update: `PATCH /{Entity}` with `id` in the body (**UNVERIFIED** wording; standard Autotask REST convention).
+
+### Time zone
+"The REST API stores and returns all time data in Coordinated Universal Time (UTC)." (Tickets entity page.) The UI shows resource-local (often Mountain for older tenants) times; the API doesn't. Adapter still treats a time without a zone designator as UTC.
+
+### Tickets
+Required on create: `companyID`, `priority` (active), `status`, `title` (255); `dueDateTime` required unless the ticket category sets both a default due date and time; `queueID` depending on category. `description` max 8000. `ticketNumber` auto ("TYYYYMMDD.nnnn"). `lastActivityDate` (read-only) moves with notes/time entries; `lastTrackedModificationDateTime` excludes activity.
+- `status`/`priority` are per-tenant picklists. `GET /Tickets/entityInformation/fields` returns `fields[]` with `isPickList` and `picklistValues[] {value, label, isDefaultValue, sortOrder, parentValue, isActive, isSystem}`; the adapter maps by label. Stock ids used as fallbacks: status 1 New, 5 Complete (system), 7 Waiting Customer, 8 In Progress; priority 1 High, 2 Medium, 3 Low, 4 Critical (**UNVERIFIED** beyond 1 New / 5 Complete; all overridable in the connection settings).
+- Contacts: `GET /Contacts/{id}` (`emailAddress`, `firstName`, `lastName`). Companies: `POST /Companies/query` (`companyName`, `webAddress`, `isActive`).
+
+### TicketNotes
+Fields: `id`, `ticketID` (req), `title` (250), `description` (req, 32000), `noteType` (req, picklist), `publish` (req, picklist), `createDateTime`, `lastActivityDate`, `createdByContactID`, `creatorResourceID`, `impersonator*ResourceID`.
+- Read: `POST /TicketNotes/query` filtered on `ticketID`. Create: `POST /Tickets/{parentId}/Notes` (child-collection URL; **UNVERIFIED** in the fetched page, standard REST parent/child pattern).
+- `publish` numeric meaning isn't stated on the entity page; docs say "API queries for TicketNote entities with publish = 1 include all System Workflow Notes" and impersonated contact notes must be published to "ALL", which points to 1 = All Autotask Users, 2 = Internal Only (third-party summaries disagree -> **UNVERIFIED**). Adapter reads the labels from `/TicketNotes/entityInformation/fields` and only falls back to 1/2.
+- `noteType = 13` is the System Workflow Note (docs); these are skipped. Haley uses the picklist's default note type.
+- Customer-authored = `createdByContactID` set (client portal, contact impersonation, emails from a known contact: **UNVERIFIED** for the email processor).
+- Notes created through the API don't trigger Autotask's notification emails (no notify option in the entity; **UNVERIFIED**), so `notifiesCustomer = false` and Haley emails replies herself.
+
+---
+
+## 9. HaloPSA REST API
+
+Sources:
+- Halo's own reference is served per instance at `https://{instance}/apidoc` (public copy: https://halopsa.com/apidoc). Details below were checked against a mirror of the v2 Swagger spec: https://kb.dtctoday.com/books/halopsa-api-reference (pages: ticket-endpoints, action-endpoints, clients-sites-endpoints, ticket-configuration-endpoints) and the HaloAPI PowerShell module's parameter docs: https://powershellgallery.com/packages/HaloAPI/1.7.0/Content/Public/Get/Get-HaloTicket.ps1. Not first-party -> treat as **UNVERIFIED** until checked against a live `/apidoc`.
+- Token endpoint: n8n and other integrators' docs (e.g. https://docs.n8n.io/integrations/builtin/credentials/halopsa/).
+
+### Auth
+```
+POST https://{instance}/auth/token[?tenant={tenant}]
+Content-Type: application/x-www-form-urlencoded
+grant_type=client_credentials&client_id=...&client_secret=...&scope=all
+-> { access_token, token_type, expires_in }
+Authorization: Bearer {access_token}   on https://{instance}/api/...
+```
+`tenant` only for Halo-hosted instances that show one on the API page. App: Configuration > Integrations > HaloPSA API > View Applications, "Client ID and Secret (Services)".
+
+### Paging
+`pageinate=true` (Halo's spelling), `page_size` (max 100), `page_no` (1-based). List responses wrap rows: `{ record_count, tickets: [...] }`, `{ record_count, clients: [...] }`, `{ record_count, actions: [...] }`.
+
+### Tickets
+- `GET /api/Tickets` params include `datesearch` (date field to search, e.g. `dateoccured`, `datecleared`), `startdate`, `enddate`, `order`, `orderdesc`, `client_id`, `open_only`, `closed_only`. Haley uses `datesearch=lastactiondate&startdate={cursor}` (**UNVERIFIED** that `lastactiondate` is accepted) and re-filters client-side on max(`last_update`, `lastactiondate`), so an ignored filter only costs paging.
+- `GET /api/Tickets/{id}?includedetails=true`. Fields used: `id` (also the ticket number), `summary`, `details` (may be HTML), `client_id`, `client_name`, `user_name`, `user_email`, `status_id`, `priority_id`, `lastactiondate`, `last_update`, `dateoccurred`. Times come back without a zone designator; treated as UTC (**UNVERIFIED**).
+- Create and update both `POST /api/Tickets` with an array (`[{summary, details, client_id, status_id, priority_id, user_email?, tickettype_id?}]` / `[{id, status_id}]`). Response: the saved ticket (object or array; adapter accepts both).
+- Statuses: `GET /api/Status` -> array of `{id, name, type, shortname}`. Adapter maps by name; built-in ids 1 New, 2 In Progress, 9 Closed are fallbacks (**UNVERIFIED**); a missing waiting status falls back to in progress. All overridable in settings.
+- Priorities: default 1 Critical, 2 High, 3 Medium, 4 Low (**UNVERIFIED**; priorities belong to SLAs).
+
+### Actions (the ticket conversation)
+- `GET /api/Actions?ticket_id={id}&excludesys=true` (`excludesys` omits system actions; also `excludeprivate`, `conversationonly`, `count`).
+- Fields: `id` (per ticket), `ticket_id`, `outcome`/`outcome_id`, `note`, `note_html`, `who`, `who_type` (0 Agent, 1 End User), `who_agentid`, `hiddenfromuser`, `datetime`, `sendemail`, `emailto`, `emailfrom`, `emaildirection`.
+- `POST /api/Actions` takes an array; Haley sends `[{ticket_id, outcome: "Email User" | "Private Note", note, hiddenfromuser, sendemail}]`. Outcome names are the stock ones (**UNVERIFIED** per instance). Public replies set `sendemail: true`, so Halo emails the end user (`notifiesCustomer = true`, **UNVERIFIED**: check the action's email template on a live instance).
+- Customer-authored = `who_type == 1` (fallback: no `who_agentid`).
+
+---
+
+## 7. NinjaOne RMM public API v2 (connector: `server/src/connectors/ninjaone/`)
+Sources:
+- Official OpenAPI spec (downloaded 2026-09-29): https://app.ninjarmm.com/apidocs/NinjaRMM-API-v2.json (rendered at https://app.ninjarmm.com/apidocs-beta/)
+- OAuth scopes: https://www.ninjaone.com/docs/application-programming-interface-api/oauth-token-configuration/
+- Device filter syntax PDF (linked from the spec, not machine-readable): https://resources.ninjarmm.com/API/Ninja+RMM+Public+API+v2.0.5+Device+Filter+Syntax.pdf
+
+Auth: `POST https://{instance}/ws/oauth/token`, form body `grant_type=client_credentials&client_id=…&client_secret=…&scope=monitoring management`, returns `access_token`, `expires_in`; API calls send `Authorization: Bearer`. Instances `app`, `us2`, `eu`, `ca`, `oc` `.ninjarmm.com` each answered the token endpoint with `{"resultCode":"Client app not exist"}` to a dummy client (probed 2026-09-29); `uk.ninjarmm.com` does not resolve. Scopes per NinjaOne docs: **monitoring** (read-only monitoring data and org structure), **management** ("modification of device and organization information, including … running scripts"), **control** (remote access). Haley requests `monitoring management` only; that reboot needs `management` rather than `control` is **UNVERIFIED** (the spec's operations don't list scopes). Token lifetime handling assumes `expires_in` seconds (standard OAuth; **UNVERIFIED** value).
+
+Endpoints used (all confirmed in the OpenAPI spec):
+| Call | Notes |
+|---|---|
+| `GET /v2/organization/{id}` | org name for `test()` |
+| `GET /v2/organization/{id}/devices?pageSize=&after=` | org-scoped device list; `after` = last device id of the previous page |
+| `GET /v2/organization/{id}/end-users` | end users (uid, email) to resolve a device's `assignedOwnerUid` to an email for policy targets |
+| `GET /v2/device/{id}` | AgentDevice: `organizationId`, `offline`, `lastContact`, `assignedOwnerUid`, `os{name,buildNumber,releaseId,lastBootTime,needsReboot}`, `system{manufacturer,model,serialNumber,…}`, `lastLoggedInUser` (a username such as `DOMAIN\user`, not an email) |
+| `GET /v2/device/{id}/volumes` | `driveLetter`, `capacity`, `freeSpace` (bytes) |
+| `GET /v2/device/{id}/os-patches?status=PENDING` | the `status` filter exists; the literal value `PENDING` is **UNVERIFIED** |
+| `GET /v2/alerts?df=…` | alerts with `deviceId`, `severity`, `priority`, `subject`, `message`, `createTime` |
+| `GET /v2/automation/scripts` | `id`, `name`, `description`, `active`, `language`, `operatingSystems`, `scriptVariables` |
+| `POST /v2/device/{id}/script/run` | body `{type: "SCRIPT"\|"ACTION", id (int), uid (built-in action), parameters (string), runAs (string)}`; response `default` (no body assumed) |
+| `POST /v2/device/{id}/reboot/{mode}` | `mode` enum `NORMAL`\|`FORCED`, body `{reason}`; Haley only sends `NORMAL` |
+
+**UNVERIFIED**:
+- Device filter for alerts: Haley sends `df=org = {id}` (third-party examples only; the official PDF is font-encoded). Haley also filters alerts client-side to the org's device ids, so a misread filter can only return fewer alerts, never another client's.
+- `runAs` values: the spec only says "Credential role/identifier". Haley offers `system` (default) and `loggedonuser`; confirm against `GET /v2/device/{id}/scripting/options` → `credentials.roles`.
+- Timestamps are treated as epoch seconds (fractional); values ≥ 1e12 are treated as milliseconds.
+- UI path for creating the API app ("Administration → Apps → API → Client app IDs", platform "API Services (machine-to-machine)").
+
+Safety in Haley: every device-specific call re-fetches the device and refuses it unless `organizationId` equals the client's configured organization; `ninja_run_script` (write) and `ninja_reboot_device` (destructive) resolve the device owner's email as the policy target (else `[]` = unknown target), and a script whose name contains wipe/format/erase/uninstall/disable/delete/remove/… always waits for a technician (`guard`).
+
+## 8. IT Glue API (connector: `server/src/connectors/itglue/`)
+Source: https://api.itglue.com/developer/ (fetched 2026-09-29)
+
+- Base URLs (confirmed): `https://api.itglue.com`, EU `https://api.eu.itglue.com`, Australia `https://api.au.itglue.com`.
+- Headers (confirmed): `x-api-key: {key}`, `Content-Type: application/vnd.api+json` (only with a payload). JSON:API: `{data: {id, type, attributes: {kebab-case…}, relationships}}`.
+- Rate limit (confirmed): 3000 requests per 5 minutes, 429 when exceeded.
+- `GET /organizations/:organization_id/relationships/documents` (confirmed): filters `filter[document_folder_id]` (omit = root only; `null` = all folders), `page[size]`, `page[number]`. No name filter, so Haley matches names client-side.
+- `GET /organizations/:organization_id/relationships/documents/:id` (confirmed): includes `attributes.sections[]` with `attributes.resource-type` (`Document::Heading`/`Text`/`Gallery`/`Step`), `content` (raw HTML), `rendered-content`, `level` (headings), `sort`.
+- `GET /organizations/:organization_id/relationships/configurations` (confirmed): filters include `filter[name]`, `filter[archived]`, `filter[serial_number]`, …; attributes `name`, `hostname`, `primary-ip`, `serial-number`, `configuration-type-name`, `operating-system-name`, `warranty-expires-at`, `organization-id`, ….
+- `GET /organizations/:id` used by `test()` (standard resource; response shape `data.attributes.name` assumed, **UNVERIFIED** in the fetched excerpt).
+- Flexible assets need `filter[flexible-asset-type-id]` and their traits can hold password-typed fields under arbitrary names, so Haley doesn't expose them yet.
+- Passwords: Haley never calls `/passwords` (the client refuses any path containing "password"), and `stripSecrets()` removes password/secret/token/OTP-like keys. Recommend generating the API key with password access disabled (**UNVERIFIED** UI wording: Account → Settings → API Keys, "Allow access to passwords").
+- Every returned document/configuration is checked for `organization-id` = the configured organization.
+
+## 9. Hudu API v1 (connector: `server/src/connectors/hudu/`)
+Sources: each instance's own `/developer` page (not public); community clients https://github.com/lwhitelock/HuduAPI (PowerShell module, `Public/Get-HuduArticles.ps1`, `Get-HuduAssets.ps1`, `Get-HuduCompanies.ps1`, `Private/Invoke-HuduRequest.ps1`) and https://glama.ai/mcp/servers/ZenixSolutions/hudu-mcp/tools/hudu_list_articles. The vendor article https://support.hudu.com/hc/en-us/articles/11422780787735-REST-API returned 403 to automated fetches.
+
+- Base `{instance}/api/v1`, header `x-api-key` (community-confirmed).
+- `GET /api/v1/articles?company_id=&page=` → `{articles: [...]}`; `GET /api/v1/articles/{id}` → `{article: {...}}` with `id`, `name`, `content` (HTML), `company_id` (null = global KB), `draft`, `url`, `updated_at` (community-confirmed).
+- `GET /api/v1/assets?company_id=&archived=&name=` → `{assets: [...]}` with `fields: [{label, value}]` (community-confirmed).
+- `GET /api/v1/companies/{id}` → `{company: {...}}` (used by `test()`, community-confirmed).
+- **UNVERIFIED**: the `search` query parameter on `/articles` and `/assets` (community MCP servers document it; the PowerShell module only uses `name`), and `page_size`. If ignored, the tool returns the company's first page instead of search matches.
+- Passwords: Haley never calls `/asset_passwords`; asset fields whose label looks like a password/secret/PIN/OTP are dropped. Global articles (`company_id` null) and other companies' items are filtered out.
+
+## 10. Generic REST API connector (`server/src/connectors/rest/`)
+No vendor API. Rules enforced in code and pinned by `server/test/connectors-more.test.ts`:
+- Base URL: `https:` only, no `user:pass@`, no query/fragment, no IP literals (WHATWG URL parsing normalizes `2130706433`/`0x7f.1` forms to dotted quads first), no `localhost`, single-label names or `.local/.internal/.lan/.home/.corp/.arpa/.localhost/.intranet/.localdomain` suffixes. DNS is not resolved, so a public name pointing at a private address (DNS rebinding) is not caught; run Haley with egress controls if that matters.
+- Paths: must start with a single `/`; no `//`, `\`, `.`/`..` segments (also after percent-decoding), URL schemes, `?`/`#`, whitespace or control characters. Optional `allowedPaths` prefixes match on segment boundaries (`/v1/users` allows `/v1/users/42`, not `/v1/usersX`).
+- Requests: one configured auth header (never `Host`, `Cookie`, `Content-Type`…; no CR/LF in the value), `redirect: "manual"` with any 3xx treated as an error, 20-second timeout, at most 1 MB read, ~20 KB returned (`truncated: true` beyond that). The auth value (and the bare token after `Bearer `/`Basic `) is replaced with `[redacted]` in every response and error.
+- Tools: `api_<name>_get` (read); with `allowWrites=true` also `api_<name>_write` (POST/PUT/PATCH, risk write) and `api_<name>_delete` (risk destructive). One REST integration per client for now (the integrations route allows one per provider).

@@ -144,6 +144,9 @@ const CHANNEL_ICONS: Record<TicketChannel, typeof Mail> = {
   chat: MessageCircle,
   syncro: RefreshCw,
   dynamics: Headset,
+  connectwise: RefreshCw,
+  autotask: RefreshCw,
+  halopsa: RefreshCw,
 };
 
 export function ChannelIcon({ channel, className = "icon-sm" }: { channel: TicketChannel; className?: string }) {
@@ -151,10 +154,12 @@ export function ChannelIcon({ channel, className = "icon-sm" }: { channel: Ticke
   return <Icon className={className} aria-hidden="true" />;
 }
 
+const PSA_CHANNELS: TicketChannel[] = ["syncro", "dynamics", "connectwise", "autotask", "halopsa"];
+
 /** The PSA ticket/case number for tickets imported from a PSA ("Syncro #1234"), or null. */
 export function psaRef(ticket: Pick<Ticket, "channel" | "channel_ref">): string | null {
   const n = ticket.channel_ref?.externalNumber;
-  if (!n || (ticket.channel !== "syncro" && ticket.channel !== "dynamics")) return null;
+  if (!n || !PSA_CHANNELS.includes(ticket.channel)) return null;
   return `${CHANNEL_META[ticket.channel].label} #${n}`;
 }
 

@@ -1,6 +1,6 @@
 export type Autonomy = "read_only" | "supervised" | "autonomous" | "unattended";
 export const AUTONOMY_LEVELS: Autonomy[] = ["read_only", "supervised", "autonomous", "unattended"];
-export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code";
+export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code" | "ninjaone" | "itglue" | "hudu" | "rest";
 
 /**
  * How strongly the requester's identity is established, weakest first.
@@ -24,7 +24,7 @@ export function effectiveAssurance(ticket: Pick<Ticket, "assurance" | "mfa_verif
 }
 
 /** Where a ticket came from; replies go back the same way. */
-export type TicketChannel = "portal" | "api" | "email" | "slack" | "teams" | "chat" | "syncro" | "dynamics";
+export type TicketChannel = "portal" | "api" | "email" | "slack" | "teams" | "chat" | "syncro" | "dynamics" | "connectwise" | "autotask" | "halopsa";
 export type IntegrationMode = "live" | "sandbox";
 
 export type TicketStatus =
@@ -293,4 +293,23 @@ export interface AuditEntry {
   target: string;
   detail: Record<string, unknown>;
   created_at: string;
+}
+
+/**
+ * A short fact Haley keeps about a client's environment (a quirk, a preference, a recurring fix) and sees on
+ * every later run for that client. Notes she writes while working an end user's ticket start as "pending"
+ * and are only used once a technician confirms them, so a requester can't plant instructions for later runs.
+ */
+export interface ClientMemory {
+  id: string;
+  org_id: string;
+  content: string;
+  status: "active" | "pending";
+  source: "agent" | "technician";
+  run_id: string | null;
+  ticket_id: string | null;
+  created_by: string;
+  reviewed_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
