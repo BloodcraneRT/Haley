@@ -174,7 +174,7 @@ export class AgentService {
 
   private header(org: Org): string {
     const integrations = this.store.listIntegrations(org.id);
-    return `Today is ${new Date().toISOString().slice(0, 10)}.\n\n${orgContext(org, integrations)}`;
+    return `Today is ${new Date().toISOString().slice(0, 10)}.\n\n${orgContext(org, integrations, this.store.listMemories(org.id, "active"))}`;
   }
 
   private requireOrg(orgId: string): Org {

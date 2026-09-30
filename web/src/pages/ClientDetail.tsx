@@ -43,6 +43,7 @@ import { ConsentConnect, ConsentResultBanner, ConsentUnavailableNote, DiscoveryP
 import { ConfirmModal, Modal } from "../components/Modal";
 import { PausedBanner, SafetySettingsForm, usePauseControl } from "../components/OrgSafety";
 import { PageHeader } from "../components/PageHeader";
+import { ClientMemorySection } from "../components/ClientMemory";
 import { PolicyRulesSection } from "../components/PolicyRules";
 import { IntegrationStatusPill, ModePill, Pill, RiskPill } from "../components/Pill";
 import { ProviderLogo } from "../components/ProviderLogo";
@@ -281,6 +282,8 @@ export function ClientDetailPage() {
           )}
 
           <PolicyRulesSection org={o} onSaved={() => void org.reload()} />
+
+          <ClientMemorySection orgId={o.id} />
 
           <SafetySettingsForm org={o} onSaved={() => void org.reload()} pause={pause} />
 

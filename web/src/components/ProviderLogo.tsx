@@ -1,4 +1,4 @@
-import { MessageSquareText } from "lucide-react";
+import { Braces, Headset, MessageSquareText, MonitorCog, NotebookText } from "lucide-react";
 
 export function ProviderLogo({ provider }: { provider: string }) {
   if (provider === "m365") {
@@ -65,6 +65,25 @@ export function ProviderLogo({ provider }: { provider: string }) {
     return (
       <span className="provider-logo provider-logo-tone" style={{ color: "var(--tone-green-fg)" }} aria-hidden="true">
         <MessageSquareText className="icon-sm" />
+      </span>
+    );
+  }
+  const tone = (
+    {
+      ninjaone: [MonitorCog, "blue"],
+      itglue: [NotebookText, "violet"],
+      hudu: [NotebookText, "teal"],
+      rest: [Braces, "neutral"],
+      connectwise: [Headset, "red"],
+      autotask: [Headset, "blue"],
+      halopsa: [Headset, "green"],
+    } as const
+  )[provider as "ninjaone" | "itglue" | "hudu" | "rest" | "connectwise" | "autotask" | "halopsa"];
+  if (tone) {
+    const [Icon, color] = tone;
+    return (
+      <span className="provider-logo provider-logo-tone" style={{ color: `var(--tone-${color}-fg)` }} aria-hidden="true">
+        <Icon className="icon-sm" />
       </span>
     );
   }

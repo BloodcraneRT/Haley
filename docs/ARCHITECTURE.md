@@ -14,6 +14,7 @@
                                     │        │  policy.ts: run / approve / block per call ──────────┘  │
                                     │        ├─ built-in tools: tickets, replies, KB, follow-ups         │
                                     │        └─ connectors: m365 (Graph), google (Admin SDK), slack      │
+                                    │           ninjaone (RMM), itglue, hudu (docs), rest (any API)      │
                                     │                                                                    │
                                     │   Scheduler: recurring tasks, Haley's follow-ups, SLA escalation   │
                                     │   Store (SQLite): orgs, integrations, tickets, runs, actions,      │
@@ -79,13 +80,13 @@ On first start, a Claude profile is created from `HALEY_MODEL`, `HALEY_EFFORT` a
 
 ### PSA sync: `server/src/psa/`
 
-- **One interface:** `PsaAdapter` covers customers, changed tickets with comments, adding a comment, setting status and creating a ticket. Implementations are `psa/syncro.ts` (SyncroMSP REST v1) and `psa/dynamics.ts` (Dataverse Web API v9.2, cases and notes).
+- **One interface:** `PsaAdapter` covers customers, changed tickets with comments, adding a comment, setting status and creating a ticket. Implementations are `psa/syncro.ts` (SyncroMSP REST v1), `psa/connectwise.ts` (ConnectWise PSA REST 3.0, tickets and notes), `psa/autotask.ts` (Autotask REST v1.0, tickets and ticket notes), `psa/halopsa.ts` (HaloPSA REST, tickets and actions) and `psa/dynamics.ts` (Dataverse Web API v9.2, cases and notes).
 - **`PsaSync` pulls** changed tickets for mapped customers:
   - New tickets go through the channel hub (acknowledgement, then Haley works them).
   - A customer comment continues the ticket.
   - A technician comment is recorded without waking Haley.
   - Closing the ticket upstream resolves it in Haley.
-- **Replies:** PSA-originated tickets are answered through a channel adapter as public PSA comments. Dynamics notes don't notify customers, so those replies are also emailed.
+- **Replies:** PSA-originated tickets are answered through a channel adapter as public PSA comments. Dynamics and Autotask notes don't notify customers (nor do ConnectWise notes unless the MSP says its board emails contacts), so those replies are also emailed.
 - **Mirroring:** Haley's notes, actions and conversations from other channels go back upstream as internal comments. Tickets that start in Haley are created in the PSA.
 - **Loop prevention:** `ticket_links` tracks the comment ids Haley posted and the events already mirrored, so nothing echoes back.
 - **Schedule:** the scheduler syncs each connection every 2 minutes, and `POST /api/psa/:id/sync` syncs on demand.
@@ -135,6 +136,8 @@ Ticket text comes from end users. The system prompt tells the model to treat it 
 
 The dashboard renders the connect form from `ProviderInfo`, so no UI work is needed.
 
+Connectors that call an MSP-configured host or tenant (NinjaOne, IT Glue, Hudu, generic REST) share `connectors/http.ts`: base URLs must be https with a public hostname (no IP literals, localhost or internal names; nothing is resolved, so DNS rebinding isn't covered), requests use `redirect: "manual"` and a 20-second timeout, and `stripSecrets()` drops password/secret/token/OTP-like fields from documentation results. Each connector is scoped to one client-side tenant (NinjaOne organization, IT Glue organization, Hudu company) and checks that id on every item it returns, so a tool can't read or act on another client's records even with a guessed id. The generic REST connector exposes `api_<name>_get` (read) and, only with `allowWrites`, `api_<name>_write` (write) and `api_<name>_delete` (destructive); the auth value is scrubbed from every response.
+
 ## Data model
 
 | Table | Purpose |
@@ -159,7 +162,7 @@ These are ranked from the [competitive research](research/COMPETITIVE_LANDSCAPE.
 
 - **Compromised-account playbook**: investigate sign-ins, inbox rules, forwarding and OAuth grants with read-only tools, then contain with approval.
 - **Exchange Online depth**: shared mailbox and calendar permissions, forwarding, message trace, and converting a mailbox to shared on offboarding.
-- **More PSAs** (HaloPSA, ConnectWise, Autotask) on the same `PsaAdapter` interface, and an **RMM connector** for endpoint scripts.
+- **More PSAs** (HaloPSA, ConnectWise, Autotask) on the same `PsaAdapter` interface, and more **RMM connectors** (Datto RMM, ConnectWise Automate) alongside NinjaOne.
 - **Per-technician accounts** with SSO and roles, replacing the shared API token.
 - **Service catalog** forms feeding deterministic tools; **tenant standards and drift** checks.
 - **Live run streaming** over SSE instead of polling.

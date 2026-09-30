@@ -11,7 +11,7 @@ import type { ChatMessage, LlmClient } from "./ai/types.js";
 import { AgentService, ApproverNotAllowedError, RunConflictError } from "./agent/runner.js";
 import { TASK_TEMPLATES } from "./agent/templates.js";
 import type { HaleyConfig } from "./config.js";
-import { buildConnector, PROVIDERS, providerInfo } from "./connectors/registry.js";
+import { buildConnector, PROVIDERS, providerInfo, validateProviderConfig } from "./connectors/registry.js";
 import { ConnectorError, type Connector } from "./connectors/types.js";
 import { openDb } from "./db.js";
 import { seedDemo } from "./demo.js";
@@ -25,10 +25,14 @@ import { clientReport } from "./report.js";
 import { PSA_PROVIDERS, buildPsaAdapter } from "./psa/registry.js";
 import "./psa/dynamics.js";
 import "./psa/syncro.js";
+import "./psa/connectwise.js";
+import "./psa/autotask.js";
+import "./psa/halopsa.js";
 import { PsaSync } from "./psa/sync.js";
 import type { PsaAdapter, PsaConnection } from "./psa/types.js";
 import { registerHooks } from "./routes/hooks.js";
 import { registerM365Onboarding } from "./routes/m365Onboarding.js";
+import { registerMemoryRoutes } from "./routes/memories.js";
 import { registerSecretLinks } from "./routes/secretLinks.js";
 import { nextOccurrence, Scheduler } from "./scheduler.js";
 import { slaFor } from "./sla.js";
@@ -137,6 +141,9 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   const psa = new PsaSync(store, hub, psaFactory ?? ((connection, cfg) => buildPsaAdapter(connection, cfg, fetchImpl)));
   hub.register(psa.channelAdapter("syncro"));
   hub.register(psa.channelAdapter("dynamics"));
+  hub.register(psa.channelAdapter("connectwise"));
+  hub.register(psa.channelAdapter("autotask"));
+  hub.register(psa.channelAdapter("halopsa"));
 
   const agent = new AgentService(store, llm ? () => llm : (orgId) => models.clientFor(orgId), config, connectorsFor, hub);
   hub.attach(agent);
@@ -162,6 +169,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
 
   registerHooks(app, { config: ch, store, hub, slack, teams, log: (err) => app.log.error(err) });
   registerSecretLinks(app, store);
+  registerMemoryRoutes(app, store, actor);
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof HttpError) return reply.status(err.statusCode).send({ error: err.message });
@@ -352,7 +360,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     if (!org) throw notFound("Organization");
     const input = body(
       z.object({
-        provider: z.enum(["m365", "google", "slack", "sms_code", "duo", "okta"]),
+        provider: z.enum(["m365", "google", "slack", "sms_code", "duo", "okta", "ninjaone", "itglue", "hudu", "rest"]),
         mode: z.enum(["live", "sandbox"]).default("live"),
         label: z.string().trim().optional(),
         config: z.record(z.string(), z.string()).default({}),
@@ -366,6 +374,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     if (input.mode === "live") {
       const missing = info.fields.filter((f) => !f.optional && !input.config[f.key]?.trim()).map((f) => f.label);
       if (missing.length) throw new HttpError(400, `Missing: ${missing.join(", ")}`);
+      const invalid = validateProviderConfig(input.provider, input.config);
+      if (invalid) throw new HttpError(400, invalid);
     }
     if (info.kind === "verification" && store.listIntegrations(org.id).some((i) => providerInfo(i.provider)?.kind === "verification")) {
       throw new HttpError(409, `${org.name} already has an identity verification method. Remove it first to switch.`);

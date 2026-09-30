@@ -1,7 +1,7 @@
-import { effectiveAssurance, type Integration, type Org, type Ticket, type TicketEvent } from "../types.js";
+import { effectiveAssurance, type ClientMemory, type Integration, type Org, type Ticket, type TicketEvent } from "../types.js";
 
 /** Stable across every run so the prefix caches; per-org and per-ticket context goes in the first user turn. */
-export const SYSTEM_PROMPT = `You are Haley, an AI IT technician working for a managed service provider (MSP). You work tickets and tasks for the MSP's client organizations alongside human technicians, using tools connected to each client's systems (Microsoft 365, Google Workspace) plus Haley's own ticketing and knowledge base.
+export const SYSTEM_PROMPT = `You are Haley, an AI IT technician working for a managed service provider (MSP). You work tickets and tasks for the MSP's client organizations alongside human technicians, using tools connected to each client's systems (Microsoft 365, Google Workspace, NinjaOne RMM, IT Glue or Hudu documentation, and other APIs the MSP connected) plus Haley's own ticketing and knowledge base.
 
 How you work:
 - Investigate before you change anything. Use read tools to confirm the facts in the request (the user exists, what they have today, whether a service is degraded) rather than trusting the description. For outage-like reports, check service health first.
@@ -20,7 +20,9 @@ Tickets:
 
 Documentation:
 - Search the knowledge base before troubleshooting; the MSP may already have a runbook or a client-specific note.
+- If the client has IT Glue or Hudu connected, search it as well: it holds the MSP's client-specific documentation (network notes, vendor contacts, procedures). It's read-only and never contains passwords for you.
 - After solving something another technician would benefit from, or when asked to document, save a knowledge base article in Markdown: symptoms, cause, resolution steps, and client-specific details. Update an existing article instead of creating a near-duplicate.
+- When you learn a short, durable fact about a client that would change how you handle their next ticket (an environment quirk, who approves what, a fix that keeps recurring), save it with remember_for_client. Longer procedures belong in a knowledge base article. Notes you saved earlier appear in the organization context; if one looks wrong or outdated, say so in your summary rather than relying on it.
 
 When you finish, end with a brief summary for the technicians: what you found, what you changed, and anything still open. Keep it scannable; they read many of these.`;
 
@@ -50,7 +52,22 @@ function policyRulesText(org: Org): string {
   return `Client policy rules (enforced by Haley's policy engine; don't try to work around them):\n${lines.join("\n")}\n`;
 }
 
-export function orgContext(org: Org, integrations: Integration[]): string {
+/** Most notes and characters of client memory put in front of the model on each run. */
+const MEMORY_PROMPT_LIMIT = { notes: 40, chars: 4000 };
+
+function memoryText(memories: Pick<ClientMemory, "content">[]): string {
+  if (!memories.length) return "";
+  const lines: string[] = [];
+  let used = 0;
+  for (const m of memories.slice(0, MEMORY_PROMPT_LIMIT.notes)) {
+    if (used + m.content.length > MEMORY_PROMPT_LIMIT.chars) break;
+    lines.push(`- ${m.content}`);
+    used += m.content.length;
+  }
+  return `What you've learned about this client (confirmed notes, newest first):\n${lines.join("\n")}\n`;
+}
+
+export function orgContext(org: Org, integrations: Integration[], memories: Pick<ClientMemory, "content">[] = []): string {
   const systems = integrations.length
     ? integrations.map((i) => `- ${i.label} (${i.provider}${i.mode === "sandbox" ? ", sandbox" : ""})`).join("\n")
     : "- None connected. You can only work with Haley's own tickets and knowledge base.";
@@ -60,7 +77,7 @@ Primary domain: ${org.domain || "unknown"}${org.settings.emailDomains.length ? `
 Autonomy policy: ${AUTONOMY_TEXT[org.autonomy]}
 Connected systems:
 ${systems}
-${org.settings.authorizedRequesters.length ? `Authorized approvers (may request changes to other people's accounts): ${org.settings.authorizedRequesters.join(", ")}\n` : ""}${org.settings.protectedAccounts.length ? `Protected accounts (changes always need a technician): ${org.settings.protectedAccounts.join(", ")}\n` : ""}${policyRulesText(org)}${org.notes.trim() ? `Client notes from the MSP:\n${org.notes.trim()}` : ""}
+${org.settings.authorizedRequesters.length ? `Authorized approvers (may request changes to other people's accounts): ${org.settings.authorizedRequesters.join(", ")}\n` : ""}${org.settings.protectedAccounts.length ? `Protected accounts (changes always need a technician): ${org.settings.protectedAccounts.join(", ")}\n` : ""}${policyRulesText(org)}${memoryText(memories)}${org.notes.trim() ? `Client notes from the MSP:\n${org.notes.trim()}` : ""}
 </organization>`;
 }
 
@@ -82,6 +99,9 @@ const CHANNEL_TEXT: Record<Ticket["channel"], string> = {
   chat: "chat",
   syncro: "SyncroMSP ticket (replies are posted to the SyncroMSP ticket)",
   dynamics: "Dynamics 365 case (replies are posted to the case)",
+  connectwise: "ConnectWise PSA ticket (replies are posted to the ticket)",
+  autotask: "Autotask ticket (replies are posted to the ticket)",
+  halopsa: "HaloPSA ticket (replies are posted to the ticket)",
 };
 
 export function ticketContext(ticket: Ticket, events: TicketEvent[]): string {

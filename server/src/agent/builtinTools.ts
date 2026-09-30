@@ -262,10 +262,57 @@ function ticketTools(store: Store, run: Run, ticketId: string, delivery_: ReplyD
   ];
 }
 
+/** Most notes Haley keeps per client; past this she should update knowledge articles instead. */
+export const MAX_CLIENT_MEMORIES = 200;
+/** Credentials and codes never belong in memory, which every later run reads. */
+const SECRET_LIKE = /\b(pass(word|code|phrase)?|pwd|secret|api[ _-]?key|token|recovery key|otp|pin)\b\s*(is|[:=])\s*\S+|\b\d{6}(-\d{6}){3,}\b/i;
+
+function memoryTools(store: Store, run: Run): HaleyTool[] {
+  return [
+    defineTool({
+      name: "remember_for_client",
+      description:
+        "Save one short, durable fact about this client's environment that will help on future tickets: a quirk (\"their VPN needs the FortiClient 7.2 profile\"), a preference (\"the office manager approves new licenses\"), or a recurring fix. You'll see these notes at the start of every run for this client. Not for one-off ticket details, personal data, or anything secret. Notes from an end user's ticket are used only after a technician confirms them.",
+      input: z.object({ note: z.string().trim().min(10).max(400).describe("One self-contained sentence or two") }),
+      risk: "internal",
+      describe: (i) => `Remember for this client: ${i.note}`,
+      run: async ({ note }) => {
+        if (SECRET_LIKE.test(note)) throw new Error("That looks like a credential or code. Never store secrets in client memory.");
+        const existing = store.listMemories(run.org_id);
+        const same = existing.find((m) => m.content.toLowerCase() === note.toLowerCase());
+        if (same) return { ok: true, id: same.id, status: same.status, note: "Already remembered." };
+        if (existing.length >= MAX_CLIENT_MEMORIES) {
+          throw new Error(`This client already has ${MAX_CLIENT_MEMORIES} notes. Put longer-lived detail in a knowledge base article instead.`);
+        }
+        const ticket = run.ticket_id ? store.getTicket(run.ticket_id) : null;
+        // An end user's ticket could try to plant "facts" for later runs, so those wait for a technician.
+        const trusted = !run.ticket_id || ticket?.assurance === "technician";
+        const memory = store.createMemory({
+          orgId: run.org_id,
+          content: note,
+          status: trusted ? "active" : "pending",
+          source: "agent",
+          createdBy: AGENT,
+          runId: run.id,
+          ticketId: run.ticket_id,
+        });
+        store.audit({ orgId: run.org_id, actor: AGENT, action: "memory.created", target: memory.id, detail: { status: memory.status } });
+        return {
+          ok: true,
+          id: memory.id,
+          status: memory.status,
+          note: trusted ? "Saved; you'll see it on future runs for this client." : "Saved for a technician to confirm before it's used.",
+        };
+      },
+    }),
+  ];
+}
+
 export function builtinTools(store: Store, run: Run, delivery: ReplyDelivery | null = null, verifier: Verifier | null = null): HaleyTool[] {
   return [
     ...(run.ticket_id ? ticketTools(store, run, run.ticket_id, delivery) : []),
     ...(run.ticket_id && verifier ? verificationTools(store, run, run.ticket_id, verifier) : []),
     ...knowledgeTools(store, run),
+    ...memoryTools(store, run),
   ];
 }

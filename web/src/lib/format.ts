@@ -160,7 +160,13 @@ export const PROVIDER_NAMES: Record<string, string> = {
   sms_code: "SMS verification code",
 };
 
-export const PSA_NAMES: Record<string, string> = { syncro: "Syncro", dynamics: "Dynamics 365" };
+export const PSA_NAMES: Record<string, string> = {
+  syncro: "Syncro",
+  dynamics: "Dynamics 365",
+  connectwise: "ConnectWise",
+  autotask: "Autotask",
+  halopsa: "HaloPSA",
+};
 
 export const CHANNEL_META: Record<TicketChannel, { label: string; help: string }> = {
   portal: { label: "Portal", help: "Entered in the Haley dashboard by a technician" },
@@ -171,6 +177,9 @@ export const CHANNEL_META: Record<TicketChannel, { label: string; help: string }
   chat: { label: "Chat", help: "Chat bridge (web widget, SMS, Google Chat) or the end-user simulator" },
   syncro: { label: "Syncro", help: "Imported from SyncroMSP; replies go back as public ticket comments" },
   dynamics: { label: "Dynamics 365", help: "Imported from a Dynamics 365 Customer Service case; replies go to the case timeline" },
+  connectwise: { label: "ConnectWise", help: "Imported from ConnectWise PSA; replies go back as Discussion notes" },
+  autotask: { label: "Autotask", help: "Imported from Autotask PSA; replies go back as ticket notes" },
+  halopsa: { label: "HaloPSA", help: "Imported from HaloPSA; replies go back as ticket actions" },
 };
 
 export const ASSURANCE_META: Record<Assurance, { label: string; tone: Tone; short: string; how: string }> = {

@@ -224,6 +224,21 @@ const MIGRATIONS: string[] = [
      data TEXT NOT NULL,
      created_at TEXT NOT NULL
    );`,
+  // 7: per-client memory: short facts Haley learns about a client's environment
+  `CREATE TABLE IF NOT EXISTS client_memories (
+     id TEXT PRIMARY KEY,
+     org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+     content TEXT NOT NULL,
+     status TEXT NOT NULL,
+     source TEXT NOT NULL,
+     run_id TEXT,
+     ticket_id TEXT,
+     created_by TEXT NOT NULL,
+     reviewed_by TEXT,
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL
+   );
+   CREATE INDEX IF NOT EXISTS idx_client_memories_org ON client_memories(org_id, status);`,
 ];
 
 export function openDb(path: string): Db {
