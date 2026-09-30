@@ -466,6 +466,8 @@ export class Store {
         actor,
         `${field}: ${String(change.from)} → ${String(change.to)}`,
         { field, ...change },
+        // Same instant as the ticket's updated_at/resolved_at, so the event can stand in for them later.
+        next.updated_at,
       );
     }
     return next;
@@ -481,8 +483,9 @@ export class Store {
     author: string,
     body: string,
     meta: Record<string, unknown> = {},
+    at: string = now(),
   ): TicketEvent {
-    const event: TicketEvent = { id: newId("evt"), ticket_id: ticketId, kind, author, body, meta, created_at: now() };
+    const event: TicketEvent = { id: newId("evt"), ticket_id: ticketId, kind, author, body, meta, created_at: at };
     this.db
       .prepare("INSERT INTO ticket_events (id, ticket_id, kind, author, body, meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(event.id, ticketId, kind, author, body, json(meta), event.created_at);
