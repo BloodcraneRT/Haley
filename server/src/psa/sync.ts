@@ -131,10 +131,12 @@ export class PsaSync {
       const adapter = this.adapterFor(connection);
       const tickets = await adapter.listUpdatedTickets(connection.cursor);
       let cursor = connection.cursor;
+      let pullFailed = false;
       for (const external of tickets) {
         try {
           await this.pull(connection, external, result);
         } catch (err) {
+          pullFailed = true;
           result.errors.push(`Ticket ${external.number || external.id}: ${err instanceof Error ? err.message : String(err)}`);
         }
         if (!cursor || external.updatedAt > cursor) cursor = external.updatedAt;
@@ -142,7 +144,8 @@ export class PsaSync {
       await this.push(connection, adapter, result);
       if (connection.options.exportTickets) await this.exportNew(connection, adapter, result);
       this.store.updatePsaConnection(connectionId, {
-        cursor,
+        // Replay the batch on the next sync rather than skipping a failed ticket behind a newer update.
+        cursor: pullFailed ? connection.cursor : cursor,
         lastSyncAt: startedAt,
         status: result.errors.length ? "error" : "connected",
         statusDetail: result.errors.length
@@ -278,9 +281,7 @@ export class PsaSync {
     const customerFor = new Map<string, string>();
     for (const [customerId, orgId] of Object.entries(connection.customer_map)) if (!customerFor.has(orgId)) customerFor.set(orgId, customerId);
     for (const [orgId, customerId] of customerFor) {
-      for (const ticket of this.store.listTickets({ orgId, limit: 500 })) {
-        if (ticket.created_at < connection.created_at || ticket.channel === connection.kind) continue;
-        if (this.store.getTicketLink(ticket.id, connection.id)) continue;
+      for (const ticket of this.store.listTicketsAwaitingPsaExport(connection, orgId)) {
         const created = await adapter.createTicket({
           customerId,
           subject: `[Haley #${ticket.number}] ${ticket.title}`,

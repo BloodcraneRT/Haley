@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ExternalComment, ExternalTicket, PsaAdapter, PsaConnection } from "../src/psa/types.js";
 import type { TicketStatus } from "../src/types.js";
 import { DynamicsAdapter } from "../src/psa/dynamics.js";
@@ -96,6 +96,51 @@ async function setup(llm: ScriptedLlm) {
 }
 
 describe("PSA sync", () => {
+  it("preserves the import cursor if one ticket fails even when a newer ticket succeeds", async () => {
+    const { app, fake, contoso, connection, psa, store } = await setup(new ScriptedLlm());
+    try {
+      store.updateOrg(contoso.id, { settings: { paused: true } });
+      const cursor = "2020-01-01T00:00:00.000Z";
+      store.updatePsaConnection(connection.id, { customerMap: { c1: contoso.id }, cursor, options: { exportTickets: false } });
+      fake.open("failed", "c1", "Older update", "Printer", "megan@contoso.example");
+      fake.open("good", "c1", "Newer update", "VPN", "megan@contoso.example");
+      vi.spyOn(store, "createTicket").mockImplementationOnce(() => { throw new Error("Import unavailable"); });
+      const first = await psa.sync(connection.id);
+      expect(first.errors).toContain("Ticket failed: Import unavailable");
+      expect(first.imported).toBe(1);
+      expect(store.getPsaConnection(connection.id)?.cursor).toBe(cursor);
+      const second = await psa.sync(connection.id);
+      expect(second.errors).toEqual([]);
+      expect(store.findTicketLinkByExternal(connection.id, "failed")).not.toBeNull();
+    } finally { vi.restoreAllMocks(); await app.close(); }
+  });
+
+  it("exports older eligible tickets even when the latest 500 tickets are already linked", async () => {
+    const { app, fake, contoso, connection, psa, store } = await setup(new ScriptedLlm());
+    try {
+      store.updateOrg(contoso.id, { settings: { paused: true } });
+      store.updatePsaConnection(connection.id, { customerMap: { c1: contoso.id }, options: { importTickets: false } });
+      const base = Date.parse(connection.created_at) + 1000;
+      const insert = store.db.prepare("INSERT INTO tickets (id, number, org_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)");
+      store.db.exec("BEGIN");
+      for (let i = 0; i <= 500; i++) {
+        const at = new Date(base + i * 1000).toISOString();
+        const id = `export-${i}`;
+        insert.run(id, 10_000 + i, contoso.id, `Backlog ${i}`, at, at);
+        if (i) {
+          fake.open(`external-${i}`, "c1", `Backlog ${i}`, "", "");
+          store.createTicketLink({ ticketId: id, connectionId: connection.id, externalId: `external-${i}`, externalNumber: String(i), lastStatus: "new" });
+        }
+      }
+      store.db.exec("COMMIT");
+      const result = await psa.sync(connection.id);
+      expect(result.errors).toEqual([]);
+      expect(result.exported).toBe(1);
+      expect(store.getTicketLink("export-0", connection.id)).not.toBeNull();
+      expect((await psa.sync(connection.id)).exported).toBe(0);
+    } finally { await app.close(); }
+  });
+
   it("suggests customer mappings by domain and only imports mapped customers", async () => {
     const { app, fake, contoso, connection, psa, store } = await setup(new ScriptedLlm());
     expect(connection).toMatchObject({ status: "connected", status_detail: "Connected to Fake PSA" });

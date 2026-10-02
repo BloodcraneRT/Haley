@@ -901,6 +901,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     cadence: z.enum(["once", "daily", "weekly", "monthly"]),
     mode: z.enum(["live", "plan"]).default("live"),
     startAt: z.iso.datetime({ offset: true }),
+    templateId: z.string().trim().min(1).max(64).optional(),
   });
 
   app.get("/api/schedules", async (req) => {
@@ -915,7 +916,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   app.post("/api/schedules", async (req) => {
     const input = body(scheduleInput, req);
     if (!store.getOrg(input.orgId)) throw notFound("Organization");
-    const schedule = store.createSchedule({ ...input, nextRunAt: new Date(input.startAt).toISOString(), createdBy: actor(req) });
+    const schedule = store.createSchedule({ ...input, templateId: input.templateId && TASK_TEMPLATES.some((t) => t.id === input.templateId) ? input.templateId : null, nextRunAt: new Date(input.startAt).toISOString(), createdBy: actor(req) });
     store.audit({ orgId: input.orgId, actor: actor(req), action: "schedule.created", target: schedule.id, detail: { title: input.title, cadence: input.cadence } });
     return schedule;
   });

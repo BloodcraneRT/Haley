@@ -107,7 +107,7 @@ export class Scheduler {
         }
         runId = this.agent.startTicketRun(schedule.ticket_id, `schedule:${schedule.created_by}`, schedule.mode, schedule.instruction).id;
       } else {
-        runId = this.agent.startTaskRun(schedule.org_id, schedule.title, schedule.instruction, `schedule:${schedule.created_by}`, schedule.mode).id;
+        runId = this.agent.startTaskRun(schedule.org_id, schedule.title, schedule.instruction, `schedule:${schedule.created_by}`, schedule.mode, schedule.template_id).id;
       }
       this.store.updateSchedule(schedule.id, { last_run_at: nowIso, last_run_id: runId });
       this.store.audit({ orgId: schedule.org_id, actor: "scheduler", action: "schedule.fired", target: schedule.id, detail: { runId, title: schedule.title } });

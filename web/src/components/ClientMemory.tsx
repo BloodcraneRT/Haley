@@ -16,6 +16,11 @@ const MAX = 400;
  * technician confirms them; confirmed notes are shown to her on every run for this client.
  */
 export function ClientMemorySection({ orgId }: { orgId: string }) {
+  // Client navigation must discard any editor or confirmation for the previous client.
+  return <ClientMemoryEditor key={orgId} orgId={orgId} />;
+}
+
+function ClientMemoryEditor({ orgId }: { orgId: string }) {
   const { toast } = useApp();
   const memories = usePoll(() => api.memories(orgId), [orgId]);
   const [editing, setEditing] = useState<ClientMemory | "new" | null>(null);
@@ -98,7 +103,7 @@ export function ClientMemorySection({ orgId }: { orgId: string }) {
         {pending.length > 0 && <Pill tone="amber">{pending.length} to review</Pill>}
         {(busy || (memories.loading && !memories.data)) && <Spinner />}
         <span className="spacer" />
-        <button className="btn btn-sm" onClick={() => setEditing("new")}>
+        <button className="btn btn-sm" disabled={busy !== null} onClick={() => setEditing("new")}>
           <Plus className="icon-sm" aria-hidden="true" /> Add note
         </button>
       </div>
@@ -132,7 +137,7 @@ export function ClientMemorySection({ orgId }: { orgId: string }) {
       <MemoryModal
         memory={editing}
         busy={busy === "modal"}
-        onClose={() => setEditing(null)}
+        onClose={() => { if (busy === null) setEditing(null); }}
         onSave={async (content, confirm) => {
           const target = editing;
           const ok = await act(
@@ -151,7 +156,7 @@ export function ClientMemorySection({ orgId }: { orgId: string }) {
         title={deleting?.status === "pending" ? "Discard this note?" : "Delete this note?"}
         confirmLabel={deleting?.status === "pending" ? "Discard" : "Delete"}
         busy={busy === deleting?.id}
-        onClose={() => setDeleting(null)}
+        onClose={() => { if (busy === null) setDeleting(null); }}
         onConfirm={async () => {
           if (!deleting) return;
           const target = deleting;
@@ -188,7 +193,7 @@ function MemoryModal({
   const valid = trimmed.length >= 3 && trimmed.length <= MAX;
   const submit = (e: FormEvent, confirm: boolean) => {
     e.preventDefault();
-    if (valid) onSave(trimmed, confirm);
+    if (valid && !busy) onSave(trimmed, confirm);
   };
   return (
     <Modal

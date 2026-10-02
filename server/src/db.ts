@@ -256,6 +256,8 @@ const MIGRATIONS: string[] = [
      key TEXT PRIMARY KEY,
      value TEXT NOT NULL
    );`,
+  // 9: preserve recipe attribution when recurring tasks fire
+  `ALTER TABLE schedules ADD COLUMN template_id TEXT;`,
 ];
 
 export function openDb(path: string): Db {

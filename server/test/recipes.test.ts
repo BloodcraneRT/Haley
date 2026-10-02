@@ -138,6 +138,32 @@ describe("GET /api/templates", () => {
 });
 
 describe("running a recipe", () => {
+  it("preserves scheduled recipe attribution on live and plan runs", async () => {
+    const { app, store, agent, scheduler } = await makeApp(new ScriptedLlm(turn(text("Plan done.")), turn(text("Audit done."))));
+    try {
+      await app.inject({ method: "POST", url: "/api/demo" });
+      const org = store.listOrgs().find((o) => o.name === "Contoso Ltd")!;
+      const recipe = TASK_TEMPLATES.find((t) => t.id === "license-reclaim")!;
+      for (const mode of ["plan", "live"] as const) {
+        const response = await app.inject({ method: "POST", url: "/api/schedules", payload: {
+          orgId: org.id, title: recipe.name, instruction: recipe.instruction, cadence: "monthly", mode,
+          startAt: new Date(Date.now() + 300_000).toISOString(), templateId: recipe.id,
+        } });
+        expect(response.statusCode).toBe(200);
+        expect(response.json().template_id).toBe(recipe.id);
+        const started = scheduler.runNow(response.json().id).started[0];
+        await agent.settled(started.runId);
+        expect(store.getRun(started.runId)).toMatchObject({ template_id: recipe.id, mode, status: "completed" });
+      }
+      const report = (await app.inject({ url: `/api/orgs/${org.id}/report` })).json();
+      expect(report.timeSaved.recipeRuns).toBe(1);
+      const unknown = await app.inject({ method: "POST", url: "/api/schedules", payload: {
+        orgId: org.id, title: "Custom", instruction: "Check", cadence: "once", startAt: new Date().toISOString(), templateId: "unknown",
+      } });
+      expect(unknown.json().template_id).toBeNull();
+    } finally { await app.close(); }
+  });
+
   it("previews a change recipe in plan mode without changing the tenant", async () => {
     const user = "megan.bowen@contoso.example";
     const llm = new ScriptedLlm(

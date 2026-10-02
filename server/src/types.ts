@@ -277,6 +277,7 @@ export interface Schedule {
   org_id: string;
   /** Follow-ups Haley schedules on a ticket run as that ticket (with its requester's authority). */
   ticket_id: string | null;
+  template_id: string | null;
   title: string;
   instruction: string;
   cadence: Cadence;

@@ -120,6 +120,7 @@ export class HaloAdapter implements PsaAdapter {
         client_secret: this.config.clientSecret,
         scope: "all",
       }),
+      redirect: "manual",
     });
     const body = (await res.json().catch(() => ({}))) as Json;
     if (!res.ok || !body.access_token) {
@@ -138,6 +139,7 @@ export class HaloAdapter implements PsaAdapter {
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: "manual",
     });
     const raw = await res.text().catch(() => "");
     let data: any = {};
@@ -159,12 +161,16 @@ export class HaloAdapter implements PsaAdapter {
   private async pages(path: string, key: string): Promise<Json[]> {
     const items: Json[] = [];
     const sep = path.includes("?") ? "&" : "?";
-    for (let page = 1; page <= MAX_PAGES; page++) {
+    for (let page = 1; page <= MAX_PAGES + 1; page++) {
       const data = await this.call<Json>("GET", `${path}${sep}pageinate=true&page_size=${PAGE_SIZE}&page_no=${page}`);
       const rows = (Array.isArray(data) ? data : (data[key] ?? [])) as Json[];
+      if (page > MAX_PAGES && rows.length) throw new ConnectorError(`HaloPSA ${path.split("?")[0]} reached the page limit (${MAX_PAGES}); results are incomplete.`);
       items.push(...rows);
       const total = Number(data.record_count ?? NaN);
       if (rows.length < PAGE_SIZE || (!Number.isNaN(total) && page * PAGE_SIZE >= total)) break;
+      if (page === MAX_PAGES && !Number.isNaN(total) && total > items.length) {
+        throw new ConnectorError(`HaloPSA ${path.split("?")[0]} reached the page limit (${MAX_PAGES}); results are incomplete.`);
+      }
     }
     return items;
   }

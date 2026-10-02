@@ -9,8 +9,10 @@ export interface ReportOptions {
   minutesPerTicket: number;
   /** Technician minutes per change Haley made on her own (license, group, reset...). */
   minutesPerAction: number;
-  /** End of the period (default now); the period is the `days` before it. */
+  /** Exclusive end of a supplied period; otherwise the report includes activity through now. */
   to?: Date;
+  /** Exact inclusive start, when the caller already has a billing period. */
+  from?: Date;
 }
 
 /** Technician minutes a recipe takes by hand, from the recipe library (0 when unknown). */
@@ -39,8 +41,10 @@ function median(values: number[]): number | null {
  */
 export function clientReport(store: Store, org: Org, options: ReportOptions) {
   const to = options.to ?? new Date();
-  const from = new Date(to.getTime() - options.days * 86_400_000);
-  const inPeriod = (iso: string | null) => Boolean(iso) && iso! >= from.toISOString() && iso! <= to.toISOString();
+  const from = options.from ?? new Date(to.getTime() - options.days * 86_400_000);
+  const fromIso = from.toISOString();
+  const toIso = to.toISOString();
+  const inPeriod = (iso: string | null) => Boolean(iso) && iso! >= fromIso && (options.to ? iso! < toIso : iso! <= toIso);
 
   const all = store.listTickets({ orgId: org.id, limit: 100_000 });
   const activity = store.ticketActivityForReport(org.id);
@@ -59,17 +63,22 @@ export function clientReport(store: Store, org: Org, options: ReportOptions) {
   const resolutionSettled = slas.filter((s) => settled(s.resolution));
   const pct = (part: number, whole: number) => (whole ? Math.round((part / whole) * 1000) / 10 : null);
 
-  const actions = store.listActions({ orgId: org.id, limit: 100_000 }).filter((a) => inPeriod(a.created_at));
+  const allActions = store.listActions({ orgId: org.id, limit: 100_000 });
+  const actions = allActions.filter((a) => inPeriod(a.created_at));
   const changes = actions.filter((a) => a.risk === "write" || a.risk === "destructive");
-  const executedChanges = changes.filter((a) => a.status === "executed");
+  const executedChanges = allActions.filter(
+    (a) => (a.risk === "write" || a.risk === "destructive") && a.status === "executed" && inPeriod(a.executed_at ?? a.created_at),
+  );
   const autoChanges = executedChanges.filter((a) => !a.decided_by);
 
   const articles = store.searchArticles({ orgId: org.id, limit: 100_000 }).filter((a) => a.org_id === org.id);
   // Recipes count only when a live run finished with every change it attempted done.
+  // Check its entire action history: a recipe may span the start of the period.
+  const incompleteRuns = new Set(allActions.filter((a) => ["failed", "rejected", "blocked", "pending_approval"].includes(a.status)).map((a) => a.run_id));
   const recipeRuns = store
     .listRuns({ orgId: org.id, kind: "task", limit: 100_000 })
     .filter((r) => r.template_id && r.mode === "live" && r.status === "completed" && inPeriod(r.updated_at))
-    .filter((r) => !actions.some((a) => a.run_id === r.id && ["failed", "rejected", "blocked", "pending_approval"].includes(a.status)));
+    .filter((r) => !incompleteRuns.has(r.id));
   const recipeMinutesSaved = recipeRuns.reduce((sum, r) => sum + recipeMinutes(r.template_id), 0);
   const minutesSaved =
     handledByHaleyAlone.length * options.minutesPerTicket + autoChanges.length * options.minutesPerAction + recipeMinutesSaved;

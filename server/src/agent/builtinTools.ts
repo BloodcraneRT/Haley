@@ -251,24 +251,28 @@ function ticketTools(store: Store, run: Run, ticketId: string, delivery_: ReplyD
       name: "confirm_resolution",
       description:
         "Close the ticket as confirmed fixed, after you resolved it and the requester has since replied that it's working. Only for their clear confirmation (\"yes, that worked\", \"all good, thanks\"); if they say it's still broken, keep working instead.",
-      input: z.object({ evidence: z.string().min(2).max(300).describe("The requester's words confirming the fix") }),
+      input: z.object({ evidence: z.string().trim().min(2).max(300).describe("An exact quote from the requester's latest reply confirming the fix") }),
       risk: "internal",
       describe: (i) => `Close as confirmed: ${i.evidence.slice(0, 80)}`,
       run: async ({ evidence }) => {
         const ticket = store.getTicket(ticketId)!;
         if (ticket.resolution_confirmed_at) return { ok: true, status: ticket.status, note: "Already confirmed." };
         const events = store.listTicketEvents(ticketId);
-        const resolvedAt = events.findLastIndex((e) => e.kind === "status_change" && e.author === AGENT && e.meta.to === "resolved");
-        if (resolvedAt < 0) throw new Error("Resolve the ticket and ask the requester to confirm first.");
+        const resolvedAt = events.findLastIndex((e) => e.kind === "status_change" && e.meta.to === "resolved");
+        if (resolvedAt < 0 || events[resolvedAt].author !== AGENT) throw new Error("Haley must resolve the ticket and ask the requester to confirm first.");
         // Only the requester's own reply after the fix counts, never your own reading of the situation.
         const confirmed = events
           .slice(resolvedAt + 1)
-          .some((e) => e.kind === "comment" && e.meta.fromRequester === true && !e.meta.untrustedContinuation);
+          .findLast((e) => e.kind === "comment" && e.meta.fromRequester === true && !e.meta.untrustedContinuation);
         if (!confirmed) throw new Error("The requester hasn't replied since you resolved it. Wait for them; the ticket closes on its own if they don't.");
+        const normalized = (text: string) => text.trim().replace(/\s+/g, " ").toLowerCase();
+        if (!normalized(confirmed.body).includes(normalized(evidence))) {
+          throw new Error("Confirmation evidence must quote the requester's latest trusted reply. Do not invent or reuse an earlier confirmation.");
+        }
         const at = new Date().toISOString();
         store.updateTicket(ticketId, { status: "closed" }, AGENT);
         store.markResolutionConfirmed(ticketId, at, events[resolvedAt].created_at);
-        store.addTicketEvent(ticketId, "action", AGENT, `Requester confirmed the fix: "${evidence}"`, { runId: run.id, resolutionConfirmed: true });
+        store.addTicketEvent(ticketId, "action", AGENT, `Requester confirmed the fix: "${evidence}"`, { runId: run.id, resolutionConfirmed: true, requesterEventId: confirmed.id });
         store.audit({ orgId: run.org_id, actor: AGENT, action: "ticket.resolution_confirmed", target: ticketId });
         return { ok: true, status: "closed" };
       },

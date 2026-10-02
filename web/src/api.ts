@@ -268,6 +268,7 @@ export interface Schedule {
   org_id: string;
   /** Follow-ups Haley schedules on a ticket run as that ticket. */
   ticket_id: string | null;
+  template_id: string | null;
   title: string;
   instruction: string;
   cadence: Cadence;
@@ -926,6 +927,7 @@ export interface ScheduleInput {
   mode?: RunMode;
   /** ISO date-time with offset. */
   startAt: string;
+  templateId?: string;
 }
 
 export interface SchedulePatch {

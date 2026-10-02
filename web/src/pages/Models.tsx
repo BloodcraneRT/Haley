@@ -970,7 +970,7 @@ function ModelDialog({
                       className="input num"
                       inputMode="decimal"
                       value={d.inputPrice}
-                      onChange={(e) => set({ inputPrice: e.target.value.replace(/[^\d.]/g, "") })}
+                      onChange={(e) => set({ inputPrice: e.target.value })}
                       placeholder="Not priced"
                     />
                     <span aria-hidden="true">$ / M tokens</span>
@@ -987,7 +987,7 @@ function ModelDialog({
                       className="input num"
                       inputMode="decimal"
                       value={d.outputPrice}
-                      onChange={(e) => set({ outputPrice: e.target.value.replace(/[^\d.]/g, "") })}
+                      onChange={(e) => set({ outputPrice: e.target.value })}
                       placeholder="Not priced"
                     />
                     <span aria-hidden="true">$ / M tokens</span>

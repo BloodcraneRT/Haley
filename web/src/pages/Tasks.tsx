@@ -87,11 +87,13 @@ export function TasksPage() {
   const [category, setCategory] = useState<RecipeCategory | "all">("all");
 
   // Availability depends on the client's integrations, so re-fetch per client (keeping the last list meanwhile).
-  const templates = usePoll(() => api.templates(orgId || undefined), [orgId]);
-  const [recipes, setRecipes] = useState<TaskTemplate[] | undefined>(undefined);
+  const templates = usePoll(async () => ({ orgId, recipes: await api.templates(orgId || undefined) }), [orgId]);
+  const [lastRecipes, setLastRecipes] = useState<TaskTemplate[] | undefined>(undefined);
   useEffect(() => {
-    if (templates.data) setRecipes(templates.data);
+    if (templates.data) setLastRecipes(templates.data.recipes);
   }, [templates.data]);
+  const recipes = templates.data?.recipes ?? lastRecipes;
+  const availabilityReady = templates.data?.orgId === orgId;
 
   useEffect(() => {
     if (!orgId && orgs.data?.length === 1) setOrgId(orgs.data[0].id);
@@ -130,7 +132,9 @@ export function TasksPage() {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     if (!orgId) return setError("Choose which client this task is for.");
+    if (recipe && !availabilityReady) return setError("Wait for this client's recipe availability to load, or retry if it failed.");
     if (recipe && !recipe.available) return setError(`This recipe needs ${needs(recipe)}, which ${orgName || "this client"} hasn't connected.`);
     if (!title.trim()) return setError("Give the task a title.");
     if (!instruction.trim()) return setError("Tell Haley what to do.");
@@ -143,7 +147,7 @@ export function TasksPage() {
           setBusy(false);
           return setError("Choose when it should run.");
         }
-        await api.createSchedule({ orgId, title: title.trim(), instruction: instruction.trim(), cadence, mode, startAt: iso });
+        await api.createSchedule({ orgId, title: title.trim(), instruction: instruction.trim(), cadence, mode, startAt: iso, ...(recipe ? { templateId: recipe.id } : {}) });
         toast(`Scheduled "${title.trim()}" (${CADENCE_META[cadence].every.toLowerCase()}). It's listed on the client's page.`);
         refreshStats();
         navigate(`/clients/${orgId}`);
@@ -169,7 +173,7 @@ export function TasksPage() {
         type="button"
         className="template recipe"
         aria-pressed={templateId === t.id}
-        disabled={!t.available}
+        disabled={!availabilityReady || !t.available}
         onClick={() => pick(t.id)}
         title={t.available ? undefined : `Needs ${needs(t)}`}
       >
@@ -236,6 +240,7 @@ export function TasksPage() {
             <div className="section-title">
               <h2 id="tpl-title">Recipes</h2>
               {recipes && <span className="count">{recipes.length}</span>}
+              {templates.loading && <Spinner />}
               <span className="spacer" />
               <button type="button" className="btn btn-sm recipe-custom" aria-pressed={templateId === "custom"} onClick={() => pick("custom")}>
                 <PenLine className="icon-sm" aria-hidden="true" />
@@ -286,7 +291,7 @@ export function TasksPage() {
 
             {!orgId && recipes && <p className="recipe-note muted">Choose a client to see which recipes its connected tools support.</p>}
 
-            {templates.error && !recipes && <ErrorBanner error={templates.error} onRetry={templates.reload} />}
+            {templates.error && <ErrorBanner error={templates.error} onRetry={templates.reload} />}
             {!recipes ? (
               !templates.error && <Loading />
             ) : shown.length === 0 ? (
@@ -349,7 +354,7 @@ export function TasksPage() {
               )}
             </div>
             <div className="card-body stack">
-              {recipe && !recipe.available && (
+              {recipe && availabilityReady && !recipe.available && (
                 <div className="banner banner-warn" role="note">
                   <Plug className="icon-sm icon" aria-hidden="true" />
                   <span>
@@ -412,7 +417,7 @@ export function TasksPage() {
                   : "Haley's AI model has no credentials, so runs will fail."}
               </span>
               <span className="spacer" />
-              <button className="btn btn-primary" type="submit" disabled={busy}>
+              <button className="btn btn-primary" type="submit" disabled={busy || Boolean(recipe && (!availabilityReady || !recipe.available))}>
                 {busy ? <Spinner /> : when === "schedule" ? <CalendarClock className="icon-sm" aria-hidden="true" /> : mode === "plan" ? <ClipboardList className="icon-sm" aria-hidden="true" /> : <Zap className="icon-sm" aria-hidden="true" />}
                 {when === "schedule" ? "Create schedule" : mode === "plan" ? "Start plan" : "Start task"}
               </button>

@@ -453,12 +453,13 @@ export class Store {
       next.resolved_at ??= next.updated_at;
     } else if (patch.status) {
       next.resolved_at = null;
+      next.resolution_confirmed_at = null;
     }
     this.db
       .prepare(
-        "UPDATE tickets SET status = ?, priority = ?, category = ?, assignee = ?, title = ?, needs_followup = ?, resolved_at = ?, updated_at = ? WHERE id = ?",
+        "UPDATE tickets SET status = ?, priority = ?, category = ?, assignee = ?, title = ?, needs_followup = ?, resolved_at = ?, resolution_confirmed_at = ?, updated_at = ? WHERE id = ?",
       )
-      .run(next.status, next.priority, next.category, next.assignee, next.title, next.needs_followup ? 1 : 0, next.resolved_at, next.updated_at, id);
+      .run(next.status, next.priority, next.category, next.assignee, next.title, next.needs_followup ? 1 : 0, next.resolved_at, next.resolution_confirmed_at, next.updated_at, id);
     for (const [field, change] of Object.entries(changes)) {
       this.addTicketEvent(
         id,
@@ -667,6 +668,16 @@ export class Store {
   }
 
   // ------------------------------------------------------------- usage & billing
+
+  /** Bound each export batch after selecting eligible work so linked recent tickets cannot hide older ones. */
+  listTicketsAwaitingPsaExport(connection: PsaConnection, orgId: string, limit = 500): Ticket[] {
+    return (this.db.prepare(`
+      SELECT t.* FROM tickets t
+      WHERE t.org_id = ? AND t.created_at >= ? AND t.channel <> ?
+        AND NOT EXISTS (SELECT 1 FROM ticket_links l WHERE l.ticket_id = t.id AND l.connection_id = ?)
+      ORDER BY t.created_at, t.number LIMIT ?
+    `).all(orgId, connection.created_at, connection.kind, connection.id, limit) as Row[]).map((r) => this.toTicket(r));
+  }
 
   recordModelUsage(input: { runId: string; orgId: string; model: string; inputTokens: number; outputTokens: number }): void {
     this.db
@@ -1221,6 +1232,7 @@ export class Store {
   createSchedule(input: {
     orgId: string;
     ticketId?: string | null;
+    templateId?: string | null;
     title: string;
     instruction: string;
     cadence: Cadence;
@@ -1231,10 +1243,10 @@ export class Store {
     const id = newId("sch");
     this.db
       .prepare(
-        `INSERT INTO schedules (id, org_id, ticket_id, title, instruction, cadence, mode, next_run_at, enabled, created_by, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+        `INSERT INTO schedules (id, org_id, ticket_id, template_id, title, instruction, cadence, mode, next_run_at, enabled, created_by, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
       )
-      .run(id, input.orgId, input.ticketId ?? null, input.title, input.instruction, input.cadence, input.mode ?? "live", input.nextRunAt, input.createdBy, now());
+      .run(id, input.orgId, input.ticketId ?? null, input.templateId ?? null, input.title, input.instruction, input.cadence, input.mode ?? "live", input.nextRunAt, input.createdBy, now());
     return this.getSchedule(id)!;
   }
 

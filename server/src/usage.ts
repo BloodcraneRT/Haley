@@ -22,7 +22,8 @@ export function priceFor(profiles: Pick<ModelProfile, "provider" | "model" | "op
   const slash = served.indexOf("/");
   const provider = served.slice(0, slash);
   const model = served.slice(slash + 1);
-  const match = priced.find((p) => p.provider === provider && sameModel(p.model, model)) ?? priced.find((p) => sameModel(p.model, model));
+  const find = (candidates: typeof priced) => candidates.find((p) => p.model === model) ?? candidates.find((p) => sameModel(p.model, model));
+  const match = find(priced.filter((p) => p.provider === provider)) ?? find(priced);
   return match ? { input: match.options.inputUsdPerMTok!, output: match.options.outputUsdPerMTok! } : null;
 }
 
@@ -66,7 +67,7 @@ export function usageReport(store: Store, from: Date, to: Date) {
         unpricedTokens += row.input_tokens + row.output_tokens;
       }
     }
-    const report = clientReport(store, org, { days, minutesPerTicket: settings.minutesPerTicket, minutesPerAction: settings.minutesPerAction, to });
+    const report = clientReport(store, org, { days, minutesPerTicket: settings.minutesPerTicket, minutesPerAction: settings.minutesPerAction, from, to });
     return {
       orgId: org.id,
       name: org.name,

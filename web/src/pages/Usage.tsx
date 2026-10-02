@@ -98,7 +98,7 @@ export function UsagePage() {
 function UsageBody({ usage: u, refreshing }: { usage: UsageReport; refreshing: boolean }) {
   const t = u.totals;
   const markup = u.settings.aiMarkupPercent;
-  const active = u.clients.filter((c) => c.modelCalls > 0 || c.ticketsResolvedByHaley > 0 || c.recipeRuns > 0);
+  const active = u.clients.filter((c) => c.modelCalls > 0 || c.ticketsResolvedByHaley > 0 || c.recipeRuns > 0 || c.automaticChanges > 0);
   const confirmRate = t.ticketsResolvedByHaley ? (t.confirmedByRequester / t.ticketsResolvedByHaley) * 100 : null;
   return (
     <div className={`stack usage-body ${refreshing ? "is-refreshing" : ""}`} style={{ gap: 20 }}>
@@ -213,10 +213,10 @@ function Kpi({ icon, label, value, hint }: { icon: ReactNode; label: string; val
   );
 }
 
-const FIELDS: Array<{ key: keyof BillingSettings; label: string; help: string; min: number; max: number; step: number; suffix: string }> = [
-  { key: "aiMarkupPercent", label: "AI markup", help: "Added to AI cost in the Billable column, for passing it through to clients.", min: 0, max: 1000, step: 1, suffix: "%" },
-  { key: "minutesPerTicket", label: "Minutes per ticket", help: "Technician time a ticket Haley resolves alone would otherwise take.", min: 0, max: 600, step: 1, suffix: "min" },
-  { key: "minutesPerAction", label: "Minutes per change", help: "Technician time per change Haley makes without approval.", min: 0, max: 120, step: 1, suffix: "min" },
+const FIELDS: Array<{ key: keyof BillingSettings; label: string; help: string; min: number; max: number; step: number | "any"; suffix: string }> = [
+  { key: "aiMarkupPercent", label: "AI markup", help: "Added to AI cost in the Billable column, for passing it through to clients.", min: 0, max: 1000, step: "any", suffix: "%" },
+  { key: "minutesPerTicket", label: "Minutes per ticket", help: "Technician time a ticket Haley resolves alone would otherwise take.", min: 0, max: 600, step: "any", suffix: "min" },
+  { key: "minutesPerAction", label: "Minutes per change", help: "Technician time per change Haley makes without approval.", min: 0, max: 120, step: "any", suffix: "min" },
   { key: "autoCloseResolvedDays", label: "Auto-close after", help: "Close resolved tickets when the requester doesn't reply. 0 turns it off.", min: 0, max: 90, step: 1, suffix: "days" },
 ];
 

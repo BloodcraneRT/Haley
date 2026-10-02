@@ -96,7 +96,7 @@ export class AutotaskAdapter implements PsaAdapter {
     if (this.base) return this.base;
     let url = this.config.zoneUrl?.trim();
     if (!url) {
-      const res = await this.fetchImpl(`${ZONE_LOOKUP}?user=${encodeURIComponent(this.config.username.trim())}`, { method: "GET", headers: { accept: "application/json" } });
+      const res = await this.fetchImpl(`${ZONE_LOOKUP}?user=${encodeURIComponent(this.config.username.trim())}`, { method: "GET", headers: { accept: "application/json" }, redirect: "manual" });
       const data = (await res.json().catch(() => ({}))) as Json;
       if (!res.ok || !data.url) {
         throw new ConnectorError(`Autotask zone lookup failed (${res.status}): ${data.errors?.join?.("; ") ?? "no zone found for that username"}. Check the API username.`, res.status);
@@ -113,8 +113,14 @@ export class AutotaskAdapter implements PsaAdapter {
 
   private async call<T = Json>(method: string, pathOrUrl: string, body?: unknown): Promise<T> {
     const base = await this.zone();
-    const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${base}${pathOrUrl}`;
-    const res = await this.fetchImpl(url, {
+    const url = new URL(pathOrUrl.startsWith("http") ? pathOrUrl : `${base}${pathOrUrl}`);
+    const baseUrl = new URL(base);
+    const basePath = baseUrl.pathname.replace(/\/+$/, "");
+    // nextPageUrl comes from a response; it must never choose a new credential destination.
+    if (url.protocol !== "https:" || url.origin !== baseUrl.origin || url.username || url.password || !url.pathname.startsWith(`${basePath}/`)) {
+      throw new ConnectorError("Autotask request URL leaves the configured HTTPS API base URL.");
+    }
+    const res = await this.fetchImpl(url.toString(), {
       method,
       headers: {
         ApiIntegrationCode: this.config.integrationCode.trim(),
@@ -124,13 +130,14 @@ export class AutotaskAdapter implements PsaAdapter {
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: "manual",
     });
     const data = (await res.json().catch(() => ({}))) as Json;
     if (!res.ok) {
       if (res.status === 429) throw new ConnectorError("Autotask rate limit reached; the next sync will continue.", 429);
       const detail = Array.isArray(data.errors) && data.errors.length ? data.errors.join("; ") : (data.message ?? res.statusText);
       const hint = res.status === 401 ? " Check the API username, secret and integration code." : "";
-      const path = url.replace(base, "").split("?")[0];
+      const path = url.toString().replace(base, "").split("?")[0];
       throw new ConnectorError(`Autotask ${method} ${path} failed (${res.status}): ${detail}${hint}`, res.status);
     }
     return data as T;
@@ -143,7 +150,8 @@ export class AutotaskAdapter implements PsaAdapter {
     for (let page = 1; ; page++) {
       items.push(...((data.items ?? []) as Json[]));
       const next = data.pageDetails?.nextPageUrl;
-      if (!next || page >= MAX_PAGES) break;
+      if (!next) break;
+      if (page >= MAX_PAGES) throw new ConnectorError(`Autotask ${entity} query reached the page limit (${MAX_PAGES}); results are incomplete.`);
       data = await this.call<Json>("GET", next);
     }
     return items;

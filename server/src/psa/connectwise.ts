@@ -117,6 +117,7 @@ export class ConnectWiseAdapter implements PsaAdapter {
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
+      redirect: "manual",
     });
     const data = (await res.json().catch(() => ({}))) as Json;
     if (!res.ok) {
@@ -133,9 +134,11 @@ export class ConnectWiseAdapter implements PsaAdapter {
   private async pages<T = Json>(path: string): Promise<T[]> {
     const items: T[] = [];
     const sep = path.includes("?") ? "&" : "?";
-    for (let page = 1; page <= MAX_PAGES; page++) {
+    for (let page = 1; page <= MAX_PAGES + 1; page++) {
       const data = await this.call<T[]>("GET", `${path}${sep}pageSize=${PAGE_SIZE}&page=${page}`);
       const rows = Array.isArray(data) ? data : [];
+      // One empty probe page allows a collection of exactly MAX_PAGES full pages.
+      if (page > MAX_PAGES && rows.length) throw new ConnectorError(`ConnectWise ${path.split("?")[0]} reached the page limit (${MAX_PAGES}); results are incomplete.`);
       items.push(...rows);
       if (rows.length < PAGE_SIZE) break;
     }
