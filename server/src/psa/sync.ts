@@ -25,6 +25,9 @@ function coarse(status: TicketStatus | null): string {
   return "in_progress";
 }
 
+/** A PSA ticket that fails to import this many syncs in a row is set aside so newer tickets keep flowing. */
+export const MAX_PULL_ATTEMPTS = 3;
+
 const MIRRORED_KINDS = new Set<TicketEvent["kind"]>(["agent_note", "escalation", "action", "reply", "comment"]);
 
 function mirrorText(event: TicketEvent, ticket: Ticket, kind: PsaKind): string | null {
@@ -56,6 +59,8 @@ export class PsaSync {
   /** Comment ids Haley posted before the ticket link existed (the acknowledgement on import). */
   private readonly pendingSeen = new Map<string, string[]>();
   private readonly running = new Set<string>();
+  /** Consecutive failed imports per connection:external id. In memory: a restart gives each ticket fresh tries. */
+  private readonly pullFailures = new Map<string, number>();
 
   constructor(
     private readonly store: Store,
@@ -130,22 +135,36 @@ export class PsaSync {
     try {
       const adapter = this.adapterFor(connection);
       const tickets = await adapter.listUpdatedTickets(connection.cursor);
+      // Tickets arrive oldest first. The cursor moves up to the first ticket that failed, so the next sync retries
+      // it (and replays only what came after it). A ticket that keeps failing is set aside after a few tries.
       let cursor = connection.cursor;
-      let pullFailed = false;
+      let blocked = false;
       for (const external of tickets) {
+        const key = `${connection.id}:${external.id}`;
         try {
           await this.pull(connection, external, result);
+          this.pullFailures.delete(key);
         } catch (err) {
-          pullFailed = true;
-          result.errors.push(`Ticket ${external.number || external.id}: ${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : String(err);
+          const attempts = (this.pullFailures.get(key) ?? 0) + 1;
+          if (attempts >= MAX_PULL_ATTEMPTS) {
+            this.pullFailures.delete(key);
+            result.errors.push(`Ticket ${external.number || external.id} skipped after ${attempts} failed imports: ${message}`);
+            this.store.audit({ actor: connection.name, action: "psa.ticket_skipped", target: connectionId, detail: { externalId: external.id, number: external.number, error: message } });
+          } else {
+            this.pullFailures.set(key, attempts);
+            result.errors.push(`Ticket ${external.number || external.id}: ${message}`);
+            blocked = true;
+          }
         }
-        if (!cursor || external.updatedAt > cursor) cursor = external.updatedAt;
+        if (!blocked && (!cursor || external.updatedAt > cursor)) cursor = external.updatedAt;
       }
+      // Save import progress before pushing, so a failing push or export can't undo it.
+      this.store.updatePsaConnection(connectionId, { cursor });
       await this.push(connection, adapter, result);
       if (connection.options.exportTickets) await this.exportNew(connection, adapter, result);
       this.store.updatePsaConnection(connectionId, {
-        // Replay the batch on the next sync rather than skipping a failed ticket behind a newer update.
-        cursor: pullFailed ? connection.cursor : cursor,
+        cursor,
         lastSyncAt: startedAt,
         status: result.errors.length ? "error" : "connected",
         statusDetail: result.errors.length
@@ -282,26 +301,35 @@ export class PsaSync {
     for (const [customerId, orgId] of Object.entries(connection.customer_map)) if (!customerFor.has(orgId)) customerFor.set(orgId, customerId);
     for (const [orgId, customerId] of customerFor) {
       for (const ticket of this.store.listTicketsAwaitingPsaExport(connection, orgId)) {
-        const created = await adapter.createTicket({
-          customerId,
-          subject: `[Haley #${ticket.number}] ${ticket.title}`,
-          description: `${ticket.description || ticket.title}\n\nRequester: ${ticket.requester_name} <${ticket.requester_email}> via ${ticket.channel}. Haley is handling this ticket; updates are mirrored here.`,
-          requesterEmail: ticket.requester_email || null,
-          priority: ticket.priority,
-        });
-        this.store.createTicketLink({
-          ticketId: ticket.id,
-          connectionId: connection.id,
-          externalId: created.id,
-          externalNumber: created.number,
-          lastStatus: "new",
-        });
-        this.store.addTicketEvent(ticket.id, "field_change", connection.name, `Linked to ${connection.name} ticket #${created.number}.`, {
-          psa: connection.id,
-          externalId: created.id,
-        });
-        result.exported++;
+        // One ticket the PSA rejects mustn't hold up the others; it's retried on the next sync.
+        try {
+          await this.exportOne(connection, adapter, customerId, ticket);
+          result.exported++;
+        } catch (err) {
+          result.errors.push(`Exporting Haley #${ticket.number}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     }
+  }
+
+  private async exportOne(connection: PsaConnection, adapter: PsaAdapter, customerId: string, ticket: Ticket) {
+    const created = await adapter.createTicket({
+      customerId,
+      subject: `[Haley #${ticket.number}] ${ticket.title}`,
+      description: `${ticket.description || ticket.title}\n\nRequester: ${ticket.requester_name} <${ticket.requester_email}> via ${ticket.channel}. Haley is handling this ticket; updates are mirrored here.`,
+      requesterEmail: ticket.requester_email || null,
+      priority: ticket.priority,
+    });
+    this.store.createTicketLink({
+      ticketId: ticket.id,
+      connectionId: connection.id,
+      externalId: created.id,
+      externalNumber: created.number,
+      lastStatus: "new",
+    });
+    this.store.addTicketEvent(ticket.id, "field_change", connection.name, `Linked to ${connection.name} ticket #${created.number}.`, {
+      psa: connection.id,
+      externalId: created.id,
+    });
   }
 }

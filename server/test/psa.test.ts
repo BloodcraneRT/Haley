@@ -27,7 +27,8 @@ class FakePsa implements PsaAdapter {
     ];
   }
   async listUpdatedTickets(since: string | null) {
-    return [...this.tickets.values()].filter((t) => !since || t.updatedAt > since).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
+    // Copies, like a real API response: later writes to the PSA mustn't change a listing already returned.
+    return [...this.tickets.values()].filter((t) => !since || t.updatedAt > since).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)).map((t) => structuredClone(t));
   }
   async getTicket(id: string) {
     return this.tickets.get(id)!;
@@ -112,6 +113,53 @@ describe("PSA sync", () => {
       const second = await psa.sync(connection.id);
       expect(second.errors).toEqual([]);
       expect(store.findTicketLinkByExternal(connection.id, "failed")).not.toBeNull();
+    } finally { vi.restoreAllMocks(); await app.close(); }
+  });
+
+  it("moves the cursor up to a failing ticket and sets it aside after repeated failures", async () => {
+    const { app, fake, contoso, connection, psa, store } = await setup(new ScriptedLlm());
+    try {
+      store.updateOrg(contoso.id, { settings: { paused: true } });
+      const cursor = "2020-01-01T00:00:00.000Z";
+      store.updatePsaConnection(connection.id, { customerMap: { c1: contoso.id }, cursor, options: { exportTickets: false } });
+      fake.open("older", "c1", "Older", "Printer", "megan@contoso.example");
+      fake.open("broken", "c1", "Broken", "Bad data", "megan@contoso.example");
+      fake.open("newer", "c1", "Newer", "VPN", "megan@contoso.example");
+      const realCreate = store.createTicket.bind(store);
+      vi.spyOn(store, "createTicket").mockImplementation((input) => {
+        if (input.title === "Broken") throw new Error("Bad data");
+        return realCreate(input);
+      });
+      const olderAt = fake.tickets.get("older")!.updatedAt;
+      const newerAt = fake.tickets.get("newer")!.updatedAt;
+      const first = await psa.sync(connection.id);
+      expect(first.imported).toBe(2);
+      // Only the ticket before the failure is behind the cursor; the broken one and later ones are replayed.
+      expect(store.getPsaConnection(connection.id)?.cursor).toBe(olderAt);
+      expect((await psa.sync(connection.id)).errors).toEqual(["Ticket broken: Bad data"]);
+      const third = await psa.sync(connection.id);
+      expect(third.errors[0]).toMatch(/skipped after 3 failed imports/);
+      expect(store.getPsaConnection(connection.id)!.cursor! >= newerAt).toBe(true);
+      expect(store.listAudit().some((a) => a.action === "psa.ticket_skipped")).toBe(true);
+      expect((await psa.sync(connection.id)).errors).toEqual([]);
+    } finally { vi.restoreAllMocks(); await app.close(); }
+  });
+
+  it("keeps exporting other tickets when the PSA rejects one", async () => {
+    const { app, fake, contoso, connection, psa, store } = await setup(new ScriptedLlm());
+    try {
+      store.updateOrg(contoso.id, { settings: { paused: true } });
+      store.updatePsaConnection(connection.id, { customerMap: { c1: contoso.id }, options: { importTickets: false } });
+      store.createTicket({ orgId: contoso.id, title: "Rejected", requesterEmail: "megan@contoso.example" });
+      store.createTicket({ orgId: contoso.id, title: "Accepted", requesterEmail: "megan@contoso.example" });
+      const realCreate = fake.createTicket.bind(fake);
+      vi.spyOn(fake, "createTicket").mockImplementation(async (input) => {
+        if (input.subject.includes("Rejected")) throw new Error("Contact required");
+        return realCreate(input);
+      });
+      const result = await psa.sync(connection.id);
+      expect(result.errors.some((e) => e.includes("Contact required"))).toBe(true);
+      expect([...fake.tickets.values()].map((t) => t.subject).some((s) => s.includes("Accepted"))).toBe(true);
     } finally { vi.restoreAllMocks(); await app.close(); }
   });
 

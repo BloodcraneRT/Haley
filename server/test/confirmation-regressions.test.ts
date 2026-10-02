@@ -44,6 +44,26 @@ describe("requester confirmation evidence", () => {
     } finally { await app.close(); }
   });
 
+  it("matches quotes despite curly apostrophes, quote marks and trailing punctuation", async () => {
+    const { app, store, ticket, call } = await setup();
+    try {
+      store.setTicketStatus(ticket.id, "resolved", "haley");
+      store.addTicketEvent(ticket.id, "comment", "Megan", "Yes \u2014 that\u2019s working now\u2026 thanks!", { fromRequester: true });
+      await call('"Yes - that\'s working now."');
+      expect(store.getTicket(ticket.id)?.resolution_confirmed_at).not.toBeNull();
+    } finally { await app.close(); }
+  });
+
+  it("does not reuse a Haley resolution after a technician closed the ticket", async () => {
+    const { app, store, ticket, call } = await setup();
+    try {
+      store.setTicketStatus(ticket.id, "resolved", "haley");
+      store.setTicketStatus(ticket.id, "closed", "Jordan");
+      store.addTicketEvent(ticket.id, "comment", "Megan", "yes that worked, thanks", { fromRequester: true });
+      await expect(call("yes that worked, thanks")).rejects.toThrow(/resolve|Haley/i);
+    } finally { await app.close(); }
+  });
+
   it("clears current confirmation when a closed ticket is reopened", async () => {
     const { app, store, ticket, call } = await setup();
     try {
