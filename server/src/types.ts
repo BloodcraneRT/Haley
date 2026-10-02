@@ -1,6 +1,6 @@
 export type Autonomy = "read_only" | "supervised" | "autonomous" | "unattended";
 export const AUTONOMY_LEVELS: Autonomy[] = ["read_only", "supervised", "autonomous", "unattended"];
-export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code" | "ninjaone" | "itglue" | "hudu" | "rest";
+export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code" | "ninjaone" | "syncro_rmm" | "itglue" | "hudu" | "rest";
 
 /**
  * How strongly the requester's identity is established, weakest first.
@@ -24,7 +24,7 @@ export function effectiveAssurance(ticket: Pick<Ticket, "assurance" | "mfa_verif
 }
 
 /** Where a ticket came from; replies go back the same way. */
-export type TicketChannel = "portal" | "api" | "email" | "slack" | "teams" | "chat" | "syncro" | "dynamics" | "connectwise" | "autotask" | "halopsa";
+export type TicketChannel = "portal" | "api" | "monitoring" | "email" | "slack" | "teams" | "chat" | "syncro" | "dynamics" | "connectwise" | "autotask" | "halopsa";
 export type IntegrationMode = "live" | "sandbox";
 
 export type TicketStatus =

@@ -22,6 +22,7 @@ import { ChannelHub } from "./channels/hub.js";
 import { SlackChannel } from "./channels/slack.js";
 import { TeamsChannel } from "./channels/teams.js";
 import { clientReport } from "./report.js";
+import { SyncroAlertTickets } from "./monitoring/syncroAlerts.js";
 import { runCost, usageCsv, usageReport } from "./usage.js";
 import { PSA_PROVIDERS, buildPsaAdapter } from "./psa/registry.js";
 import "./psa/dynamics.js";
@@ -149,7 +150,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   const agent = new AgentService(store, llm ? () => llm : (orgId) => models.clientFor(orgId), config, connectorsFor, hub);
   hub.attach(agent);
   agent.recoverInterrupted();
-  const scheduler = new Scheduler(store, agent, psa);
+  const scheduler = new Scheduler(store, agent, psa, new SyncroAlertTickets(store, agent, fetchImpl));
 
   const withSla = (ticket: Ticket, org: Org | null | undefined) => ({ ...ticket, sla: org ? slaFor(ticket, org.settings.sla) : null });
 
@@ -368,7 +369,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     if (!org) throw notFound("Organization");
     const input = body(
       z.object({
-        provider: z.enum(["m365", "google", "slack", "sms_code", "duo", "okta", "ninjaone", "itglue", "hudu", "rest"]),
+        provider: z.enum(["m365", "google", "slack", "sms_code", "duo", "okta", "ninjaone", "syncro_rmm", "itglue", "hudu", "rest"]),
         mode: z.enum(["live", "sandbox"]).default("live"),
         label: z.string().trim().optional(),
         config: z.record(z.string(), z.string()).default({}),
@@ -800,8 +801,15 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       exportTickets: z.boolean(),
       mirrorNotes: z.boolean(),
       requesterAssurance: z.enum(["none", "email"]),
+      timeEntries: z.enum(["off", "actual", "estimate"]),
     })
     .partial();
+
+  /** Stamps when time entries were turned on, so earlier work isn't logged retroactively. */
+  const withTimeEntriesSince = <O extends { timeEntries?: string; timeEntriesSince?: string }>(next: O, previous?: { timeEntries?: string }): O =>
+    next.timeEntries && next.timeEntries !== "off" && (!previous?.timeEntries || previous.timeEntries === "off")
+      ? { ...next, timeEntriesSince: new Date().toISOString() }
+      : next;
 
   const testPsa = async (id: string) => {
     psa.invalidate(id);
@@ -828,13 +836,14 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     const info = PSA_PROVIDERS.find((p) => p.id === input.kind)!;
     const missing = info.fields.filter((f) => !f.optional && !input.config[f.key]?.trim()).map((f) => f.label);
     if (missing.length) throw new HttpError(400, `Missing: ${missing.join(", ")}`);
-    const connection = store.createPsaConnection({ kind: input.kind as PsaConnection["kind"], name: input.name || info.name, config: input.config, options: input.options });
+    const connection = store.createPsaConnection({ kind: input.kind as PsaConnection["kind"], name: input.name || info.name, config: input.config, options: withTimeEntriesSince(input.options) });
     store.audit({ actor: actor(req), action: "psa.connected", target: connection.id, detail: { kind: connection.kind } });
     return testPsa(connection.id);
   });
 
   app.patch<{ Params: { id: string } }>("/api/psa/:id", async (req) => {
-    if (!store.getPsaConnection(req.params.id)) throw notFound("PSA connection");
+    const current = store.getPsaConnection(req.params.id);
+    if (!current) throw notFound("PSA connection");
     const patch = body(
       z.object({
         name: z.string().trim().min(1).optional(),
@@ -846,7 +855,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     );
     // Blank secret fields in an edit form mean "keep the stored value".
     const config = patch.config ? Object.fromEntries(Object.entries(patch.config).filter(([, v]) => v.trim() !== "")) : undefined;
-    store.updatePsaConnection(req.params.id, { ...patch, config });
+    store.updatePsaConnection(req.params.id, { ...patch, config, options: patch.options ? withTimeEntriesSince(patch.options, current.options) : undefined });
     psa.invalidate(req.params.id);
     store.audit({ actor: actor(req), action: "psa.updated", target: req.params.id, detail: { fields: Object.keys(patch) } });
     return patch.config ? testPsa(req.params.id) : store.getPsaConnection(req.params.id);

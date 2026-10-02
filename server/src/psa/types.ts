@@ -57,6 +57,14 @@ export interface PsaAdapter {
     requesterEmail: string | null;
     priority: TicketPriority;
   }): Promise<{ id: string; number: string }>;
+  /** Adds a time entry for Haley's work to the PSA ticket and returns its id. PSAs without it don't log time. */
+  logTime?(ticketId: string, entry: TimeEntry): Promise<string>;
+}
+
+export interface TimeEntry {
+  startedAt: string;
+  minutes: number;
+  notes: string;
 }
 
 export interface PsaOptions {
@@ -68,6 +76,13 @@ export interface PsaOptions {
   mirrorNotes: boolean;
   /** Identity level given to requesters of imported tickets ("none" unless the PSA authenticates them). */
   requesterAssurance: "none" | "email";
+  /**
+   * Time entries for Haley's work on synced tickets: "actual" logs each run's working time, "estimate" logs the
+   * workspace's minutes-per-ticket once when Haley resolves a ticket. Only PSAs that support it.
+   */
+  timeEntries: "off" | "actual" | "estimate";
+  /** When time entries were turned on; earlier work isn't logged retroactively. Set by the server. */
+  timeEntriesSince?: string;
 }
 
 export const DEFAULT_PSA_OPTIONS: PsaOptions = {
@@ -75,6 +90,7 @@ export const DEFAULT_PSA_OPTIONS: PsaOptions = {
   exportTickets: true,
   mirrorNotes: true,
   requesterAssurance: "none",
+  timeEntries: "off",
 };
 
 export interface PsaConnection {
@@ -101,6 +117,8 @@ export interface TicketLink {
   seen_comment_ids: string[];
   /** Haley timeline events already mirrored upstream. */
   pushed_event_ids: string[];
+  /** Work already logged as PSA time: "run:<id>" per run, or "estimate" once per ticket. */
+  logged_time: string[];
   last_status: string;
   created_at: string;
 }

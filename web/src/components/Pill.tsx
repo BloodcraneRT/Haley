@@ -1,4 +1,4 @@
-import { ClipboardList, Code, Hash, Headset, Mail, MessageCircle, Monitor, RefreshCw, Users } from "lucide-react";
+import { ClipboardList, Code, Hash, Headset, Mail, MessageCircle, Monitor, RefreshCw, Siren, Users } from "lucide-react";
 import type { ReactNode } from "react";
 import { useNow } from "../hooks/useNow";
 import type {
@@ -138,6 +138,7 @@ export function Priority({ priority }: { priority: TicketPriority }) {
 const CHANNEL_ICONS: Record<TicketChannel, typeof Mail> = {
   portal: Monitor,
   api: Code,
+  monitoring: Siren,
   email: Mail,
   slack: Hash,
   teams: Users,

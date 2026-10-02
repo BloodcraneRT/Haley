@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ExternalComment, ExternalTicket, PsaAdapter, PsaConnection } from "../src/psa/types.js";
+import { workingMinutes } from "../src/psa/sync.js";
+import type { ExternalComment, ExternalTicket, PsaAdapter, PsaConnection, TimeEntry } from "../src/psa/types.js";
 import type { TicketStatus } from "../src/types.js";
 import { DynamicsAdapter } from "../src/psa/dynamics.js";
 import { SyncroAdapter } from "../src/psa/syncro.js";
@@ -9,6 +10,7 @@ import { fakeFetch, makeApp, ScriptedLlm, text, toolUse, turn } from "./helpers.
 class FakePsa implements PsaAdapter {
   readonly kind = "syncro" as const;
   tickets = new Map<string, ExternalTicket>();
+  timeEntries: Array<TimeEntry & { ticketId: string }> = [];
   private seq = 100;
   private clock = Date.parse("2026-09-27T10:00:00Z");
 
@@ -50,6 +52,11 @@ class FakePsa implements PsaAdapter {
     const id = `t${++this.seq}`;
     this.open(id, input.customerId, input.subject, input.description, input.requesterEmail ?? "");
     return { id, number: String(5000 + this.seq) };
+  }
+
+  async logTime(ticketId: string, entry: TimeEntry) {
+    this.timeEntries.push({ ticketId, ...entry });
+    return `te${++this.seq}`;
   }
 
   open(id: string, customerId: string, subject: string, description: string, email: string) {
@@ -296,6 +303,59 @@ describe("PSA sync", () => {
   });
 });
 
+describe("Haley's time on PSA tickets", () => {
+  it("counts working time between model calls, not waits for approval or replies", () => {
+    expect(workingMinutes([])).toBe(0);
+    expect(workingMinutes(["2026-10-01T10:00:00Z"])).toBe(1);
+    expect(workingMinutes(["2026-10-01T10:00:00Z", "2026-10-01T10:02:30Z"])).toBe(4);
+    // A two-hour approval wait counts as one minute.
+    expect(workingMinutes(["2026-10-01T10:00:00Z", "2026-10-01T10:01:00Z", "2026-10-01T12:01:00Z"])).toBe(3);
+  });
+
+  it("logs each completed run once when set to actual time, and nothing before it was turned on", async () => {
+    const llm = new ScriptedLlm(turn(text("Checked Outlook.")), turn(text("Fixed the profile.")));
+    const { app, fake, contoso, connection, psa, store, agent } = await setup(llm);
+    try {
+      store.updatePsaConnection(connection.id, { customerMap: { c1: contoso.id }, options: { exportTickets: false } });
+      fake.open("t1", "c1", "Outlook slow", "Outlook is slow", "megan.bowen@contoso.example");
+      await psa.sync(connection.id);
+      const ticket = store.listTickets({ orgId: contoso.id }).find((t) => t.title === "Outlook slow")!;
+      const before = store.listRuns({ ticketId: ticket.id })[0];
+      await agent.settled(before.id);
+      // Turned on after the first run finished: that run isn't logged retroactively.
+      await new Promise((r) => setTimeout(r, 5));
+      expect((await app.inject({ method: "PATCH", url: `/api/psa/${connection.id}`, payload: { options: { timeEntries: "actual" } } })).json().options).toMatchObject({ timeEntries: "actual", timeEntriesSince: expect.any(String) });
+      await psa.sync(connection.id);
+      expect(fake.timeEntries).toEqual([]);
+
+      const next = agent.startTicketRun(ticket.id, "tech");
+      await agent.settled(next.id);
+      expect((await psa.sync(connection.id)).timeLogged).toBe(1);
+      expect(fake.timeEntries).toEqual([expect.objectContaining({ ticketId: "t1", minutes: 1, notes: expect.stringContaining("Fixed the profile.") })]);
+      // Logged once.
+      expect((await psa.sync(connection.id)).timeLogged).toBe(0);
+      expect(fake.timeEntries).toHaveLength(1);
+    } finally { await app.close(); }
+  });
+
+  it("logs the workspace estimate once when Haley resolves the ticket", async () => {
+    const llm = new ScriptedLlm(turn(toolUse("update_ticket", { status: "resolved" })), turn(text("Resolved.")));
+    const { app, fake, contoso, connection, psa, store, agent } = await setup(llm);
+    try {
+      store.setBillingSettings({ minutesPerTicket: 15 });
+      store.updatePsaConnection(connection.id, { customerMap: { c1: contoso.id }, options: { exportTickets: false, timeEntries: "estimate", timeEntriesSince: "2000-01-01T00:00:00.000Z" } });
+      fake.open("t2", "c1", "Printer", "Printer offline", "megan.bowen@contoso.example");
+      await psa.sync(connection.id);
+      const ticket = store.listTickets({ orgId: contoso.id }).find((t) => t.title === "Printer")!;
+      await agent.settled(store.listRuns({ ticketId: ticket.id })[0].id);
+      expect((await psa.sync(connection.id)).timeLogged).toBe(1);
+      expect(fake.timeEntries).toEqual([expect.objectContaining({ ticketId: "t2", minutes: 15, notes: expect.stringContaining("Resolved by Haley") })]);
+      await psa.sync(connection.id);
+      expect(fake.timeEntries).toHaveLength(1);
+    } finally { await app.close(); }
+  });
+});
+
 describe("PSAs that don't notify customers", () => {
   it("records the reply on the PSA ticket and also emails the requester", async () => {
     const fake = Object.assign(new FakePsa(), { notifiesCustomer: false });
@@ -338,6 +398,20 @@ describe("SyncroMSP adapter", () => {
     ]);
     return { adapter: new SyncroAdapter({ subdomain: "acme-msp", apiKey: "tok" }, net.impl, () => Date.parse("2026-09-27T12:00:00Z")), net, posted };
   };
+
+  it("adds a recorded timer entry for Haley's time", async () => {
+    const net = fakeFetch([[/\/tickets\/55\/timer_entry$/, () => ({ id: 901, billable: false })]]);
+    const adapter = new SyncroAdapter({ subdomain: "acme-msp", apiKey: "tok", laborProductId: "321" }, net.impl);
+    expect(await adapter.logTime("55", { startedAt: "2026-10-01T10:00:00.000Z", minutes: 12, notes: "Haley worked this" })).toBe("901");
+    expect(net.calls[0].method).toBe("POST");
+    expect(net.calls[0].json()).toEqual({
+      start_at: "2026-10-01T10:00:00.000Z",
+      end_at: "2026-10-01T10:12:00.000Z",
+      duration_minutes: 12,
+      notes: "Haley worked this",
+      product_id: 321,
+    });
+  });
 
   it("pages customers, derives business domains, and skips disabled ones", async () => {
     const { adapter, net } = syncro();

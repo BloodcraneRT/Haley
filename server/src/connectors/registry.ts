@@ -12,6 +12,8 @@ import { DuoVerifier } from "./verification/duo.js";
 import { OktaVerifier } from "./verification/okta.js";
 import { SmsCodeVerifier, type PhoneLookup } from "./verification/sms.js";
 import { ninjaHost, NinjaOneApi } from "./ninjaone/api.js";
+import { SyncroRmmApi, syncroSubdomain } from "./syncro/api.js";
+import { parseAllowedScripts, syncroRmmTools } from "./syncro/tools.js";
 import { ninjaOneTools } from "./ninjaone/tools.js";
 import { ItGlueApi, itglueHost, itGlueTools } from "./itglue/tools.js";
 import { HuduApi, huduBase, huduTools } from "./hudu/tools.js";
@@ -171,6 +173,41 @@ export const PROVIDERS: ProviderInfo[] = [
     kind: "directory",
   },
   {
+    id: "syncro_rmm",
+    name: "SyncroMSP RMM",
+    description:
+      "This client's devices in SyncroMSP: inventory, Syncro's health flags, missing and failed patches, installed software and active alerts, plus running scripts you allow, and muting or clearing alerts. Can also open a Haley ticket for each new alert. Scoped to one Syncro customer.",
+    fields: [
+      { key: "subdomain", label: "Syncro subdomain", placeholder: "yourmsp (from yourmsp.syncromsp.com)" },
+      { key: "apiKey", label: "API token", secret: true, help: "Can be the same token as your Syncro PSA connection if it has the permissions below." },
+      { key: "customerId", label: "Syncro customer ID", placeholder: "1234567", help: "The number in the customer's URL in Syncro (…/customers/1234567)." },
+      {
+        key: "scripts",
+        label: "Scripts Haley may run",
+        optional: true,
+        multiline: true,
+        placeholder: "40112: Clear print spooler\n40113: Clean temp files",
+        help: "One per line as <script id>: <name>. Syncro's API can't list scripts, so Haley can only run the ones you list here. Find the id in the script's URL.",
+      },
+      {
+        key: "alertTickets",
+        label: "Open a ticket for each new alert",
+        optional: true,
+        placeholder: "false",
+        help: "\"true\" makes Haley open and work a ticket for each new Syncro alert on this client. Leave it off if Syncro's alert profiles already create tickets.",
+      },
+    ],
+    setupSteps: [
+      "In SyncroMSP go to your profile → API Tokens → New Token (custom permissions).",
+      "Grant: Assets (list/search, view details), Customers (view detail, for contacts), RMM Alerts (list, delete, and mute), and Scripts - Execute if Haley should run scripts.",
+      "Copy the Syncro customer ID from the customer's URL, and list the ids of scripts Haley may run (from each script's URL).",
+      "One token can serve every client; Haley only reads and acts on assets and alerts of the customer you enter here.",
+    ],
+    capabilities: ["Device inventory & health flags", "Missing & failed patches", "Installed software", "Active alerts (mute, clear)", "Run allowed scripts", "Optional ticket per new alert"],
+    supportsSandbox: false,
+    kind: "directory",
+  },
+  {
     id: "itglue",
     name: "IT Glue",
     description: "Read-only access to this client's IT Glue documents and configurations, so Haley follows your documented procedures. Passwords are never read.",
@@ -238,6 +275,11 @@ export function validateProviderConfig(provider: string, config: Record<string, 
     if (provider === "ninjaone") {
       ninjaHost(config.region);
       if (!/^\d+$/.test(config.organizationId?.trim() ?? "")) return "NinjaOne organization ID must be a number.";
+    } else if (provider === "syncro_rmm") {
+      syncroSubdomain(config.subdomain);
+      if (!/^\d+$/.test(config.customerId?.trim() ?? "")) return "Syncro customer ID must be a number.";
+      parseAllowedScripts(config.scripts);
+      if (config.alertTickets && !/^(true|false)$/i.test(config.alertTickets.trim())) return "Open a ticket for each new alert must be true or false.";
     } else if (provider === "itglue") {
       itglueHost(config.region);
       if (!/^\d+$/.test(config.organizationId?.trim() ?? "")) return "IT Glue organization ID must be a number.";
@@ -440,6 +482,25 @@ export function buildConnector(
         const devices = await api.organizationDevices(orgId);
         const offline = devices.filter((d) => d.offline).length;
         return `Connected to ${api.host}; organization "${org.name}" has ${devices.length} devices (${offline} offline).`;
+      },
+    };
+  }
+
+  if (integration.provider === "syncro_rmm") {
+    required(config, ["subdomain", "apiKey", "customerId"]);
+    const customerId = Number(config.customerId.trim());
+    if (!Number.isInteger(customerId) || customerId <= 0) throw new ConnectorError("Syncro customer ID must be a number.");
+    const api = new SyncroRmmApi({ subdomain: config.subdomain, apiKey: config.apiKey.trim() }, fetchImpl);
+    const scripts = parseAllowedScripts(config.scripts);
+    return {
+      integrationId: integration.id,
+      provider: "syncro_rmm",
+      label: integration.label,
+      tools: syncroRmmTools(api, customerId, scripts),
+      test: async () => {
+        const assets = await api.customerAssets(customerId);
+        const flagged = assets.filter((a) => Object.values(a.rmm_store?.triggers ?? {}).some((v) => String(v) === "true")).length;
+        return `Connected to ${api.base.replace("/api/v1", "")}; customer ${customerId} has ${assets.length} assets (${flagged} with health flags). ${scripts.length} script${scripts.length === 1 ? "" : "s"} allowed.`;
       },
     };
   }

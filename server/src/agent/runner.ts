@@ -187,6 +187,8 @@ export class AgentService {
   private requesterFor(run: Run, org: Org): Requester {
     const ticket = run.ticket_id ? this.store.getTicket(run.ticket_id) : null;
     if (!ticket) return { email: null, assurance: "technician", authorized: true };
+    // Only Haley's alert intake creates monitoring tickets (no channel or API lets a sender choose it).
+    if (ticket.channel === "monitoring") return { email: null, assurance: "none", authorized: false, monitoring: true };
     const email = ticket.requester_email.toLowerCase() || null;
     const listed = Boolean(email) && org.settings.authorizedRequesters.some((a) => a.toLowerCase() === email);
     return { email, assurance: effectiveAssurance(ticket), authorized: ticket.assurance === "technician" || listed };

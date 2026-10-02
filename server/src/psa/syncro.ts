@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -45,6 +45,8 @@ export interface SyncroConfig {
   apiKey: string;
   /** Problem type for tickets Haley creates; must be one the account allows. */
   problemType?: string;
+  /** Labor product for Haley's time entries; Syncro's default when unset. */
+  laborProductId?: string;
 }
 
 /** SyncroMSP REST API v1 (https://api-docs.syncromsp.com). 180 requests/minute per IP. */
@@ -175,6 +177,20 @@ export class SyncroAdapter implements PsaAdapter {
     await this.call("PUT", `/tickets/${ticketId}`, { status: toSyncroStatus(status) });
   }
 
+  /** POST /tickets/{id}/timer_entry: a recorded (not yet charged) timer entry; technicians decide what to bill. */
+  async logTime(ticketId: string, entry: TimeEntry): Promise<string> {
+    const start = new Date(entry.startedAt);
+    const productId = this.config.laborProductId?.trim();
+    const data = await this.call<Json>("POST", `/tickets/${ticketId}/timer_entry`, {
+      start_at: start.toISOString(),
+      end_at: new Date(start.getTime() + entry.minutes * 60_000).toISOString(),
+      duration_minutes: entry.minutes,
+      notes: entry.notes,
+      ...(productId && /^\d+$/.test(productId) ? { product_id: Number(productId) } : {}),
+    });
+    return String(data.id ?? data.timer_entry?.id ?? "");
+  }
+
   async createTicket(input: { customerId: string; subject: string; description: string; requesterEmail: string | null; priority: TicketPriority }) {
     let contactId: number | undefined;
     if (input.requesterEmail) {
@@ -195,5 +211,5 @@ export class SyncroAdapter implements PsaAdapter {
 }
 
 registerPsaFactory("syncro", (_connection, config, fetchImpl) =>
-  new SyncroAdapter({ subdomain: config.subdomain, apiKey: config.apiKey, problemType: config.problemType }, fetchImpl),
+  new SyncroAdapter({ subdomain: config.subdomain, apiKey: config.apiKey, problemType: config.problemType, laborProductId: config.laborProductId }, fetchImpl),
 );

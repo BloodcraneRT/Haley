@@ -178,6 +178,7 @@ export const PSA_NAMES: Record<string, string> = {
 export const CHANNEL_META: Record<TicketChannel, { label: string; help: string }> = {
   portal: { label: "Portal", help: "Entered in the Haley dashboard by a technician" },
   api: { label: "API", help: "Submitted through the API (PSA or integration)" },
+  monitoring: { label: "Monitoring alert", help: "Opened automatically from an RMM alert (Syncro); there's no end user to reply to" },
   email: { label: "Email", help: "Arrived by email" },
   slack: { label: "Slack", help: "Direct message or @mention in Slack" },
   teams: { label: "Teams", help: "Message to the Haley bot in Microsoft Teams" },

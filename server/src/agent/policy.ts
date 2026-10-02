@@ -37,6 +37,8 @@ export interface Requester {
   assurance: Assurance;
   /** Allowed to request changes to other people's accounts (listed approvers, technicians). */
   authorized: boolean;
+  /** The ticket came from a monitoring alert, not a person: there's no identity to verify or account to act for. */
+  monitoring?: boolean;
 }
 
 export interface PolicyInput {
@@ -91,6 +93,12 @@ export function decide(input: PolicyInput): Decision {
   // unattended
   if (input.changesLastHour >= input.maxChangesPerHour) {
     return { outcome: "approve", code: "rate_limit", reason: `Hourly limit of ${input.maxChangesPerHour} automatic changes reached.` };
+  }
+  if (requester.monitoring) {
+    // No person asked, so self-service doesn't apply: routine fixes run as in autonomous mode, the rest waits.
+    if (risk === "destructive") return { outcome: "approve", code: "sensitive", reason: "Security-sensitive change on a monitoring alert." };
+    if (input.grantsAccess) return { outcome: "approve", code: "access_grant", reason: "Access grants need a person to ask for them." };
+    return run;
   }
   if (!atLeast(requester.assurance, "email")) {
     return { outcome: "approve", code: "unverified", reason: "The requester's identity isn't verified by the channel they used." };

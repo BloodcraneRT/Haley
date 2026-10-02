@@ -49,6 +49,10 @@ These rules hold in every mode:
 - **Email alone never authorizes a security-sensitive change**, even from an authorized approver.
 - **Volume limits**: in unattended mode, at most N automatic changes per client per hour (default 20) and M security-sensitive self-service changes per person per day (default 3). Past either, requests fall back to approval.
 - **Kill switch**: pausing Haley for a client stops new runs, stops in-flight runs before their next step, and routes every new message to technicians.
+- **Monitoring-alert tickets** have no requester, so there's no identity to verify and no "own account" to act on.
+  - Only Haley's Syncro alert intake creates them. It's opt-in per client, and no channel or API call can mark a ticket as one.
+  - In Unattended mode they're treated like Autonomous: routine (write) changes such as an allowed script or clearing the alert run within the hourly limit, while security-sensitive changes and access grants wait for a technician.
+  - The other modes apply as usual.
 
 Policy and requester authority are checked again after asynchronous directory lookups for each new tool call. Pausing also stops a newly returned batch of tool calls and prevents approved actions from executing while the client is paused.
 
@@ -109,6 +113,10 @@ Ticket text, emails and chat messages come from end users. Haley treats them as 
 - Customer changes are gated by the policy above, whatever the model has been talked into.
 - Credentials never enter the model's context.
 - Tools only reach the ticket's own client.
+- RMM alert text comes from the monitored machine, so it's handled like ticket text.
+  - Syncro scripts are limited to a per-client allowlist the MSP enters.
+  - Scripts whose names suggest removing or disabling something always wait for a technician.
+  - Alert intake opens at most 5 tickets per check and 20 per client per hour.
 - Follow-ups Haley schedules for herself run with the original requester's authority, not a technician's.
 - A reply only continues a ticket when it comes from the same requester with at least the original channel's identity assurance. An unverified message cannot reuse an earlier MFA step-up. Other messages open a separate ticket; unmatched PSA comments stay on the technician timeline and are excluded from Haley's context.
 - Ticket runs can read shared knowledge articles but can only create or update articles for their own client. Global procedures can be authored through technician tasks.

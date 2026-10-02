@@ -126,6 +126,15 @@ A tool can return `new SensitiveResult(visible, secrets, owners?)`. `owners` nam
 
 Ticket text comes from end users. The system prompt tells the model to treat it as data, and the real defenses are structural: customer changes are gated by policy and approvals regardless of what the model is convinced of, credentials never enter the model's context, and tools are scoped to the ticket's own organization.
 
+## Monitoring alerts
+
+`monitoring/syncroAlerts.ts` runs on the scheduler tick for each `syncro_rmm` integration with `alertTickets` turned on, at most every two minutes per client.
+- **Starting point:** the first check only records a cursor, so existing alerts aren't ticketed.
+- **New alerts:** after that, each new active alert for the client's Syncro customer opens a ticket on the `monitoring` channel and starts a run.
+- **Skipped alerts:** alerts Syncro already ticketed are skipped (the PSA sync imports those). An alert that fires again while its ticket is open is noted on that ticket instead of opening another.
+- **Limits:** at most 5 tickets per check and 20 per client per hour; the rest wait for later checks.
+- **Policy:** the runner gives monitoring tickets a requester flagged `monitoring`, so in Unattended mode routine fixes run as in Autonomous mode (see [TRUST_MODEL.md](TRUST_MODEL.md)).
+
 ## Adding a connector
 
 1. Define a normalized API interface for the platform (see `connectors/m365/api.ts`).
@@ -136,7 +145,7 @@ Ticket text comes from end users. The system prompt tells the model to treat it 
 
 The dashboard renders the connect form from `ProviderInfo`, so no UI work is needed.
 
-Connectors that call an MSP-configured host or tenant (NinjaOne, IT Glue, Hudu, generic REST) share `connectors/http.ts`: base URLs must be https with a public hostname (no IP literals, localhost or internal names; nothing is resolved, so DNS rebinding isn't covered), requests use `redirect: "manual"` and a 20-second timeout, and `stripSecrets()` drops password/secret/token/OTP-like fields from documentation results. Each connector is scoped to one client-side tenant (NinjaOne organization, IT Glue organization, Hudu company) and checks that id on every item it returns, so a tool can't read or act on another client's records even with a guessed id. The generic REST connector exposes `api_<name>_get` (read) and, only with `allowWrites`, `api_<name>_write` (write) and `api_<name>_delete` (destructive); the auth value is scrubbed from every response.
+Connectors that call an MSP-configured host or tenant (NinjaOne, SyncroMSP RMM, IT Glue, Hudu, generic REST) share `connectors/http.ts`: base URLs must be https with a public hostname (no IP literals, localhost or internal names; nothing is resolved, so DNS rebinding isn't covered), requests use `redirect: "manual"` and a 20-second timeout, and `stripSecrets()` drops password/secret/token/OTP-like fields from documentation results. Each connector is scoped to one client-side tenant (NinjaOne organization, Syncro customer, IT Glue organization, Hudu company) and checks that id on every item it returns, so a tool can't read or act on another client's records even with a guessed id. The generic REST connector exposes `api_<name>_get` (read) and, only with `allowWrites`, `api_<name>_write` (write) and `api_<name>_delete` (destructive); the auth value is scrubbed from every response.
 
 ## Data model
 
