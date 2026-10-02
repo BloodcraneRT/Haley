@@ -324,9 +324,12 @@ export class PsaSync {
     const logged = [...link.logged_time];
     const record = async (key: string, startedAt: string, minutes: number, notes: string) => {
       try {
-        await adapter.logTime!(link.external_id, { startedAt, minutes, notes });
+        const entryId = await adapter.logTime!(link.external_id, { startedAt, minutes, notes });
         logged.push(key);
-        this.store.updateTicketLink(ticket.id, connection.id, { loggedTime: logged });
+        // Some PSAs record time as a ticket note/action (HaloPSA): it mustn't come back as a technician comment.
+        const current = this.store.getTicketLink(ticket.id, connection.id);
+        const seen = entryId && current && !current.seen_comment_ids.includes(entryId) ? [...current.seen_comment_ids, entryId] : undefined;
+        this.store.updateTicketLink(ticket.id, connection.id, { loggedTime: logged, ...(seen ? { seenCommentIds: seen } : {}) });
         result.timeLogged++;
       } catch (err) {
         // Retried on the next sync; a missing permission shows on the connection's status.

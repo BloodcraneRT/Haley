@@ -54,9 +54,11 @@ class FakePsa implements PsaAdapter {
     return { id, number: String(5000 + this.seq) };
   }
 
+  lastTimeEntryId = "";
   async logTime(ticketId: string, entry: TimeEntry) {
     this.timeEntries.push({ ticketId, ...entry });
-    return `te${++this.seq}`;
+    this.lastTimeEntryId = `te${++this.seq}`;
+    return this.lastTimeEntryId;
   }
 
   open(id: string, customerId: string, subject: string, description: string, email: string) {
@@ -332,6 +334,8 @@ describe("Haley's time on PSA tickets", () => {
       await agent.settled(next.id);
       expect((await psa.sync(connection.id)).timeLogged).toBe(1);
       expect(fake.timeEntries).toEqual([expect.objectContaining({ ticketId: "t1", minutes: 1, notes: expect.stringContaining("Fixed the profile.") })]);
+      // PSAs that record time as a ticket action (HaloPSA) return its id; it's never imported back as a comment.
+      expect(store.getTicketLink(ticket.id, connection.id)!.seen_comment_ids).toContain(fake.lastTimeEntryId);
       // Logged once.
       expect((await psa.sync(connection.id)).timeLogged).toBe(0);
       expect(fake.timeEntries).toHaveLength(1);
