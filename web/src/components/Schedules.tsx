@@ -295,7 +295,7 @@ export function NewScheduleModal({
   onCreated: (s: Schedule) => void;
 }) {
   const { toast, refreshStats } = useApp();
-  const templates = usePoll(() => (open ? api.templates() : Promise.resolve(undefined)), [open]);
+  const templates = usePoll(async () => (open ? { orgId, recipes: await api.templates(orgId) } : undefined), [open, orgId]);
   const [templateId, setTemplateId] = useState("");
   const [title, setTitle] = useState("");
   const [instruction, setInstruction] = useState("");
@@ -314,11 +314,16 @@ export function NewScheduleModal({
     setStartAt(defaultStartLocal());
     setMode("live");
     setError(null);
-  }, [open]);
+  }, [open, orgId]);
+
+  const availabilityReady = templates.data?.orgId === orgId && !templates.error;
+  const recipes = availabilityReady ? templates.data?.recipes : undefined;
+  const recipe = recipes?.find((t) => t.id === templateId);
+  const unsupported = Boolean(templateId) && (!availabilityReady || !recipe?.available);
 
   const pickTemplate = (id: string) => {
     setTemplateId(id);
-    const t = templates.data?.find((x) => x.id === id);
+    const t = recipes?.find((x) => x.id === id);
     if (t) {
       setTitle(t.name);
       setInstruction(t.instruction);
@@ -327,6 +332,8 @@ export function NewScheduleModal({
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy) return;
+    if (unsupported) return setError(recipe ? `This client needs ${recipe.missing.join(", and ")} for this recipe.` : "Wait for this client's recipe availability to load, or write your own instruction.");
     if (!title.trim()) return setError("Give the schedule a title.");
     if (!instruction.trim()) return setError("Tell Haley what to do each time.");
     const iso = localInputToIso(startAt);
@@ -334,7 +341,7 @@ export function NewScheduleModal({
     setBusy(true);
     setError(null);
     try {
-      const schedule = await api.createSchedule({ orgId, title: title.trim(), instruction: instruction.trim(), cadence, mode, startAt: iso });
+      const schedule = await api.createSchedule({ orgId, title: title.trim(), instruction: instruction.trim(), cadence, mode, startAt: iso, ...(recipe ? { templateId: recipe.id } : {}) });
       toast(`Scheduled "${schedule.title}" (${CADENCE_META[cadence].every.toLowerCase()}).`);
       refreshStats();
       onCreated(schedule);
@@ -356,7 +363,7 @@ export function NewScheduleModal({
           <button className="btn" type="button" onClick={onClose}>
             Cancel
           </button>
-          <button className="btn btn-primary" type="submit" form="new-schedule-form" disabled={busy}>
+          <button className="btn btn-primary" type="submit" form="new-schedule-form" disabled={busy || unsupported}>
             {busy ? <Spinner /> : <CalendarClock className="icon-sm" aria-hidden="true" />} Create schedule
           </button>
         </>
@@ -366,14 +373,15 @@ export function NewScheduleModal({
         <div className="form-grid">
           <div className="field span-2">
             <label htmlFor="ns-template">Start from a template</label>
-            <select id="ns-template" className="select" value={templateId} onChange={(e) => pickTemplate(e.target.value)}>
-              <option value="">{templates.data ? "None: write my own" : "Loading templates…"}</option>
-              {templates.data?.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}: {t.description}
+            <select id="ns-template" className="select" value={templateId} onChange={(e) => pickTemplate(e.target.value)} disabled={!availabilityReady}>
+              <option value="">{recipes ? "None: write my own" : "Loading templates…"}</option>
+              {recipes?.map((t) => (
+                <option key={t.id} value={t.id} disabled={!t.available}>
+                  {t.name}: {t.description}{!t.available ? ` (Needs ${t.missing.join(", and ")})` : ""}
                 </option>
               ))}
             </select>
+            {templates.error && <ErrorBanner error={templates.error} onRetry={templates.reload} />}
           </div>
           <div className="field span-2">
             <label htmlFor="ns-title">Title</label>

@@ -107,6 +107,11 @@ export class Scheduler {
         }
         runId = this.agent.startTicketRun(schedule.ticket_id, `schedule:${schedule.created_by}`, schedule.mode, schedule.instruction).id;
       } else {
+        const previous = schedule.last_run_id ? this.store.getRun(schedule.last_run_id) : null;
+        if (previous && ["queued", "running", "awaiting_approval"].includes(previous.status)) {
+          result.skipped.push({ scheduleId: schedule.id, reason: "previous task run busy; retrying" });
+          return;
+        }
         runId = this.agent.startTaskRun(schedule.org_id, schedule.title, schedule.instruction, `schedule:${schedule.created_by}`, schedule.mode, schedule.template_id).id;
       }
       this.store.updateSchedule(schedule.id, { last_run_at: nowIso, last_run_id: runId });
@@ -120,14 +125,15 @@ export class Scheduler {
 
   private sweepSla(nowMs: number, result: TickResult) {
     const orgs = new Map(this.store.listOrgs().map((o) => [o.id, o]));
-    for (const ticket of this.store.listTickets({ status: "open", limit: 10_000 })) {
+    for (const ticket of this.store.openTicketsForSla()) {
       if (ticket.sla_escalated || ticket.status === "escalated" || ticket.assignee !== "haley") continue;
       const org = orgs.get(ticket.org_id);
-      const active = this.agent.activeRun(ticket.id);
-      // A run waiting on approval still counts as stuck; one that's actively working gets to finish.
-      if (!org || (active && active.status !== "awaiting_approval")) continue;
+      if (!org) continue;
       const sla = slaFor(ticket, org.settings.sla, nowMs);
       if (sla.resolution !== "breached") continue;
+      const active = this.agent.activeRun(ticket.id);
+      // A run waiting on approval still counts as stuck; one that's actively working gets to finish.
+      if (active && active.status !== "awaiting_approval") continue;
       this.store.markSlaEscalated(ticket.id);
       this.store.updateTicket(ticket.id, { status: "escalated", assignee: "unassigned" }, "scheduler");
       this.store.addTicketEvent(
