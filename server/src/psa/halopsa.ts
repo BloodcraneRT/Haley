@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -86,6 +86,10 @@ export interface HaloConfig {
   statusInProgress?: string;
   statusWaiting?: string;
   statusClosed?: string;
+  /** Outcome for Haley's time actions; must not email the user or change status. Defaults to "Private Note". */
+  timeOutcome?: string;
+  /** Charge rate id for a non-billable (or $0) charge type, if the MSP has one. */
+  timeChargeRateId?: string;
 }
 
 /**
@@ -289,6 +293,33 @@ export class HaloAdapter implements PsaAdapter {
     await this.call("POST", "/Tickets", [{ id: Number(ticketId), status_id: await this.statusId(status) }]);
   }
 
+  /**
+   * Halo records time on actions: a private, non-emailed action carrying timetaken (hours) and marked not billable.
+   * Its id comes back so the sync doesn't import it as a technician comment.
+   */
+  async logTime(ticketId: string, entry: TimeEntry): Promise<string> {
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not a HaloPSA ticket id: ${ticketId}`);
+    const start = Date.parse(entry.startedAt);
+    const rate = this.config.timeChargeRateId?.trim();
+    const data = await this.call<Json | Json[]>("POST", "/Actions", [
+      {
+        ticket_id: Number(ticketId),
+        outcome: this.config.timeOutcome?.trim() || "Private Note",
+        note: entry.notes,
+        hiddenfromuser: true,
+        sendemail: false,
+        timetaken: Math.round((entry.minutes / 60) * 100) / 100,
+        actionarrivaldate: new Date(start).toISOString(),
+        actioncompletiondate: new Date(start + entry.minutes * 60_000).toISOString(),
+        actisbillable: false,
+        ...(rate && /^\d+$/.test(rate) ? { chargerate: Number(rate) } : {}),
+      },
+    ]);
+    const created = Array.isArray(data) ? data[0] : data;
+    if (created?.id == null) throw new ConnectorError("HaloPSA didn't return the new action's id.");
+    return String(created.id);
+  }
+
   async createTicket(input: { customerId: string; subject: string; description: string; requesterEmail: string | null; priority: TicketPriority }) {
     const data = await this.call<Json | Json[]>("POST", "/Tickets", [
       {
@@ -319,6 +350,8 @@ registerPsaFactory("halopsa", (_connection, config, fetchImpl) =>
       statusInProgress: config.statusInProgress,
       statusWaiting: config.statusWaiting,
       statusClosed: config.statusClosed,
+      timeOutcome: config.timeOutcome,
+      timeChargeRateId: config.timeChargeRateId,
     },
     fetchImpl,
   ),

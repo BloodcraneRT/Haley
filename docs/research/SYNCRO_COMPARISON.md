@@ -86,7 +86,7 @@ Haley's edge is unattended fixes for verified end users within per-client policy
    - escalates the rest with findings.
 
    This takes alert noise off technicians and is where Syncro's own AI requires a person.
-3. **Log Haley's time to the PSA (done for Syncro).** When Haley works a synced ticket, add a timer entry with the duration, a summary and a configurable labour product, billable or not. This makes Haley's work visible in the MSP's own billing and contracts.
+3. **Log Haley's time to the PSA (done for Syncro, ConnectWise, Autotask and HaloPSA).** When Haley works a synced ticket, add a timer entry with the duration, a summary and a configurable labour product, billable or not. This makes Haley's work visible in the MSP's own billing and contracts.
    - Add it as an optional `logTime` on the PSA adapter. ConnectWise, Autotask and HaloPSA all have time-entry APIs.
    - It extends item 8 of the Dex comparison into the PSA.
 4. **Webhooks instead of polling (done).** One workspace URL (PSA sync page); a delivery triggers an immediate Syncro sync and alert check, collapsed to at most one every 10 seconds. Add a receiver for Syncro Notification Center webhooks (ticket and RMM-alert events), at a long secret URL.

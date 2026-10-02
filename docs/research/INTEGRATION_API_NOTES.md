@@ -706,3 +706,68 @@ No vendor API. Rules enforced in code and pinned by `server/test/connectors-more
 - Paths: must start with a single `/`; no `//`, `\`, `.`/`..` segments (also after percent-decoding), URL schemes, `?`/`#`, whitespace or control characters. Optional `allowedPaths` prefixes match on segment boundaries (`/v1/users` allows `/v1/users/42`, not `/v1/usersX`).
 - Requests: one configured auth header (never `Host`, `Cookie`, `Content-Type`…; no CR/LF in the value), `redirect: "manual"` with any 3xx treated as an error, 20-second timeout, at most 1 MB read, ~20 KB returned (`truncated: true` beyond that). The auth value (and the bare token after `Bearer `/`Basic `) is replaced with `[redacted]` in every response and error.
 - Tools: `api_<name>_get` (read); with `allowWrites=true` also `api_<name>_write` (POST/PUT/PATCH, risk write) and `api_<name>_delete` (risk destructive). One REST integration per client for now (the integrations route allows one per provider).
+
+## Time entries for Haley's work (researched 2026-10-02)
+
+`PsaAdapter.logTime` records Haley's work on a synced ticket when the connection's **Log Haley's time** option is on. Every PSA records it as non-billable, so technicians decide what's invoiced.
+
+### SyncroMSP
+
+`POST /tickets/{id}/timer_entry` with `start_at`, `end_at`, `duration_minutes`, `notes` and an optional `product_id`. This creates a recorded entry that hasn't been charged. Source: api-docs.syncromsp.com/swagger.json.
+
+### ConnectWise PSA
+
+`POST /time/entries`. Source: the official OpenAPI types (unpkg.com/connectwise-rest/dist/ManageTypes.d.ts); ConnectWise's own developer docs require a login.
+
+**Body:**
+- `chargeToType: "ServiceTicket"` and `chargeToId`
+- `member: { identifier }`
+- `timeStart` and `timeEnd`, with no fractional seconds
+- `notes`
+- `billableOption: "DoNotBill"`
+- the three `addTo…Flag` fields set to false, so no Discussion note is added and no contact email is sent
+- `workType` and `workRole` ids, optional
+
+**Requirements:**
+- A time period must exist for the year.
+- **Unverified:** whether an API member can own entries. Haley sends the configured member identifier explicitly.
+
+### Autotask PSA
+
+`POST /TimeEntries`. Source: autotask.net/help/DeveloperHelp/Content/APIs/REST/Entities/TimeEntriesEntity.htm.
+
+**Body:**
+- `ticketID`, `resourceID` and `roleID`
+- `startDateTime` and `endDateTime` (UTC)
+- `summaryNotes` (required for ticket entries)
+- `isNonBillable: true` and `showOnInvoice: false`
+
+**roleID:**
+- It must match the ticket's `assignedResourceroleID` (lowercase "role"), unless the account lets users change the role on ticket time.
+- Haley uses the configured role, else the ticket's assigned role, else the resource's default active `ResourceServiceDeskRoles` row.
+
+**Requirements:**
+- Proxy Time Entry must be on so the API user can add time for that resource. Alternatively use the `ImpersonationResourceId` header, which Haley doesn't use.
+- The account may refuse time on Complete tickets.
+- **Unverified:** whether the API-only user can be the resource itself.
+
+### HaloPSA
+
+Time is recorded on actions: `POST /api/Actions`, sent as an array.
+
+**Body:**
+- `timetaken`, in decimal hours
+- `actionarrivaldate` and `actioncompletiondate`
+- `outcome`, configurable (default "Private Note")
+- `hiddenfromuser: true` and `sendemail: false`
+- `actisbillable: false`
+- `chargerate`, an optional id for a non-billable charge type
+
+**Sources:**
+- Field names come from the first-party apidoc bundle (halopsa.com/apidoc).
+- Units come from a third-party mirror of the v2 Swagger (kb.dtctoday.com).
+
+**Handling:** the new action's id is added to the link's seen comments, so the sync doesn't import it back as a technician note.
+
+**Unverified:** how `nonbilltime` relates to `timetaken`. Haley doesn't send `nonbilltime`.
+

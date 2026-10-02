@@ -63,13 +63,18 @@ export const PSA_PROVIDERS: PsaProviderInfo[] = [
       { key: "statusWaiting", label: "“Waiting on customer” status", optional: true, placeholder: "Waiting on Customer" },
       { key: "statusResolved", label: "“Resolved” status", optional: true, placeholder: "Resolved", help: "Status names must exist on the ticket's board." },
       { key: "emailContacts", label: "ConnectWise emails contacts about Discussion notes", optional: true, placeholder: "no", help: "Answer yes only if your board's notification rules email the contact; otherwise Haley emails them herself." },
+      { key: "timeMember", label: "Member for Haley's time", optional: true, placeholder: "haley", help: "Member identifier that owns Haley's time entries, if you log them (e.g. a dedicated Haley member). Entries are Do Not Bill." },
+      { key: "timeWorkTypeId", label: "Work type id for Haley's time", optional: true, help: "Leave blank for the member's default." },
+      { key: "timeWorkRoleId", label: "Work role id for Haley's time", optional: true, help: "Leave blank for the member's default." },
     ],
     setupSteps: [
       "Create a developer clientId at developer.connectwise.com (ClientID → New).",
       "In ConnectWise go to System → Members → API Members, add a member with a security role that can read Companies and read/write Service Tickets and ticket notes, and default it to your service board.",
       "Open the API member's API Keys tab → +, and copy the public and private keys (the private key is shown once).",
       "Paste your API site, company ID, keys, clientId and board here, then map ConnectWise companies to Haley clients.",
+      "To log Haley's time: give the API member's role Time Entry add rights, set up a time period for the year, and enter the member that owns her entries.",
     ],
+    timeEntries: true,
   },
   {
     id: "autotask",
@@ -85,13 +90,17 @@ export const PSA_PROVIDERS: PsaProviderInfo[] = [
       { key: "statusInProgress", label: "“In progress” status ID", optional: true, placeholder: "8" },
       { key: "statusWaiting", label: "“Waiting customer” status ID", optional: true, placeholder: "7" },
       { key: "statusComplete", label: "“Complete” status ID", optional: true, placeholder: "5", help: "Blank status IDs are found by name." },
+      { key: "timeResourceId", label: "Resource ID for Haley's time", optional: true, placeholder: "29684", help: "Resource that owns Haley's time entries, if you log them. Entries are non-billable and hidden from invoices." },
+      { key: "timeRoleId", label: "Role ID for Haley's time", optional: true, help: "Blank uses the ticket's assigned role, then the resource's default service desk role." },
     ],
     setupSteps: [
       "In Autotask go to Admin → Account Settings & Users → Resources/Users → New → New API User.",
       "Give it the API User (system) security level, generate a username and secret, and under API Tracking Identifier choose Custom (Haley) or an integration vendor.",
       "Make sure the API user's line of business/permissions can see the companies and tickets Haley should work.",
       "Paste the username, secret and tracking identifier here, then map Autotask companies to Haley clients.",
+      "To log Haley's time: enter the resource that owns her entries, and turn on Proxy Time Entry for administrators (Admin → Features & Settings) so the API user can add time for it.",
     ],
+    timeEntries: true,
   },
   {
     id: "halopsa",
@@ -107,12 +116,16 @@ export const PSA_PROVIDERS: PsaProviderInfo[] = [
       { key: "statusInProgress", label: "“In progress” status ID", optional: true, placeholder: "2" },
       { key: "statusWaiting", label: "“Waiting on customer” status ID", optional: true, help: "Blank status IDs are found by name." },
       { key: "statusClosed", label: "“Closed” status ID", optional: true, placeholder: "9" },
+      { key: "timeOutcome", label: "Outcome for Haley's time", optional: true, placeholder: "Private Note", help: "An outcome that doesn't email the user or change the status." },
+      { key: "timeChargeRateId", label: "Non-billable charge rate ID", optional: true, help: "Optional: a non-billable or $0 charge type for Haley's time." },
     ],
     setupSteps: [
       "In HaloPSA go to Configuration → Integrations → HaloPSA API → View Applications → New.",
       "Choose Client ID and Secret (Services) authentication, log in as an agent that can see the right clients and tickets, and grant the all permission (or read/edit tickets, actions, customers).",
       "Paste your Halo URL, client ID and secret (and tenant, if shown on the API page) here, then map Halo clients to Haley clients.",
+      "Haley's time is logged as private actions marked not billable, by the agent the API application logs in as.",
     ],
+    timeEntries: true,
   },
 ];
 

@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -70,6 +70,11 @@ export interface ConnectWiseConfig {
   statusResolved?: string;
   /** "true" when the board's notification rules email the contact about new Discussion notes. */
   emailContacts?: string;
+  /** Member identifier that owns Haley's time entries (e.g. a "haley" member). Required to log time. */
+  timeMember?: string;
+  /** Optional work type and work role ids for those entries; ConnectWise defaults them otherwise. */
+  timeWorkTypeId?: string;
+  timeWorkRoleId?: string;
 }
 
 /** Status names tried in order on the ticket's board; the configured name always comes first. */
@@ -280,6 +285,35 @@ export class ConnectWiseAdapter implements PsaAdapter {
     return match ? Number(match.id) : null;
   }
 
+  /**
+   * POST /time/entries against the service ticket, as "Do Not Bill" so technicians decide what's invoiced. Notes
+   * aren't copied onto the ticket (no Discussion note, so no contact email). ConnectWise rejects fractional seconds.
+   */
+  async logTime(ticketId: string, entry: TimeEntry): Promise<string> {
+    const member = this.config.timeMember?.trim();
+    if (!member) throw new ConnectorError("Set the ConnectWise member for Haley's time on this connection (Edit credentials) to log time.");
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not a ConnectWise ticket id: ${ticketId}`);
+    const cw = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const start = Date.parse(entry.startedAt);
+    const id = (v?: string) => (v && /^\d+$/.test(v.trim()) ? { id: Number(v) } : undefined);
+    const data = await this.call<Json>("POST", "/time/entries", {
+      chargeToId: Number(ticketId),
+      chargeToType: "ServiceTicket",
+      member: { identifier: member },
+      timeStart: cw(start),
+      timeEnd: cw(start + entry.minutes * 60_000),
+      notes: entry.notes.slice(0, 4000),
+      billableOption: "DoNotBill",
+      addToDetailDescriptionFlag: false,
+      addToInternalAnalysisFlag: false,
+      addToResolutionFlag: false,
+      ...(id(this.config.timeWorkTypeId) ? { workType: id(this.config.timeWorkTypeId) } : {}),
+      ...(id(this.config.timeWorkRoleId) ? { workRole: id(this.config.timeWorkRoleId) } : {}),
+    });
+    if (data.id == null) throw new ConnectorError("ConnectWise didn't return the new time entry's id.");
+    return String(data.id);
+  }
+
   async createTicket(input: { customerId: string; subject: string; description: string; requesterEmail: string | null; priority: TicketPriority }) {
     const priorityId = await this.priorityId(input.priority);
     const data = await this.call<Json>("POST", "/service/tickets", {
@@ -310,6 +344,9 @@ registerPsaFactory("connectwise", (_connection, config, fetchImpl) =>
       statusWaiting: config.statusWaiting,
       statusResolved: config.statusResolved,
       emailContacts: config.emailContacts,
+      timeMember: config.timeMember,
+      timeWorkTypeId: config.timeWorkTypeId,
+      timeWorkRoleId: config.timeWorkRoleId,
     },
     fetchImpl,
   ),

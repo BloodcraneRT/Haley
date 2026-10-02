@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 type Picklist = Array<{ value: string; label: string; isActive?: boolean; isDefaultValue?: boolean; isSystem?: boolean }>;
@@ -74,6 +74,10 @@ export interface AutotaskConfig {
   statusInProgress?: string;
   statusWaiting?: string;
   statusComplete?: string;
+  /** Resource id that owns Haley's time entries. Required to log time. */
+  timeResourceId?: string;
+  /** Role id for those entries; defaults to the ticket's assigned role, then the resource's default service desk role. */
+  timeRoleId?: string;
 }
 
 /**
@@ -302,6 +306,45 @@ export class AutotaskAdapter implements PsaAdapter {
     return Number(found?.value ?? DEFAULT_PRIORITY[priority]);
   }
 
+  /** The role for Haley's time on a ticket: configured, else the ticket's assigned role, else the resource's default. */
+  private async timeRole(ticketId: string, resourceId: number): Promise<number> {
+    const configured = this.config.timeRoleId?.trim();
+    if (configured && /^\d+$/.test(configured)) return Number(configured);
+    const ticket = (await this.call<Json>("GET", `/Tickets/${ticketId}`)).item as Json | undefined;
+    // Autotask spells it with a lowercase "role".
+    if (ticket?.assignedResourceroleID) return Number(ticket.assignedResourceroleID);
+    const roles = await this.query("ResourceServiceDeskRoles", [
+      { op: "eq", field: "resourceID", value: resourceId },
+      { op: "eq", field: "isActive", value: true },
+    ]);
+    const role = roles.find((r) => r.isDefault) ?? roles[0];
+    if (!role) throw new ConnectorError(`Autotask resource ${resourceId} has no active service desk role; set a role id for Haley's time on this connection.`);
+    return Number(role.roleID);
+  }
+
+  /**
+   * POST /TimeEntries for the ticket, non-billable and off the invoice so technicians decide what's billed. The
+   * resource must be able to receive it (Proxy Time Entry for the API user, or Haley's own resource).
+   */
+  async logTime(ticketId: string, entry: TimeEntry): Promise<string> {
+    const resource = this.config.timeResourceId?.trim();
+    if (!resource || !/^\d+$/.test(resource)) throw new ConnectorError("Set the Autotask resource id for Haley's time on this connection (Edit credentials) to log time.");
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not an Autotask ticket id: ${ticketId}`);
+    const start = Date.parse(entry.startedAt);
+    const data = await this.call<Json>("POST", "/TimeEntries", {
+      ticketID: Number(ticketId),
+      resourceID: Number(resource),
+      roleID: await this.timeRole(ticketId, Number(resource)),
+      startDateTime: new Date(start).toISOString(),
+      endDateTime: new Date(start + entry.minutes * 60_000).toISOString(),
+      summaryNotes: entry.notes.slice(0, 8000) || "Work by Haley",
+      isNonBillable: true,
+      showOnInvoice: false,
+    });
+    if (data.itemId == null) throw new ConnectorError("Autotask didn't return the new time entry's id.");
+    return String(data.itemId);
+  }
+
   async createTicket(input: { customerId: string; subject: string; description: string; requesterEmail: string | null; priority: TicketPriority }) {
     let contactId: number | null = null;
     if (input.requesterEmail) {
@@ -339,6 +382,8 @@ registerPsaFactory("autotask", (_connection, config, fetchImpl) =>
       statusInProgress: config.statusInProgress,
       statusWaiting: config.statusWaiting,
       statusComplete: config.statusComplete,
+      timeResourceId: config.timeResourceId,
+      timeRoleId: config.timeRoleId,
     },
     fetchImpl,
   ),
