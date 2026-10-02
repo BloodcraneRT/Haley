@@ -87,7 +87,7 @@ export function ProviderLogo({ provider }: { provider: string }) {
       </span>
     );
   }
-  if (provider === "syncro") {
+  if (provider === "syncro" || provider === "syncro_rmm") {
     return (
       <span className="provider-logo" aria-hidden="true">
         <svg width="16" height="16" viewBox="0 0 16 16">

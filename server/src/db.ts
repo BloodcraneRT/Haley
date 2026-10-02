@@ -258,6 +258,8 @@ const MIGRATIONS: string[] = [
    );`,
   // 9: preserve recipe attribution when recurring tasks fire
   `ALTER TABLE schedules ADD COLUMN template_id TEXT;`,
+  // 10: Haley's work logged as PSA time entries
+  `ALTER TABLE ticket_links ADD COLUMN logged_time TEXT NOT NULL DEFAULT '[]';`,
 ];
 
 export function openDb(path: string): Db {

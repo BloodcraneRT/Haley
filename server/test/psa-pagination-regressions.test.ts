@@ -61,22 +61,40 @@ describe("PSA incomplete collections", () => {
   it("rejects an Autotask query with another page after the page limit", async () => {
     const net = fakeFetch([[/Companies\/query/, () => ({ items: [{ id: 1 }], pageDetails: { nextPageUrl: `${ZONE}/Companies/query?next=2` } })]]);
     await expect(autotask(net.impl).listCustomers()).rejects.toThrow(/page limit|incomplete/i);
-    expect(net.calls).toHaveLength(40);
+    // Company lists get 100 pages of 500.
+    expect(net.calls).toHaveLength(100);
   });
 
   it("rejects a full ConnectWise collection at the page limit", async () => {
     const net = fakeFetch([[/company\/companies/, () => Array.from({ length: 100 }, (_, id) => ({ id }))]]);
     await expect(connectwise(net.impl).listCustomers()).rejects.toThrow(/page limit|incomplete/i);
-    expect(net.calls).toHaveLength(41);
+    // Company lists get 500 pages (plus the probe page) before giving up.
+    expect(net.calls).toHaveLength(501);
   });
 
   it("rejects a Halo collection known to extend past the page limit", async () => {
     const net = fakeFetch([
       [/auth\/token/, () => ({ access_token: "t" })],
-      [/api\/Client/, () => ({ record_count: 4001, clients: Array.from({ length: 100 }, (_, id) => ({ id })) })],
+      [/api\/Client/, () => ({ record_count: 50_001, clients: Array.from({ length: 100 }, (_, id) => ({ id })) })],
     ]);
     await expect(halo(net.impl).listCustomers()).rejects.toThrow(/page limit|incomplete/i);
-    expect(net.calls.filter((c) => c.url.includes("/api/Client"))).toHaveLength(40);
+    expect(net.calls.filter((c) => c.url.includes("/api/Client"))).toHaveLength(500);
+  });
+
+  it("reads ConnectWise company lists longer than the default page limit", async () => {
+    const net = fakeFetch([[/company\/companies/, (call) => {
+      const page = Number(new URL(call.url).searchParams.get("page"));
+      return page > 60 ? [] : Array.from({ length: 100 }, (_, i) => ({ id: page * 100 + i, name: `Co ${page}-${i}` }));
+    }]]);
+    expect(await connectwise(net.impl).listCustomers()).toHaveLength(6000);
+  });
+
+  it("follows Autotask next-page links whose path differs only in case", async () => {
+    const net = fakeFetch([
+      [/Companies\/query$/, () => ({ items: [{ id: 1 }], pageDetails: { nextPageUrl: `${ZONE.replace("ATServicesRest/V1.0", "atservicesrest/v1.0")}/Companies/query?next=2` } })],
+      [/next=2$/, () => ({ items: [{ id: 2 }] })],
+    ]);
+    expect((await autotask(net.impl).listCustomers()).map((c) => c.id)).toEqual(["1", "2"]);
   });
 
   it("allows an exactly-full ConnectWise collection when the probe page is empty", async () => {

@@ -43,6 +43,7 @@ const CONFIRM = `Before changing anything, state the plan: each change, the tool
 const DIRECTORY = [["m365", "google"]];
 const M365 = [["m365"]];
 const NINJA = [["ninjaone"]];
+const SYNCRO = [["syncro_rmm"]];
 
 export const TASK_TEMPLATES: TaskTemplate[] = [
   // ------------------------------------------------------------------ Identity & access
@@ -760,6 +761,63 @@ Don't run scripts or reboot anything. For each group, report the likely cause, t
 For each online device, list pending OS patches (count and the critical/security ones by KB), whether a reboot is pending, and the last boot time. List offline devices separately with last contact, since their patch state is unknown. Highlight servers and anything missing security patches.
 
 Don't install patches or reboot anything. Save the report as a knowledge base article titled "Patch status - <today's date>".`,
+  },
+  {
+    id: "syncro-alert-triage",
+    name: "Syncro alert triage",
+    description: "Group active Syncro RMM alerts by cause, rank them, and suggest the fix for each.",
+    category: "RMM & endpoints",
+    requires: SYNCRO,
+    changes: false,
+    estimatedMinutes: 20,
+    tags: ["alerts", "syncro", "syncromsp", "rmm", "monitoring", "triage"],
+    tools: ["syncro_list_alerts", "syncro_list_devices", "syncro_get_device", "syncro_list_scripts", "search_knowledge_base"],
+    instruction: `Triage this client's active SyncroMSP alerts.
+
+Group the alerts by cause (disk space, offline agent, failed services, patching, antivirus…), then rank them: servers and alerts affecting many devices first. For the top ones, look at the device for context (health flags, missing or failed patches) and check the knowledge base for a known fix.
+
+Don't run scripts, mute or clear anything. For each group, report the likely cause, the recommended fix, and which allowed Syncro script would do it (if any), so a technician can act on it.`,
+  },
+  {
+    id: "syncro-low-disk-cleanup",
+    name: "Low disk space cleanup (Syncro)",
+    description: "Find Syncro devices low on disk, run the allowed cleanup script, and clear the alerts it fixes.",
+    category: "RMM & endpoints",
+    requires: SYNCRO,
+    changes: true,
+    estimatedMinutes: 20,
+    tags: ["disk space", "cleanup", "storage", "syncro", "syncromsp", "script", "full disk"],
+    tools: ["syncro_list_alerts", "syncro_list_devices", "syncro_get_device", "syncro_list_scripts", "syncro_run_script", "syncro_clear_alert"],
+    instruction: `Free up disk space on devices that are running low.
+Devices: all with Syncro's low disk flag or a low disk alert (or list them)
+Cleanup script: (leave empty and I'll pick the allowed cleanup script)
+
+Steps, in order:
+1. Find the devices from low disk alerts and the "Low disk space" health flag. Only workstations are in scope; list servers and offline devices separately without touching them.
+2. Pick the allowed cleanup script from syncro_list_scripts. If there isn't one, stop and report the devices.
+3. ${CONFIRM}
+4. Run the script on each device in the plan.
+5. Clear a device's low disk alert only once its health flag shows the problem is gone; otherwise leave it open.
+
+Don't delete user files, reboot devices or run any other script.
+
+Report each device, whether the script ran, which alerts you cleared, and which still need a technician.`,
+  },
+  {
+    id: "syncro-patch-report",
+    name: "Patch status report (Syncro)",
+    description: "Missing and failed Windows patches across the client's Syncro devices.",
+    category: "RMM & endpoints",
+    requires: SYNCRO,
+    changes: false,
+    estimatedMinutes: 30,
+    tags: ["patching", "updates", "windows update", "syncro", "syncromsp", "report"],
+    tools: ["syncro_list_devices", "syncro_get_device", "save_knowledge_article"],
+    instruction: `Report patch status for this client's devices in SyncroMSP.
+
+For each device, list missing and failed Windows patches (counts, and the security or critical ones by KB) and any Syncro health flags. List devices with the agent offline separately, since their patch state may be stale. Highlight servers and anything with failed security patches.
+
+Don't install patches, run scripts or reboot anything. Save the report as a knowledge base article titled "Patch status - <today's date>".`,
   },
   {
     id: "low-disk-cleanup",

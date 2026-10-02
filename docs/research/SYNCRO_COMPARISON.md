@@ -71,7 +71,7 @@ Haley's edge is unattended fixes for verified end users within per-client policy
 
 ## What to incorporate (prioritized)
 
-1. **Syncro RMM connector.** Model it on NinjaOne and gate everything through the policy engine.
+1. **Syncro RMM connector (done).** Model it on NinjaOne and gate everything through the policy engine.
    - **Read tools:** the requester's devices (by contact), device health flags, installed apps, missing or failed patches, and active alerts.
    - **Change tools:**
      - Run an approved script (a per-client allowlist of Syncro script ids, since the API can't list them).
@@ -79,14 +79,14 @@ Haley's edge is unattended fixes for verified end users within per-client policy
      - Everything is policy-gated; scripts are **write** risk by default.
    - **Recipes:** low disk cleanup, print spooler restart, and "is this PC patched?". These match Syncro's own guided fixes, but Haley can run them unattended for a verified requester when the client's policy allows.
    - **Why it matters:** most Syncro MSPs run its RMM. Without this connector, Haley sees the ticket but not the machine.
-2. **Alert-driven tickets.** Pull active Syncro RMM alerts, or receive them by webhook. Haley then:
+2. **Alert-driven tickets (done, by polling every two minutes; opt-in per client).** Pull active Syncro RMM alerts, or receive them by webhook. Haley then:
    - investigates;
    - fixes what a recipe covers;
    - clears the alert and notes it on the PSA ticket;
    - escalates the rest with findings.
 
    This takes alert noise off technicians and is where Syncro's own AI requires a person.
-3. **Log Haley's time to the PSA.** When Haley works a synced ticket, add a timer entry with the duration, a summary and a configurable labour product, billable or not. This makes Haley's work visible in the MSP's own billing and contracts.
+3. **Log Haley's time to the PSA (done for Syncro).** When Haley works a synced ticket, add a timer entry with the duration, a summary and a configurable labour product, billable or not. This makes Haley's work visible in the MSP's own billing and contracts.
    - Add it as an optional `logTime` on the PSA adapter. ConnectWise, Autotask and HaloPSA all have time-entry APIs.
    - It extends item 8 of the Dex comparison into the PSA.
 4. **Webhooks instead of polling.** Add a receiver for Syncro Notification Center webhooks (ticket and RMM-alert events), at a long secret URL.

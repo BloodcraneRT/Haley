@@ -17,6 +17,7 @@ import {
   Users,
   Wand2,
   X,
+  Timer,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
@@ -301,6 +302,7 @@ function PsaCard({
             ))}
           </div>
         </div>
+        {provider?.timeEntries && <TimeEntriesOption value={options.timeEntries} onChange={(v) => setOption({ timeEntries: v })} disabled={busy === "options"} />}
       </div>
 
       <div className="integration-actions">
@@ -350,9 +352,42 @@ function SyncStat({ label, value, icon }: { label: string; value: number; icon: 
   );
 }
 
+const TIME_ENTRY_CHOICES = [
+  ["off", "Off"],
+  ["actual", "Working time"],
+  ["estimate", "Estimate"],
+] as const;
+
+/** Whether and how Haley's work becomes time entries on the PSA ticket. */
+function TimeEntriesOption({ value, onChange, disabled }: { value: PsaOptions["timeEntries"]; onChange: (v: NonNullable<PsaOptions["timeEntries"]>) => void; disabled?: boolean }) {
+  const current = value ?? "off";
+  return (
+    <div className="psa-option">
+      <Timer className="icon-sm muted" aria-hidden="true" />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div className="psa-option-label">Log Haley's time</div>
+        <div className="psa-option-help">
+          {current === "estimate"
+            ? "When Haley resolves a ticket, add one time entry at your minutes-per-ticket estimate (Usage & billing settings)."
+            : current === "actual"
+              ? "Add a time entry for each piece of work Haley does on a ticket, with her actual working time and summary."
+              : "Add Haley's work to the PSA ticket as time entries, so it shows in the PSA's billing and reports. Entries aren't charged; your technicians decide what to bill."}
+        </div>
+      </div>
+      <div className="segmented" role="group" aria-label="Log Haley's time">
+        {TIME_ENTRY_CHOICES.map(([v, label]) => (
+          <button key={v} type="button" aria-pressed={current === v} onClick={() => onChange(v)} disabled={disabled}>
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SyncResultPanel({ result: r, at, connectionId, onDismiss }: { result: SyncResult; at: string; connectionId: string; onDismiss: () => void }) {
   const failed = r.errors.length > 0;
-  const nothing = !r.imported && !r.commentsImported && !r.exported && !r.pushed && !r.statusUpdates;
+  const nothing = !r.imported && !r.commentsImported && !r.exported && !r.pushed && !r.statusUpdates && !r.timeLogged;
   return (
     <section className={`sync-result ${failed ? "is-error" : ""}`} aria-label="Sync result">
       <header className="sync-result-head">
@@ -372,6 +407,7 @@ function SyncResultPanel({ result: r, at, connectionId, onDismiss }: { result: S
         <SyncStat label="Exported" value={r.exported} icon={<Upload className="icon-xs" aria-hidden="true" />} />
         <SyncStat label="Mirrored" value={r.pushed} icon={<ArrowLeftRight className="icon-xs" aria-hidden="true" />} />
         <SyncStat label="Status" value={r.statusUpdates} icon={<RefreshCw className="icon-xs" aria-hidden="true" />} />
+        {r.timeLogged ? <SyncStat label="Time logged" value={r.timeLogged} icon={<Timer className="icon-xs" aria-hidden="true" />} /> : null}
       </div>
       {r.unmappedCustomers.length > 0 && (
         <div className="sync-note tone-amber">
@@ -572,6 +608,7 @@ function ConnectPsaModal({
                     ))}
                   </div>
                 </div>
+                {info.timeEntries && <TimeEntriesOption value={options.timeEntries} onChange={(v) => setOptions((x) => ({ ...x, timeEntries: v }))} />}
               </div>
             </Disclosure>
           </>

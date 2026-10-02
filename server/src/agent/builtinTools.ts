@@ -258,15 +258,23 @@ function ticketTools(store: Store, run: Run, ticketId: string, delivery_: ReplyD
         const ticket = store.getTicket(ticketId)!;
         if (ticket.resolution_confirmed_at) return { ok: true, status: ticket.status, note: "Already confirmed." };
         const events = store.listTicketEvents(ticketId);
-        const resolvedAt = events.findLastIndex((e) => e.kind === "status_change" && e.meta.to === "resolved");
-        if (resolvedAt < 0 || events[resolvedAt].author !== AGENT) throw new Error("Haley must resolve the ticket and ask the requester to confirm first.");
-        // Only the requester's own reply after the fix counts, never your own reading of the situation.
+        // The latest resolution must be Haley's (an automatic close after no reply still counts as hers);
+        // if a technician resolved or closed it since, there's nothing of hers to confirm.
+        const closedAt = events.findLastIndex((e) => e.kind === "status_change" && (e.meta.to === "resolved" || e.meta.to === "closed"));
+        const last = events[closedAt];
+        if (closedAt < 0 || !(last.author === AGENT || (last.author === "system" && last.meta.to === "closed"))) {
+          throw new Error("Haley must resolve the ticket and ask the requester to confirm first.");
+        }
+        const resolvedAt = events.findLastIndex((e, i) => i <= closedAt && e.kind === "status_change" && e.author === AGENT && e.meta.to === "resolved");
+        if (resolvedAt < 0) throw new Error("Haley must resolve the ticket and ask the requester to confirm first.");
+        // Only the requester's own reply after the fix counts, never your own reading of the situation. It must be
+        // their latest one: "it works" followed by "actually it stopped again" isn't a confirmation.
         const confirmed = events
           .slice(resolvedAt + 1)
           .findLast((e) => e.kind === "comment" && e.meta.fromRequester === true && !e.meta.untrustedContinuation);
         if (!confirmed) throw new Error("The requester hasn't replied since you resolved it. Wait for them; the ticket closes on its own if they don't.");
-        const normalized = (text: string) => text.trim().replace(/\s+/g, " ").toLowerCase();
-        if (!normalized(confirmed.body).includes(normalized(evidence))) {
+        const quote = normalizeQuote(evidence);
+        if (quote.length < 2 || !normalizeQuote(confirmed.body).includes(quote)) {
           throw new Error("Confirmation evidence must quote the requester's latest trusted reply. Do not invent or reuse an earlier confirmation.");
         }
         const at = new Date().toISOString();
@@ -290,6 +298,26 @@ function ticketTools(store: Store, run: Run, ticketId: string, delivery_: ReplyD
       },
     }),
   ];
+}
+
+/**
+ * Text for comparing a quote with what the requester wrote: Unicode-normalized, curly quotes and dashes made
+ * straight, case and whitespace folded, and surrounding quote marks and trailing punctuation dropped.
+ */
+export function normalizeQuote(text: string): string {
+  return text
+    .normalize("NFKC")
+    .replace(/[\u2018\u2019\u201A\u201B\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F\u2033]/g, '"')
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/^["'`]+|["'`]+$/g, "")
+    .replace(/(\.\.\.|[.!?,;:\s])+$/, "")
+    .replace(/^(\.\.\.|\s)+/, "")
+    .trim();
 }
 
 /** Most notes Haley keeps per client; past this she should update knowledge articles instead. */

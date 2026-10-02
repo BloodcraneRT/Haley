@@ -4,6 +4,8 @@ import { RECIPE_CATEGORIES, TASK_TEMPLATES, templateAvailability } from "../src/
 import { HuduApi, huduTools } from "../src/connectors/hudu/tools.js";
 import { ItGlueApi, itGlueTools } from "../src/connectors/itglue/tools.js";
 import { NinjaOneApi } from "../src/connectors/ninjaone/api.js";
+import { SyncroRmmApi } from "../src/connectors/syncro/api.js";
+import { syncroRmmTools } from "../src/connectors/syncro/tools.js";
 import { ninjaOneTools } from "../src/connectors/ninjaone/tools.js";
 import { buildConnector, PROVIDERS } from "../src/connectors/registry.js";
 import type { HaleyTool } from "../src/connectors/types.js";
@@ -30,6 +32,7 @@ async function realTools() {
     ninjaone: ninjaOneTools(new NinjaOneApi({ host: "app.ninjarmm.com", clientId: "c", clientSecret: "s" }, noFetch), 1),
     itglue: itGlueTools(new ItGlueApi({ host: "api.itglue.com", apiKey: "k" }, noFetch), "1"),
     hudu: huduTools(new HuduApi({ baseUrl: "https://docs.example.com", apiKey: "k" }, noFetch), 1),
+    syncro_rmm: syncroRmmTools(new SyncroRmmApi({ subdomain: "lint", apiKey: "k" }, noFetch), 1, []),
     builtin: builtinTools(store, taskRun),
   };
   const all = new Map<string, HaleyTool>();

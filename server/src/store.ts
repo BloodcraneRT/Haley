@@ -308,6 +308,23 @@ export class Store {
     return (this.db.prepare(sql).all(...args) as Row[]).map((r) => this.toTicket(r));
   }
 
+  /** The open alert ticket for the same device and alert, so a re-fired alert doesn't open a duplicate. */
+  findOpenAlertTicket(orgId: string, alertKey: string): Ticket | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM tickets WHERE org_id = ? AND channel = 'monitoring' AND status NOT IN ('resolved', 'closed')
+           AND json_extract(channel_ref, '$.alertKey') = ? ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(orgId, alertKey) as Row | undefined;
+    return row ? this.toTicket(row) : null;
+  }
+
+  /** Alert tickets opened for a client since a time (the hourly cap). */
+  countAlertTicketsSince(orgId: string, since: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM tickets WHERE org_id = ? AND channel = 'monitoring' AND created_at >= ?").get(orgId, since) as Row;
+    return Number(row.n);
+  }
+
   /** Scan open tickets for SLA checks without a queue-size cap or a UI priority sort. */
   *openTicketsForSla(): Generator<Ticket> {
     // Page by immutable ticket number: SLA sweeps can change status and updated_at while scanning.
@@ -720,6 +737,11 @@ export class Store {
   }
 
   /** Token totals per model for one run. */
+  /** When each model call of a run finished, oldest first (for working-time estimates). */
+  runModelCallTimes(runId: string): string[] {
+    return (this.db.prepare("SELECT created_at FROM model_usage WHERE run_id = ? ORDER BY created_at, id").all(runId) as Array<{ created_at: string }>).map((r) => r.created_at);
+  }
+
   runModelUsage(runId: string): Array<{ model: string; calls: number; input_tokens: number; output_tokens: number }> {
     return this.db
       .prepare("SELECT model, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens FROM model_usage WHERE run_id = ? GROUP BY model")
@@ -1227,15 +1249,20 @@ export class Store {
     );
   }
 
-  updateTicketLink(ticketId: string, connectionId: string, patch: { seenCommentIds?: string[]; pushedEventIds?: string[]; lastStatus?: string }): void {
+  updateTicketLink(
+    ticketId: string,
+    connectionId: string,
+    patch: { seenCommentIds?: string[]; pushedEventIds?: string[]; lastStatus?: string; loggedTime?: string[] },
+  ): void {
     const link = this.getTicketLink(ticketId, connectionId);
     if (!link) return;
     this.db
-      .prepare("UPDATE ticket_links SET seen_comment_ids = ?, pushed_event_ids = ?, last_status = ? WHERE ticket_id = ? AND connection_id = ?")
+      .prepare("UPDATE ticket_links SET seen_comment_ids = ?, pushed_event_ids = ?, last_status = ?, logged_time = ? WHERE ticket_id = ? AND connection_id = ?")
       .run(
         json(patch.seenCommentIds ?? link.seen_comment_ids),
         json(patch.pushedEventIds ?? link.pushed_event_ids),
         patch.lastStatus ?? link.last_status,
+        json(patch.loggedTime ?? link.logged_time),
         ticketId,
         connectionId,
       );
@@ -1245,6 +1272,7 @@ export class Store {
     return {
       ...(row as unknown as TicketLink),
       seen_comment_ids: parse(row.seen_comment_ids, []),
+      logged_time: parse(row.logged_time, []),
       pushed_event_ids: parse(row.pushed_event_ids, []),
     };
   }

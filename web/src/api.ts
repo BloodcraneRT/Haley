@@ -7,7 +7,7 @@
 
 export type Autonomy = "read_only" | "supervised" | "autonomous" | "unattended";
 export const AUTONOMY_LEVELS: Autonomy[] = ["read_only", "supervised", "autonomous", "unattended"];
-export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code" | "ninjaone" | "itglue" | "hudu" | "rest";
+export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code" | "ninjaone" | "syncro_rmm" | "itglue" | "hudu" | "rest";
 /** directory: tools Haley acts with; channel: how end users reach Haley; verification: step-up MFA. */
 export type ProviderKind = "directory" | "channel" | "verification";
 
@@ -21,7 +21,7 @@ export const ASSURANCE_LEVELS: Assurance[] = ["none", "email", "chat", "director
 export const MFA_WINDOW_MINUTES = 30;
 
 /** Where a ticket came from; replies go back the same way. */
-export type TicketChannel = "portal" | "api" | "email" | "slack" | "teams" | "chat" | "syncro" | "dynamics" | "connectwise" | "autotask" | "halopsa";
+export type TicketChannel = "portal" | "api" | "monitoring" | "email" | "slack" | "teams" | "chat" | "syncro" | "dynamics" | "connectwise" | "autotask" | "halopsa";
 export type RunMode = "live" | "plan";
 export type Cadence = "once" | "daily" | "weekly" | "monthly";
 export const CADENCES: Cadence[] = ["once", "daily", "weekly", "monthly"];
@@ -610,6 +610,8 @@ export interface PsaProviderInfo {
   description: string;
   fields: Array<{ key: string; label: string; secret?: boolean; placeholder?: string; help?: string; optional?: boolean }>;
   setupSteps: string[];
+  /** Haley can log her work as time entries on this PSA's tickets. */
+  timeEntries?: boolean;
 }
 
 export interface PsaOptions {
@@ -621,6 +623,8 @@ export interface PsaOptions {
   mirrorNotes: boolean;
   /** Identity level given to requesters of imported tickets. */
   requesterAssurance: "none" | "email";
+  /** Time entries for Haley's work: each run's working time, or the minutes-per-ticket estimate once per resolved ticket. */
+  timeEntries?: "off" | "actual" | "estimate";
 }
 
 export interface PsaConnection {
@@ -659,6 +663,7 @@ export interface SyncResult {
   exported: number;
   pushed: number;
   statusUpdates: number;
+  timeLogged?: number;
   unmappedCustomers: string[];
   errors: string[];
 }

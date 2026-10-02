@@ -7,6 +7,9 @@ type Json = Record<string, any>;
 type Picklist = Array<{ value: string; label: string; isActive?: boolean; isDefaultValue?: boolean; isSystem?: boolean }>;
 
 const MAX_PAGES = 40;
+/** 500 rows per page: company lists and catch-up ticket syncs get more room. */
+const CUSTOMER_MAX_PAGES = 100;
+const TICKET_MAX_PAGES = 40;
 /** On the first sync, only look back this far. */
 const FIRST_SYNC_LOOKBACK_MS = 7 * 86_400_000;
 const ZONE_LOOKUP = "https://webservices.autotask.net/atservicesrest/v1.0/zoneInformation";
@@ -117,7 +120,7 @@ export class AutotaskAdapter implements PsaAdapter {
     const baseUrl = new URL(base);
     const basePath = baseUrl.pathname.replace(/\/+$/, "");
     // nextPageUrl comes from a response; it must never choose a new credential destination.
-    if (url.protocol !== "https:" || url.origin !== baseUrl.origin || url.username || url.password || !url.pathname.startsWith(`${basePath}/`)) {
+    if (url.protocol !== "https:" || url.origin !== baseUrl.origin || url.username || url.password || !url.pathname.toLowerCase().startsWith(`${basePath.toLowerCase()}/`)) {
       throw new ConnectorError("Autotask request URL leaves the configured HTTPS API base URL.");
     }
     const res = await this.fetchImpl(url.toString(), {
@@ -144,14 +147,14 @@ export class AutotaskAdapter implements PsaAdapter {
   }
 
   /** POST {Entity}/query, then follow pageDetails.nextPageUrl (500 per page, ordered by id). */
-  private async query(entity: string, filter: Json[]): Promise<Json[]> {
+  private async query(entity: string, filter: Json[], maxPages = MAX_PAGES): Promise<Json[]> {
     const items: Json[] = [];
     let data = await this.call<Json>("POST", `/${entity}/query`, { filter });
     for (let page = 1; ; page++) {
       items.push(...((data.items ?? []) as Json[]));
       const next = data.pageDetails?.nextPageUrl;
       if (!next) break;
-      if (page >= MAX_PAGES) throw new ConnectorError(`Autotask ${entity} query reached the page limit (${MAX_PAGES}); results are incomplete.`);
+      if (page >= maxPages) throw new ConnectorError(`Autotask ${entity} query reached the page limit (${maxPages}); results are incomplete.`);
       data = await this.call<Json>("GET", next);
     }
     return items;
@@ -181,7 +184,7 @@ export class AutotaskAdapter implements PsaAdapter {
   }
 
   async listCustomers(): Promise<ExternalCustomer[]> {
-    const companies = await this.query("Companies", [{ op: "eq", field: "isActive", value: true }]);
+    const companies = await this.query("Companies", [{ op: "eq", field: "isActive", value: true }], CUSTOMER_MAX_PAGES);
     return companies.map((c) => {
       this.companies.set(String(c.id), c);
       return { id: String(c.id), name: c.companyName ?? `Company ${c.id}`, domains: [hostOf(c.webAddress)].filter((d): d is string => Boolean(d)) };
@@ -256,7 +259,7 @@ export class AutotaskAdapter implements PsaAdapter {
   async listUpdatedTickets(since: string | null): Promise<ExternalTicket[]> {
     const from = since ?? new Date(this.nowMs() - FIRST_SYNC_LOOKBACK_MS).toISOString();
     // lastActivityDate moves when a note or time entry is added, not only when the ticket's own fields change.
-    const items = await this.query("Tickets", [{ op: "gt", field: "lastActivityDate", value: from }]);
+    const items = await this.query("Tickets", [{ op: "gt", field: "lastActivityDate", value: from }], TICKET_MAX_PAGES);
     const changed = items
       .filter((t) => !since || iso(t.lastActivityDate) > since)
       .sort((a, b) => iso(a.lastActivityDate).localeCompare(iso(b.lastActivityDate)) || Number(a.id) - Number(b.id));

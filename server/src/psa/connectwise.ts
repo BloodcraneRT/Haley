@@ -7,6 +7,9 @@ type Json = Record<string, any>;
 
 const PAGE_SIZE = 100;
 const MAX_PAGES = 40;
+/** Company lists of established MSPs (prospects, vendors…) and catch-up ticket syncs run long; they get more room. */
+const CUSTOMER_MAX_PAGES = 500;
+const TICKET_MAX_PAGES = 200;
 /** On the first sync, only look back this far. */
 const FIRST_SYNC_LOOKBACK_MS = 7 * 86_400_000;
 
@@ -131,14 +134,14 @@ export class ConnectWiseAdapter implements PsaAdapter {
   }
 
   /** Page/pageSize paging; a short page is the last one. */
-  private async pages<T = Json>(path: string): Promise<T[]> {
+  private async pages<T = Json>(path: string, maxPages = MAX_PAGES): Promise<T[]> {
     const items: T[] = [];
     const sep = path.includes("?") ? "&" : "?";
-    for (let page = 1; page <= MAX_PAGES + 1; page++) {
+    for (let page = 1; page <= maxPages + 1; page++) {
       const data = await this.call<T[]>("GET", `${path}${sep}pageSize=${PAGE_SIZE}&page=${page}`);
       const rows = Array.isArray(data) ? data : [];
-      // One empty probe page allows a collection of exactly MAX_PAGES full pages.
-      if (page > MAX_PAGES && rows.length) throw new ConnectorError(`ConnectWise ${path.split("?")[0]} reached the page limit (${MAX_PAGES}); results are incomplete.`);
+      // One empty probe page allows a collection of exactly maxPages full pages.
+      if (page > maxPages && rows.length) throw new ConnectorError(`ConnectWise ${path.split("?")[0]} reached the page limit (${maxPages}); results are incomplete.`);
       items.push(...rows);
       if (rows.length < PAGE_SIZE) break;
     }
@@ -153,7 +156,7 @@ export class ConnectWiseAdapter implements PsaAdapter {
   }
 
   async listCustomers(): Promise<ExternalCustomer[]> {
-    const companies = await this.pages<Json>(`/company/companies?conditions=${encodeURIComponent("deletedFlag=false")}&fields=id,identifier,name,website&orderBy=${encodeURIComponent("id asc")}`);
+    const companies = await this.pages<Json>(`/company/companies?conditions=${encodeURIComponent("deletedFlag=false")}&fields=id,identifier,name,website&orderBy=${encodeURIComponent("id asc")}`, CUSTOMER_MAX_PAGES);
     return companies.map((c) => ({
       id: String(c.id),
       name: c.name || c.identifier || `Company ${c.id}`,
@@ -208,7 +211,7 @@ export class ConnectWiseAdapter implements PsaAdapter {
     const boards = this.boards.map((b) => `board/name=${quoted(b)}`).join(" or ");
     const conditions = `lastUpdated > [${from}]${boards ? ` and (${boards})` : ""}`;
     // Paged by id so a ticket updated mid-sync can't shift the pages; sorted oldest first below.
-    const summaries = await this.pages<Json>(`/service/tickets?conditions=${encodeURIComponent(conditions)}&orderBy=${encodeURIComponent("id asc")}`);
+    const summaries = await this.pages<Json>(`/service/tickets?conditions=${encodeURIComponent(conditions)}&orderBy=${encodeURIComponent("id asc")}`, TICKET_MAX_PAGES);
     const changed = summaries
       .filter((t) => !since || iso(t._info?.lastUpdated) > since)
       .sort((a, b) => iso(a._info?.lastUpdated).localeCompare(iso(b._info?.lastUpdated)) || Number(a.id) - Number(b.id));

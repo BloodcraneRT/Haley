@@ -1,6 +1,7 @@
 import type { AgentService } from "./agent/runner.js";
 import type { PsaSync } from "./psa/sync.js";
 import { slaFor } from "./sla.js";
+import type { SyncroAlertTickets } from "./monitoring/syncroAlerts.js";
 import type { Store } from "./store.js";
 import type { Cadence, Schedule } from "./types.js";
 
@@ -35,6 +36,7 @@ export class Scheduler {
     private readonly store: Store,
     private readonly agent: AgentService,
     private readonly psa: PsaSync | null = null,
+    private readonly alerts: SyncroAlertTickets | null = null,
   ) {}
 
   start(intervalMs = 30_000): void {
@@ -56,6 +58,7 @@ export class Scheduler {
       this.sweepSla(nowMs, result);
       this.closeUnconfirmed(nowMs, result);
       if (this.psa) await this.psa.syncAll();
+      if (this.alerts) await this.alerts.poll(nowMs);
     } finally {
       this.running = false;
     }

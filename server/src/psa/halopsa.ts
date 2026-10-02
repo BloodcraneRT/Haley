@@ -7,6 +7,9 @@ type Json = Record<string, any>;
 
 const PAGE_SIZE = 100;
 const MAX_PAGES = 40;
+/** Company lists of established MSPs (prospects, vendors…) and catch-up ticket syncs run long; they get more room. */
+const CUSTOMER_MAX_PAGES = 500;
+const TICKET_MAX_PAGES = 200;
 /** On the first sync, only look back this far. */
 const FIRST_SYNC_LOOKBACK_MS = 7 * 86_400_000;
 /** Halo's built-in Closed status. */
@@ -158,18 +161,18 @@ export class HaloAdapter implements PsaAdapter {
   }
 
   /** Halo's page_no/page_size paging ("pageinate" is Halo's spelling). */
-  private async pages(path: string, key: string): Promise<Json[]> {
+  private async pages(path: string, key: string, maxPages = MAX_PAGES): Promise<Json[]> {
     const items: Json[] = [];
     const sep = path.includes("?") ? "&" : "?";
-    for (let page = 1; page <= MAX_PAGES + 1; page++) {
+    for (let page = 1; page <= maxPages + 1; page++) {
       const data = await this.call<Json>("GET", `${path}${sep}pageinate=true&page_size=${PAGE_SIZE}&page_no=${page}`);
       const rows = (Array.isArray(data) ? data : (data[key] ?? [])) as Json[];
-      if (page > MAX_PAGES && rows.length) throw new ConnectorError(`HaloPSA ${path.split("?")[0]} reached the page limit (${MAX_PAGES}); results are incomplete.`);
+      if (page > maxPages && rows.length) throw new ConnectorError(`HaloPSA ${path.split("?")[0]} reached the page limit (${maxPages}); results are incomplete.`);
       items.push(...rows);
       const total = Number(data.record_count ?? NaN);
       if (rows.length < PAGE_SIZE || (!Number.isNaN(total) && page * PAGE_SIZE >= total)) break;
-      if (page === MAX_PAGES && !Number.isNaN(total) && total > items.length) {
-        throw new ConnectorError(`HaloPSA ${path.split("?")[0]} reached the page limit (${MAX_PAGES}); results are incomplete.`);
+      if (page === maxPages && !Number.isNaN(total) && total > items.length) {
+        throw new ConnectorError(`HaloPSA ${path.split("?")[0]} reached the page limit (${maxPages}); results are incomplete.`);
       }
     }
     return items;
@@ -181,7 +184,7 @@ export class HaloAdapter implements PsaAdapter {
   }
 
   async listCustomers(): Promise<ExternalCustomer[]> {
-    const clients = await this.pages("/Client?includeinactive=false", "clients");
+    const clients = await this.pages("/Client?includeinactive=false", "clients", CUSTOMER_MAX_PAGES);
     return clients
       .filter((c) => !c.inactive)
       .map((c) => {
@@ -245,7 +248,7 @@ export class HaloAdapter implements PsaAdapter {
 
   async listUpdatedTickets(since: string | null): Promise<ExternalTicket[]> {
     const from = since ?? new Date(this.nowMs() - FIRST_SYNC_LOOKBACK_MS).toISOString();
-    const summaries = await this.pages(`/Tickets?datesearch=lastactiondate&startdate=${encodeURIComponent(from)}&order=id`, "tickets");
+    const summaries = await this.pages(`/Tickets?datesearch=lastactiondate&startdate=${encodeURIComponent(from)}&order=id`, "tickets", TICKET_MAX_PAGES);
     const changed = summaries
       .map((t) => ({ t, updated: latest(t.last_update, t.lastactiondate, t.dateoccurred) }))
       .filter(({ updated }) => updated > from)

@@ -2,7 +2,7 @@ import type { ChannelHub } from "../channels/hub.js";
 import type { ChannelAdapter, DeliveryResult } from "../channels/types.js";
 import type { Store } from "../store.js";
 import type { Ticket, TicketEvent, TicketStatus } from "../types.js";
-import type { ExternalTicket, PsaAdapter, PsaConnection, PsaKind } from "./types.js";
+import type { ExternalTicket, PsaAdapter, PsaConnection, PsaKind, TicketLink } from "./types.js";
 
 export interface SyncResult {
   imported: number;
@@ -10,6 +10,8 @@ export interface SyncResult {
   exported: number;
   pushed: number;
   statusUpdates: number;
+  /** Time entries added for Haley's work. */
+  timeLogged: number;
   unmappedCustomers: string[];
   errors: string[];
   /** Set when the sync didn't run, with the reason. */
@@ -24,6 +26,27 @@ function coarse(status: TicketStatus | null): string {
   if (status === "new") return "new";
   return "in_progress";
 }
+
+/** Gaps between a run's model calls longer than this are waiting (for approval, a reply), not work. */
+const IDLE_GAP_MS = 5 * 60_000;
+
+/**
+ * Minutes Haley actually worked on a run, from when its model calls finished: gaps up to five minutes count
+ * (thinking plus tool calls), longer gaps count as one minute of work, and the first turn counts as a minute.
+ */
+export function workingMinutes(callTimes: string[]): number {
+  const times = callTimes.map((t) => Date.parse(t)).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!times.length) return 0;
+  let ms = 60_000;
+  for (let i = 1; i < times.length; i++) {
+    const gap = times[i] - times[i - 1];
+    ms += gap <= IDLE_GAP_MS ? gap : 60_000;
+  }
+  return Math.max(1, Math.ceil(ms / 60_000));
+}
+
+/** A PSA ticket that fails to import this many syncs in a row is set aside so newer tickets keep flowing. */
+export const MAX_PULL_ATTEMPTS = 3;
 
 const MIRRORED_KINDS = new Set<TicketEvent["kind"]>(["agent_note", "escalation", "action", "reply", "comment"]);
 
@@ -56,6 +79,8 @@ export class PsaSync {
   /** Comment ids Haley posted before the ticket link existed (the acknowledgement on import). */
   private readonly pendingSeen = new Map<string, string[]>();
   private readonly running = new Set<string>();
+  /** Consecutive failed imports per connection:external id. In memory: a restart gives each ticket fresh tries. */
+  private readonly pullFailures = new Map<string, number>();
 
   constructor(
     private readonly store: Store,
@@ -120,7 +145,7 @@ export class PsaSync {
   }
 
   async sync(connectionId: string): Promise<SyncResult> {
-    const result: SyncResult = { imported: 0, commentsImported: 0, exported: 0, pushed: 0, statusUpdates: 0, unmappedCustomers: [], errors: [] };
+    const result: SyncResult = { imported: 0, commentsImported: 0, exported: 0, pushed: 0, statusUpdates: 0, timeLogged: 0, unmappedCustomers: [], errors: [] };
     const connection = this.store.getPsaConnection(connectionId);
     if (!connection) return { ...result, skipped: "The connection no longer exists." };
     if (!connection.enabled) return { ...result, skipped: "Sync is paused for this connection." };
@@ -130,22 +155,36 @@ export class PsaSync {
     try {
       const adapter = this.adapterFor(connection);
       const tickets = await adapter.listUpdatedTickets(connection.cursor);
+      // Tickets arrive oldest first. The cursor moves up to the first ticket that failed, so the next sync retries
+      // it (and replays only what came after it). A ticket that keeps failing is set aside after a few tries.
       let cursor = connection.cursor;
-      let pullFailed = false;
+      let blocked = false;
       for (const external of tickets) {
+        const key = `${connection.id}:${external.id}`;
         try {
           await this.pull(connection, external, result);
+          this.pullFailures.delete(key);
         } catch (err) {
-          pullFailed = true;
-          result.errors.push(`Ticket ${external.number || external.id}: ${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : String(err);
+          const attempts = (this.pullFailures.get(key) ?? 0) + 1;
+          if (attempts >= MAX_PULL_ATTEMPTS) {
+            this.pullFailures.delete(key);
+            result.errors.push(`Ticket ${external.number || external.id} skipped after ${attempts} failed imports: ${message}`);
+            this.store.audit({ actor: connection.name, action: "psa.ticket_skipped", target: connectionId, detail: { externalId: external.id, number: external.number, error: message } });
+          } else {
+            this.pullFailures.set(key, attempts);
+            result.errors.push(`Ticket ${external.number || external.id}: ${message}`);
+            blocked = true;
+          }
         }
-        if (!cursor || external.updatedAt > cursor) cursor = external.updatedAt;
+        if (!blocked && (!cursor || external.updatedAt > cursor)) cursor = external.updatedAt;
       }
+      // Save import progress before pushing, so a failing push or export can't undo it.
+      this.store.updatePsaConnection(connectionId, { cursor });
       await this.push(connection, adapter, result);
       if (connection.options.exportTickets) await this.exportNew(connection, adapter, result);
       this.store.updatePsaConnection(connectionId, {
-        // Replay the batch on the next sync rather than skipping a failed ticket behind a newer update.
-        cursor: pullFailed ? connection.cursor : cursor,
+        cursor,
         lastSyncAt: startedAt,
         status: result.errors.length ? "error" : "connected",
         statusDetail: result.errors.length
@@ -273,7 +312,49 @@ export class PsaSync {
         result.statusUpdates++;
       }
       this.store.updateTicketLink(ticket.id, connection.id, { pushedEventIds: pushed, seenCommentIds: seen, lastStatus });
+      if (connection.options.timeEntries && connection.options.timeEntries !== "off" && adapter.logTime) {
+        await this.logTime(connection, adapter, { ...link, pushed_event_ids: pushed, seen_comment_ids: seen, last_status: lastStatus }, ticket, result);
+      }
     }
+  }
+
+  /** Adds PSA time entries for Haley's work on a linked ticket that hasn't been logged yet. */
+  private async logTime(connection: PsaConnection, adapter: PsaAdapter, link: TicketLink, ticket: Ticket, result: SyncResult) {
+    const since = connection.options.timeEntriesSince ?? connection.created_at;
+    const logged = [...link.logged_time];
+    const record = async (key: string, startedAt: string, minutes: number, notes: string) => {
+      try {
+        await adapter.logTime!(link.external_id, { startedAt, minutes, notes });
+        logged.push(key);
+        this.store.updateTicketLink(ticket.id, connection.id, { loggedTime: logged });
+        result.timeLogged++;
+      } catch (err) {
+        // Retried on the next sync; a missing permission shows on the connection's status.
+        result.errors.push(`Logging time on #${link.external_number || link.external_id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+
+    if (connection.options.timeEntries === "actual") {
+      for (const run of this.store.listRuns({ ticketId: ticket.id })) {
+        const key = `run:${run.id}`;
+        if (run.mode !== "live" || run.status !== "completed" || run.updated_at < since || logged.includes(key)) continue;
+        const calls = this.store.runModelCallTimes(run.id);
+        const minutes = workingMinutes(calls);
+        if (!minutes) continue;
+        const summary = run.summary.trim() ? `\n\n${run.summary.trim().slice(0, 1500)}` : "";
+        await record(key, calls[0] ?? run.created_at, minutes, `Haley (AI technician) worked this ticket for about ${minutes} min.${summary}`);
+      }
+      return;
+    }
+
+    // estimate: once, when Haley resolved the ticket, at the workspace's minutes per ticket.
+    if (logged.includes("estimate") || !ticket.resolved_at || ticket.resolved_at < since) return;
+    if (ticket.status !== "resolved" && ticket.status !== "closed") return;
+    const lastResolve = this.store.listTicketEvents(ticket.id).findLast((e) => e.kind === "status_change" && e.meta.to === "resolved");
+    if (lastResolve?.author !== "haley") return;
+    const minutes = Math.max(1, Math.round(this.store.getBillingSettings().minutesPerTicket));
+    const startedAt = new Date(Date.parse(ticket.resolved_at) - minutes * 60_000).toISOString();
+    await record("estimate", startedAt, minutes, `Resolved by Haley (AI technician). Logged at the workspace estimate of ${minutes} technician minutes per ticket.`);
   }
 
   /** Creates PSA tickets for Haley tickets of mapped clients that started elsewhere. */
@@ -282,26 +363,37 @@ export class PsaSync {
     for (const [customerId, orgId] of Object.entries(connection.customer_map)) if (!customerFor.has(orgId)) customerFor.set(orgId, customerId);
     for (const [orgId, customerId] of customerFor) {
       for (const ticket of this.store.listTicketsAwaitingPsaExport(connection, orgId)) {
-        const created = await adapter.createTicket({
-          customerId,
-          subject: `[Haley #${ticket.number}] ${ticket.title}`,
-          description: `${ticket.description || ticket.title}\n\nRequester: ${ticket.requester_name} <${ticket.requester_email}> via ${ticket.channel}. Haley is handling this ticket; updates are mirrored here.`,
-          requesterEmail: ticket.requester_email || null,
-          priority: ticket.priority,
-        });
-        this.store.createTicketLink({
-          ticketId: ticket.id,
-          connectionId: connection.id,
-          externalId: created.id,
-          externalNumber: created.number,
-          lastStatus: "new",
-        });
-        this.store.addTicketEvent(ticket.id, "field_change", connection.name, `Linked to ${connection.name} ticket #${created.number}.`, {
-          psa: connection.id,
-          externalId: created.id,
-        });
-        result.exported++;
+        // One ticket the PSA rejects mustn't hold up the others; it's retried on the next sync.
+        try {
+          await this.exportOne(connection, adapter, customerId, ticket);
+          result.exported++;
+        } catch (err) {
+          result.errors.push(`Exporting Haley #${ticket.number}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     }
+  }
+
+  private async exportOne(connection: PsaConnection, adapter: PsaAdapter, customerId: string, ticket: Ticket) {
+    const created = await adapter.createTicket({
+      customerId,
+      subject: `[Haley #${ticket.number}] ${ticket.title}`,
+      description: `${ticket.description || ticket.title}\n\n${
+        ticket.channel === "monitoring" ? "Opened by Haley from a monitoring alert" : `Requester: ${ticket.requester_name} <${ticket.requester_email}> via ${ticket.channel}`
+      }. Haley is handling this ticket; updates are mirrored here.`,
+      requesterEmail: ticket.requester_email || null,
+      priority: ticket.priority,
+    });
+    this.store.createTicketLink({
+      ticketId: ticket.id,
+      connectionId: connection.id,
+      externalId: created.id,
+      externalNumber: created.number,
+      lastStatus: "new",
+    });
+    this.store.addTicketEvent(ticket.id, "field_change", connection.name, `Linked to ${connection.name} ticket #${created.number}.`, {
+      psa: connection.id,
+      externalId: created.id,
+    });
   }
 }

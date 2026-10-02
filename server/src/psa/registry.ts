@@ -6,6 +6,8 @@ export interface PsaProviderInfo {
   description: string;
   fields: Array<{ key: string; label: string; secret?: boolean; placeholder?: string; help?: string; optional?: boolean }>;
   setupSteps: string[];
+  /** Haley can log her work as time entries on the PSA's tickets. */
+  timeEntries?: boolean;
 }
 
 export const PSA_PROVIDERS: PsaProviderInfo[] = [
@@ -17,12 +19,14 @@ export const PSA_PROVIDERS: PsaProviderInfo[] = [
       { key: "subdomain", label: "Syncro subdomain", placeholder: "yourmsp (from yourmsp.syncromsp.com)" },
       { key: "apiKey", label: "API token", secret: true, help: "Admin → API Tokens → New Token, with ticket, customer and contact permissions." },
       { key: "problemType", label: "Problem type for tickets Haley creates", optional: true, placeholder: "Other", help: "Must be one of your account's problem types." },
+      { key: "laborProductId", label: "Labor product for Haley's time", optional: true, placeholder: "12345", help: "Product id used on Haley's time entries, if you log them. Leave blank for Syncro's default." },
     ],
     setupSteps: [
       "In SyncroMSP go to Admin → API Tokens → New Token (custom permissions).",
-      "Grant: Tickets (list/search, view details, create, edit, comment), Customers (list/search, view), Contacts (list/search, view).",
+      "Grant: Tickets (list/search, view details, create, edit, comment), Customers (list/search, view), Contacts (list/search, view), and Ticket Timers if Haley should log her time.",
       "Paste your subdomain and the token here, then map Syncro customers to Haley clients.",
     ],
+    timeEntries: true,
   },
   {
     id: "dynamics",
