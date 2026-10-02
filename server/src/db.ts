@@ -260,6 +260,36 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE schedules ADD COLUMN template_id TEXT;`,
   // 10: Haley's work logged as PSA time entries
   `ALTER TABLE ticket_links ADD COLUMN logged_time TEXT NOT NULL DEFAULT '[]';`,
+  // 11: incidents: several tickets about one shared problem (a likely outage)
+  `CREATE TABLE IF NOT EXISTS incidents (
+     id TEXT PRIMARY KEY,
+     org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+     title TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'open',
+     created_by TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     resolved_at TEXT
+   );
+   CREATE INDEX IF NOT EXISTS idx_incidents_org ON incidents(org_id, status);
+   ALTER TABLE tickets ADD COLUMN incident_id TEXT REFERENCES incidents(id) ON DELETE SET NULL;
+   CREATE INDEX IF NOT EXISTS idx_tickets_incident ON tickets(incident_id);`,
+  // 12: model calls outside runs (the technician copilot) are billed too: run_id becomes optional
+  `CREATE TABLE model_usage_v12 (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     run_id TEXT REFERENCES runs(id) ON DELETE CASCADE,
+     org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+     model TEXT NOT NULL,
+     input_tokens INTEGER NOT NULL,
+     output_tokens INTEGER NOT NULL,
+     created_at TEXT NOT NULL,
+     purpose TEXT NOT NULL DEFAULT 'run'
+   );
+   INSERT INTO model_usage_v12 (id, run_id, org_id, model, input_tokens, output_tokens, created_at)
+     SELECT id, run_id, org_id, model, input_tokens, output_tokens, created_at FROM model_usage;
+   DROP TABLE model_usage;
+   ALTER TABLE model_usage_v12 RENAME TO model_usage;
+   CREATE INDEX IF NOT EXISTS idx_model_usage_org ON model_usage(org_id, created_at);
+   CREATE INDEX IF NOT EXISTS idx_model_usage_run ON model_usage(run_id);`,
 ];
 
 export function openDb(path: string): Db {

@@ -146,6 +146,16 @@ Syncro implements all three.
 
 `routes/syncroWebhook.ts` serves `POST /hooks/syncro/:secret`. The secret is a sealed workspace setting, shown and rotated on the PSA page. A valid delivery runs a `Debouncer`: at most one run per 10 seconds, plus one trailing run. That run syncs every enabled Syncro connection and forces an alert check. The request body is never parsed.
 
+## Help desk features
+
+- **`snapshot.ts`:** builds the requester snapshot by calling the client's read tools directly, each with a 15-second timeout: `m365_get_user` / `gws_get_user`, `m365_list_devices` and `syncro_list_devices`.
+- **`similar.ts`:** keyword similarity with stop words, light stemming and doubled title weight, behind `/api/tickets/:id/similar` and incident detection.
+- **`incidents.ts`:** hooks `Store.onTicketCreated`. A new ticket joins an open incident it matches. Otherwise, 3 or more matching tickets from 2 or more people within an hour start one. Matching is stricter here: they must name the same service or share several words.
+- **Incident context:** Haley's run intro gets an `<incident>` block for tickets in an open incident.
+- **`routes/incidents.ts`:** message-all, resolve-all and dismiss.
+- **`copilot.ts`:** makes one tool-less model call, and `model_usage` rows can now have no run (migration 12, `purpose = 'assist'`).
+- **`routes/statusPage.ts`:** serves `/t/<ticket>.<expiry>.<hmac>` as a server-rendered page with a strict CSP. The forms post url-encoded bodies to a scoped parser.
+
 ## Adding a connector
 
 1. Define a normalized API interface for the platform (see `connectors/m365/api.ts`).

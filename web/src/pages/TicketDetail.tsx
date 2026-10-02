@@ -43,6 +43,8 @@ import {
   type TicketPatch,
   type TicketPriority,
   type TicketStatus,
+  type AssistMode,
+  type AssistResult,
 } from "../api";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { Avatar, displayName, isHaley } from "../components/Avatar";
@@ -50,6 +52,8 @@ import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedbac
 import { Markdown } from "../components/Markdown";
 import { PageHeader } from "../components/PageHeader";
 import { ChannelBadge, IdentityBadge, Pill, psaRef, RunModeBadge, RunStatusPill, SlaStatePill, TicketStatusPill } from "../components/Pill";
+import { SimilarTicketsCard, TicketIncidentBanner } from "../components/Incidents";
+import { RequesterSnapshotCard } from "../components/RequesterSnapshot";
 import { RelativeTime } from "../components/RelativeTime";
 import { RevealSecretButton } from "../components/RevealSecret";
 import { usePoll } from "../hooks/usePoll";
@@ -192,6 +196,7 @@ export function TicketDetailPage() {
 
       <div className="layout-main-side">
         <div className="stack" style={{ gap: 20 }}>
+          {ticket.incident_id && <TicketIncidentBanner incidentId={ticket.incident_id} />}
           {latest && <RunBanner run={latest} pendingCount={pending.length} onRunLive={() => void runHaley("live")} starting={starting === "live"} />}
           {ticket.needs_followup && (
             <div className="banner banner-info" role="status">
@@ -239,6 +244,8 @@ export function TicketDetailPage() {
 
         <aside className="stack">
           <TicketProps detail={detail.data} onPatch={patchTicket} />
+          <RequesterSnapshotCard ticketId={ticket.id} />
+          <SimilarTicketsCard ticketId={ticket.id} />
           {ticket.sla && <SlaCard ticket={detail.data.ticket} />}
           {schedules.length > 0 && <FollowUps schedules={schedules} />}
           {secrets.length > 0 && (
@@ -772,6 +779,28 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
   const [body, setBody] = useState("");
   const [runAgent, setRunAgent] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [assisting, setAssisting] = useState<AssistMode | null>(null);
+  const [advice, setAdvice] = useState<AssistResult | null>(null);
+
+  /** The copilot: a draft fills the reply box (anything typed there is used as guidance); other answers show above it. */
+  const askHaley = async (mode: AssistMode) => {
+    setAssisting(mode);
+    try {
+      const guidance = mode === "draft_reply" ? body.trim() : "";
+      const result = await api.assist(ticketId, mode, guidance);
+      if (mode === "draft_reply") {
+        setKind("reply");
+        setBody(result.text);
+        toast("Draft ready. Review and edit it before sending.");
+      } else {
+        setAdvice(result);
+      }
+    } catch (err) {
+      toast(errorMessage(err), "error");
+    } finally {
+      setAssisting(null);
+    }
+  };
 
   const submit = async (e?: FormEvent) => {
     e?.preventDefault();
@@ -798,6 +827,34 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
   };
 
   return (
+    <>
+    {advice && (
+      <section className="card copilot-advice" aria-label={advice.mode === "summarize" ? "Ticket summary" : "Suggested next steps"}>
+        <div className="card-header">
+          <Sparkles className="icon-sm" style={{ color: "var(--tone-violet-fg)" }} aria-hidden="true" />
+          <h2>{advice.mode === "summarize" ? "Summary" : "Suggested next steps"}</h2>
+          <span className="muted" style={{ fontSize: "var(--text-xs)" }}>Haley · check before acting</span>
+          <span className="spacer" />
+          <button
+            className="btn btn-sm btn-ghost"
+            type="button"
+            onClick={() => {
+              setKind("comment");
+              setBody(advice.text);
+              setAdvice(null);
+            }}
+          >
+            Use as internal note
+          </button>
+          <button className="btn btn-ghost btn-sm btn-icon" type="button" onClick={() => setAdvice(null)} aria-label="Dismiss">
+            <X className="icon-sm" aria-hidden="true" />
+          </button>
+        </div>
+        <div className="card-body">
+          <Markdown source={advice.text} />
+        </div>
+      </section>
+    )}
     <form className={`composer ${kind === "reply" ? "reply-mode" : "note-mode"}`} onSubmit={submit} aria-label="Add to ticket">
       <div className="composer-head">
         <div className="segmented" role="group" aria-label="Message type">
@@ -813,6 +870,22 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
         <span className="muted" style={{ fontSize: "var(--text-sm)" }}>
           {kind === "comment" ? "Only technicians and Haley see this." : `Public reply${requester ? ` to ${requester}` : ""}.`}
         </span>
+      </div>
+      <div className="copilot-bar" role="group" aria-label="Ask Haley">
+        <Sparkles className="icon-xs" style={{ color: "var(--tone-violet-fg)" }} aria-hidden="true" />
+        <span className="muted">Ask Haley:</span>
+        {(
+          [
+            ["draft_reply", "Draft a reply", "Writes a reply for you to edit. Anything already in the box is used as guidance."],
+            ["next_steps", "Next steps", "Likely causes and what to check next."],
+            ["summarize", "Summarize", "The ticket so far, in a few bullets."],
+          ] as const
+        ).map(([mode, label, title]) => (
+          <button key={mode} type="button" className="btn btn-ghost btn-sm" title={title} onClick={() => void askHaley(mode)} disabled={assisting !== null}>
+            {assisting === mode ? <Spinner /> : null}
+            {label}
+          </button>
+        ))}
       </div>
       <label htmlFor="composer-body" className="sr-only">
         {kind === "comment" ? "Internal note" : "Reply"}
@@ -841,6 +914,7 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
         </button>
       </div>
     </form>
+    </>
   );
 }
 

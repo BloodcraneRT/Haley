@@ -28,6 +28,7 @@ const SettingsPage = lazy(() => import("./pages/Settings").then((m) => ({ defaul
 const SimulatorPage = lazy(() => import("./pages/Simulator").then((m) => ({ default: m.SimulatorPage })));
 const TasksPage = lazy(() => import("./pages/Tasks").then((m) => ({ default: m.TasksPage })));
 const TicketDetailPage = lazy(() => import("./pages/TicketDetail").then((m) => ({ default: m.TicketDetailPage })));
+const IncidentDetailPage = lazy(() => import("./pages/IncidentDetail").then((m) => ({ default: m.IncidentDetailPage })));
 const UsagePage = lazy(() => import("./pages/Usage").then((m) => ({ default: m.UsagePage })));
 const TicketsPage = lazy(() => import("./pages/Tickets").then((m) => ({ default: m.TicketsPage })));
 
@@ -134,6 +135,7 @@ export function App() {
             <Route path="kb/:id" element={<Keyed><KbArticlePage /></Keyed>} />
             <Route path="audit" element={<AuditPage />} />
             <Route path="usage" element={<UsagePage />} />
+            <Route path="incidents/:id" element={<Keyed><IncidentDetailPage /></Keyed>} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>

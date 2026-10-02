@@ -197,6 +197,8 @@ export interface Ticket {
   mfa_method: string;
   /** The requester confirmed the fix worked (after Haley resolved it). */
   resolution_confirmed_at: string | null;
+  /** The incident (shared problem) this ticket is part of. */
+  incident_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -337,3 +339,18 @@ export const DEFAULT_BILLING_SETTINGS: BillingSettings = {
   minutesPerTicket: 20,
   minutesPerAction: 5,
 };
+
+export type IncidentStatus = "open" | "resolved" | "dismissed";
+
+/** Several tickets about one shared problem, usually an outage. Detected automatically or created by a technician. */
+export interface Incident {
+  id: string;
+  org_id: string;
+  title: string;
+  status: IncidentStatus;
+  /** "haley" when detected automatically, otherwise the technician. */
+  created_by: string;
+  created_at: string;
+  resolved_at: string | null;
+}
+

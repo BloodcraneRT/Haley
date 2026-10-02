@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { SQLInputValue } from "node:sqlite";
 import { seal, unseal } from "./crypto.js";
 import { tx, type Db } from "./db.js";
@@ -9,6 +9,8 @@ import type {
   Assurance,
   ClientMemory,
   Cadence,
+  Incident,
+  IncidentStatus,
   Autonomy,
   Integration,
   IntegrationMode,
@@ -224,7 +226,7 @@ export class Store {
     assurance?: Assurance;
     verification?: string;
   }): Ticket {
-    return tx(this.db, () => {
+    const created = tx(this.db, () => {
       const next = this.db.prepare("SELECT COALESCE(MAX(number), 1000) + 1 AS n FROM tickets").get() as Row;
       const ts = now();
       const ticket: Ticket = {
@@ -250,6 +252,7 @@ export class Store {
         mfa_verified_at: null,
         mfa_method: "",
         resolution_confirmed_at: null,
+        incident_id: null,
         created_at: ts,
         updated_at: ts,
       };
@@ -281,6 +284,8 @@ export class Store {
       this.addTicketEvent(ticket.id, "created", input.author ?? (ticket.requester_name || "system"), ticket.description);
       return ticket;
     });
+    this.ticketCreated(created);
+    return this.getTicket(created.id) ?? created;
   }
 
   listTickets(filter: TicketFilter = {}): Ticket[] {
@@ -306,6 +311,75 @@ export class Store {
       LIMIT ?`;
     args.push(filter.limit ?? 200);
     return (this.db.prepare(sql).all(...args) as Row[]).map((r) => this.toTicket(r));
+  }
+
+  // ------------------------------------------------------------ incidents
+
+  /** Called after every new ticket (incident detection). Listener errors never fail ticket creation. */
+  private readonly ticketCreatedListeners: Array<(ticket: Ticket) => void> = [];
+  onTicketCreated(listener: (ticket: Ticket) => void): void {
+    this.ticketCreatedListeners.push(listener);
+  }
+  protected ticketCreated(ticket: Ticket): void {
+    for (const listener of this.ticketCreatedListeners) {
+      try {
+        listener(ticket);
+      } catch {
+        // Detection is best effort.
+      }
+    }
+  }
+
+  createIncident(input: { orgId: string; title: string; createdBy: string }): Incident {
+    const incident: Incident = { id: newId("inc"), org_id: input.orgId, title: input.title, status: "open", created_by: input.createdBy, created_at: now(), resolved_at: null };
+    this.db
+      .prepare("INSERT INTO incidents (id, org_id, title, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(incident.id, incident.org_id, incident.title, incident.status, incident.created_by, incident.created_at);
+    return incident;
+  }
+
+  getIncident(id: string): Incident | null {
+    return (this.db.prepare("SELECT * FROM incidents WHERE id = ?").get(id) as Incident | undefined) ?? null;
+  }
+
+  listIncidents(filter: { orgId?: string; status?: IncidentStatus } = {}): Incident[] {
+    const where: string[] = [];
+    const args: SQLInputValue[] = [];
+    if (filter.orgId) {
+      where.push("org_id = ?");
+      args.push(filter.orgId);
+    }
+    if (filter.status) {
+      where.push("status = ?");
+      args.push(filter.status);
+    }
+    return this.db.prepare(`SELECT * FROM incidents ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC LIMIT 200`).all(...args) as unknown as Incident[];
+  }
+
+  updateIncident(id: string, patch: { title?: string; status?: IncidentStatus }): Incident | null {
+    const current = this.getIncident(id);
+    if (!current) return null;
+    const status = patch.status ?? current.status;
+    const resolvedAt = status === "open" ? null : current.resolved_at ?? now();
+    this.db.prepare("UPDATE incidents SET title = ?, status = ?, resolved_at = ? WHERE id = ?").run(patch.title ?? current.title, status, resolvedAt, id);
+    return this.getIncident(id);
+  }
+
+  setTicketIncident(ticketId: string, incidentId: string | null): void {
+    this.db.prepare("UPDATE tickets SET incident_id = ? WHERE id = ?").run(incidentId, ticketId);
+  }
+
+  listIncidentTickets(incidentId: string): Ticket[] {
+    return (this.db.prepare("SELECT * FROM tickets WHERE incident_id = ? ORDER BY created_at").all(incidentId) as Row[]).map((r) => this.toTicket(r));
+  }
+
+  /** A client's open tickets created since a time, newest first (incident detection). */
+  listOpenTicketsCreatedSince(orgId: string, since: string): Ticket[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM tickets WHERE org_id = ? AND created_at >= ? AND status NOT IN ('resolved', 'closed') ORDER BY created_at DESC LIMIT 200")
+        .all(orgId, since) as Row[]
+    ).map((r) => this.toTicket(r));
   }
 
   /** The open alert ticket for the same device and alert, so a re-fired alert doesn't open a duplicate. */
@@ -718,10 +792,11 @@ export class Store {
     `).all(orgId, connection.created_at, connection.kind, connection.id, limit) as Row[]).map((r) => this.toTicket(r));
   }
 
-  recordModelUsage(input: { runId: string; orgId: string; model: string; inputTokens: number; outputTokens: number }): void {
+  /** One model call: a run's turn, or (runId null) a copilot answer for a technician. */
+  recordModelUsage(input: { runId: string | null; orgId: string; model: string; inputTokens: number; outputTokens: number; purpose?: "run" | "assist" }): void {
     this.db
-      .prepare("INSERT INTO model_usage (run_id, org_id, model, input_tokens, output_tokens, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(input.runId, input.orgId, input.model, input.inputTokens, input.outputTokens, now());
+      .prepare("INSERT INTO model_usage (run_id, org_id, model, input_tokens, output_tokens, created_at, purpose) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(input.runId, input.orgId, input.model, input.inputTokens, input.outputTokens, now(), input.purpose ?? "run");
   }
 
   /** Token totals per client and model in [from, to). */
@@ -746,6 +821,36 @@ export class Store {
     return this.db
       .prepare("SELECT model, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens FROM model_usage WHERE run_id = ? GROUP BY model")
       .all(runId) as Array<{ model: string; calls: number; input_tokens: number; output_tokens: number }>;
+  }
+
+  /**
+   * A signed, expiring token for a ticket's end-user status page: `<ticket id>.<expiry>.<signature>`. Nothing
+   * is stored; rotating HALEY_SECRET_KEY invalidates every link.
+   */
+  statusToken(ticketId: string, ttlMs = 60 * 86_400_000, nowMs = Date.now()): string {
+    const exp = Math.floor((nowMs + ttlMs) / 1000).toString(36);
+    return `${ticketId}.${exp}.${this.statusSignature(ticketId, exp)}`;
+  }
+
+  /** The ticket id a status token is for, or null if it's malformed, forged or expired. */
+  verifyStatusToken(token: string, nowMs = Date.now()): string | null {
+    const [ticketId, exp, sig] = token.split(".");
+    if (!ticketId || !exp || !sig || !/^tkt_[A-Za-z0-9]+$/.test(ticketId) || !/^[0-9a-z]+$/.test(exp)) return null;
+    const expected = Buffer.from(this.statusSignature(ticketId, exp));
+    const given = Buffer.from(sig);
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
+    return parseInt(exp, 36) * 1000 > nowMs ? ticketId : null;
+  }
+
+  private statusSignature(ticketId: string, exp: string): string {
+    return createHmac("sha256", this.secretKey).update(`ticket-status:${ticketId}:${exp}`).digest("base64url").slice(0, 32);
+  }
+
+  /** Adds fields to a timeline event's metadata. */
+  mergeTicketEventMeta(eventId: string, patch: Record<string, unknown>): void {
+    const row = this.db.prepare("SELECT meta FROM ticket_events WHERE id = ?").get(eventId) as Row | undefined;
+    if (!row) return;
+    this.db.prepare("UPDATE ticket_events SET meta = ? WHERE id = ?").run(json({ ...parse<Record<string, unknown>>(row.meta, {}), ...patch }), eventId);
   }
 
   /** A workspace webhook secret (sealed at rest), created on first use. `rotate` replaces it. */

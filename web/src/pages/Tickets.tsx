@@ -5,6 +5,7 @@ import { api, errorMessage, TICKET_PRIORITIES, TICKET_STATUSES, type OrgSummary,
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
 import { Modal } from "../components/Modal";
 import { OrgSelect } from "../components/OrgSelect";
+import { OpenIncidentsBanner } from "../components/Incidents";
 import { PageHeader } from "../components/PageHeader";
 import { ChannelBadge, IdentityBadge, Priority, psaRef, psaShortRef, SlaIndicator, TicketStatusPill } from "../components/Pill";
 import { RelativeTime } from "../components/RelativeTime";
@@ -114,6 +115,7 @@ export function TicketsPage() {
         )}
       </div>
 
+      <OpenIncidentsBanner />
       {tickets.error && <ErrorBanner error={tickets.error} onRetry={tickets.reload} />}
 
       <div className="card">

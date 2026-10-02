@@ -162,6 +162,8 @@ export interface Ticket {
   resolved_at: string | null;
   /** When the requester confirmed Haley's fix (null when unconfirmed or closed automatically). */
   resolution_confirmed_at: string | null;
+  /** The incident (shared problem) this ticket is part of. */
+  incident_id?: string | null;
   sla_escalated: boolean;
   /** Last approved step-up verification (MFA push or SMS code) and the method used. */
   mfa_verified_at: string | null;
@@ -668,6 +670,63 @@ export interface SyncResult {
   errors: string[];
 }
 
+export type AssistMode = "draft_reply" | "next_steps" | "summarize";
+/** server/src/copilot.ts AssistResult */
+export interface AssistResult {
+  mode: AssistMode;
+  text: string;
+  model: string;
+  usage: { inputTokens: number; outputTokens: number };
+}
+
+export interface SimilarTickets {
+  tickets: Array<{ id: string; number: number; title: string; status: TicketStatus; created_at: string; resolved_at: string | null; score: number; matched: string[]; resolution: string | null }>;
+  articles: Array<{ id: string; title: string; scope: "client" | "global" }>;
+}
+
+export type IncidentStatus = "open" | "resolved" | "dismissed";
+export interface Incident {
+  id: string;
+  org_id: string;
+  org_name: string;
+  title: string;
+  status: IncidentStatus;
+  created_by: string;
+  created_at: string;
+  resolved_at: string | null;
+  ticketCount: number;
+  openCount: number;
+  people: number;
+  lastTicketAt: string;
+}
+export interface MessageAllResult {
+  sent: number;
+  delivered: number;
+  notDelivered: number[];
+}
+
+/** server/src/snapshot.ts RequesterSnapshot */
+export interface RequesterSnapshot {
+  email: string;
+  generatedAt: string;
+  account: {
+    source: "Microsoft 365" | "Google Workspace";
+    name: string;
+    enabled: boolean;
+    title: string | null;
+    department: string | null;
+    licenses: string[];
+    groups: string[];
+    mfaMethods: string[] | null;
+    lastSignIn: string | null;
+    isAdmin: boolean | null;
+  } | null;
+  devices: Array<{ source: "Intune" | "Syncro"; name: string; id: string; os: string | null; lastSeen: string | null; issues: string[] }>;
+  recentTickets: Array<{ id: string; number: number; title: string; status: TicketStatus; created_at: string }>;
+  flags: Array<{ level: "warning" | "info"; text: string }>;
+  unavailable: Array<{ source: string; error: string }>;
+}
+
 /** The workspace's Syncro webhook URL (Notification Center → Notification Sets). */
 export interface SyncroWebhook {
   url: string;
@@ -1066,6 +1125,18 @@ export const api = {
   setPsaMapping: (id: string, map: Record<string, string>) => put<PsaConnection>(`/api/psa/${enc(id)}/mapping`, map),
   syncPsa: (id: string) => post<SyncResult>(`/api/psa/${enc(id)}/sync`),
   syncroWebhook: () => get<SyncroWebhook>("/api/syncro/webhook"),
+  similarTickets: (ticketId: string) => get<SimilarTickets>(`/api/tickets/${enc(ticketId)}/similar`),
+  incidents: (q: { status?: IncidentStatus; orgId?: string } = {}) => get<Incident[]>("/api/incidents", q),
+  incident: (id: string) => get<{ incident: Incident; tickets: Ticket[] }>(`/api/incidents/${enc(id)}`),
+  createIncident: (title: string, ticketIds: string[]) => post<Incident>("/api/incidents", { title, ticketIds }),
+  renameIncident: (id: string, title: string) => patch<Incident>(`/api/incidents/${enc(id)}`, { title }),
+  messageIncident: (id: string, message: string) => post<MessageAllResult>(`/api/incidents/${enc(id)}/message`, { message }),
+  resolveIncident: (id: string, message: string) => post<{ incident: Incident; resolvedTickets: number; message: MessageAllResult | null }>(`/api/incidents/${enc(id)}/resolve`, { message }),
+  dismissIncident: (id: string) => post<Incident>(`/api/incidents/${enc(id)}/dismiss`),
+  setTicketIncident: (ticketId: string, incidentId: string | null) => put<Ticket>(`/api/tickets/${enc(ticketId)}/incident`, { incidentId }),
+  assist: (ticketId: string, mode: AssistMode, instruction = "") => post<AssistResult>(`/api/tickets/${enc(ticketId)}/assist`, { mode, instruction }),
+  statusLink: (ticketId: string) => get<{ url: string | null }>(`/api/tickets/${enc(ticketId)}/status-link`),
+  requesterSnapshot: (ticketId: string) => get<RequesterSnapshot>(`/api/tickets/${enc(ticketId)}/requester`),
   rotateSyncroWebhook: () => post<SyncroWebhook>("/api/syncro/webhook/rotate"),
 };
 
