@@ -202,6 +202,7 @@ export const PROVIDERS: ProviderInfo[] = [
       "Grant: Assets (list/search, view details), Customers (view detail, for contacts), RMM Alerts (list, delete, and mute), and Scripts - Execute if Haley should run scripts.",
       "Copy the Syncro customer ID from the customer's URL, and list the ids of scripts Haley may run (from each script's URL).",
       "One token can serve every client; Haley only reads and acts on assets and alerts of the customer you enter here.",
+      "Optional: add the SyncroMSP webhook URL (PSA sync page) to a Notification Set with RMM alert events, so alert tickets open within seconds.",
     ],
     capabilities: ["Device inventory & health flags", "Missing & failed patches", "Installed software", "Active alerts (mute, clear)", "Run allowed scripts", "Optional ticket per new alert"],
     supportsSandbox: false,

@@ -18,6 +18,8 @@ import {
   Wand2,
   X,
   Timer,
+  RotateCw,
+  Webhook,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
@@ -34,6 +36,7 @@ import {
   type PsaProviderInfo,
   type SyncResult,
 } from "../api";
+import { CopyButton } from "../components/CopyButton";
 import { Disclosure } from "../components/Disclosure";
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
 import { ConfirmModal, Modal } from "../components/Modal";
@@ -126,6 +129,9 @@ export function PsaPage() {
           ))}
         </div>
       )}
+
+      {/* Also serves Syncro RMM alert tickets, which don't need a PSA connection. */}
+      {(list.some((c) => c.kind === "syncro") || providers.data?.some((p) => p.id === "syncro")) && <SyncroWebhookCard />}
 
       {list.length > 0 && (
         <p className="muted" style={{ fontSize: "var(--text-sm)", marginTop: 16 }}>
@@ -349,6 +355,68 @@ function SyncStat({ label, value, icon }: { label: string; value: number; icon: 
       </span>
       <span className="sync-stat-value num">{formatNumber(value)}</span>
     </div>
+  );
+}
+
+/** The Syncro webhook URL: lets Syncro tell Haley about ticket and alert changes instead of waiting for the next sync. */
+function SyncroWebhookCard() {
+  const { toast } = useApp();
+  const hook = usePoll(() => api.syncroWebhook(), []);
+  const [confirmRotate, setConfirmRotate] = useState(false);
+  const [rotating, setRotating] = useState(false);
+  const rotate = async () => {
+    setRotating(true);
+    try {
+      await api.rotateSyncroWebhook();
+      toast("New webhook URL created. Update it in Syncro; the old one no longer works.");
+      setConfirmRotate(false);
+      void hook.reload();
+    } catch (err) {
+      toast(errorMessage(err), "error");
+    } finally {
+      setRotating(false);
+    }
+  };
+  return (
+    <section className="card syncro-webhook" aria-labelledby="syncro-webhook-title">
+      <div className="card-header">
+        <Webhook className="icon-sm muted" aria-hidden="true" />
+        <h2 id="syncro-webhook-title">SyncroMSP webhook</h2>
+        <span className="muted" style={{ fontSize: "var(--text-sm)" }}>optional</span>
+      </div>
+      <div className="card-body stack-sm">
+        <p className="secondary" style={{ margin: 0, fontSize: "var(--text-sm)" }}>
+          If you use SyncroMSP, Haley picks up ticket changes and new RMM alerts within seconds instead of every couple of minutes. In Syncro go to Admin → Notification Center → Notification Sets, tick <strong>Webhook</strong> for
+          the ticket and RMM alert events you want, and paste this URL. Syncro doesn't sign webhooks, so Haley treats each one only as a nudge and re-reads
+          everything from Syncro's API.
+        </p>
+        {hook.data ? (
+          <div className="row" style={{ gap: 8, minWidth: 0 }}>
+            <code className="webhook-url" title={hook.data.url}>
+              {hook.data.url}
+            </code>
+            <CopyButton value={hook.data.url} />
+            <button className="btn btn-sm btn-ghost" onClick={() => setConfirmRotate(true)}>
+              <RotateCw className="icon-sm" aria-hidden="true" /> New URL
+            </button>
+          </div>
+        ) : hook.error ? (
+          <ErrorBanner error={hook.error} onRetry={hook.reload} />
+        ) : (
+          <Spinner />
+        )}
+      </div>
+      <ConfirmModal
+        open={confirmRotate}
+        title="Create a new webhook URL?"
+        confirmLabel="Create new URL"
+        busy={rotating}
+        onClose={() => setConfirmRotate(false)}
+        onConfirm={() => void rotate()}
+      >
+        The current URL stops working right away. Do this if the URL leaked, then paste the new one into Syncro.
+      </ConfirmModal>
+    </section>
   );
 }
 

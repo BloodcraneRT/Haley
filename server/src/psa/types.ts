@@ -59,6 +59,45 @@ export interface PsaAdapter {
   }): Promise<{ id: string; number: string }>;
   /** Adds a time entry for Haley's work to the PSA ticket and returns its id. PSAs without it don't log time. */
   logTime?(ticketId: string, entry: TimeEntry): Promise<string>;
+  /** The MSP's saved replies matching a search. */
+  findCannedResponses?(query: string): Promise<CannedResponse[]>;
+  /** A customer's contracts (agreements), for checking what work is covered. */
+  listContracts?(customerId: string): Promise<Contract[]>;
+  /** Books an appointment (e.g. an on-site visit) on the PSA calendar, linked to a ticket when given. */
+  createAppointment?(input: AppointmentInput): Promise<{ id: string }>;
+}
+
+export interface CannedResponse {
+  title: string;
+  subject: string;
+  body: string;
+  category: string;
+}
+
+export interface Contract {
+  id: string;
+  name: string;
+  status: string;
+  startDate: string | null;
+  endDate: string | null;
+  description: string;
+  /** Products (labor, services) with contracted pricing. */
+  coveredProductIds: string[];
+  /** Products the contract makes non-billable. */
+  nonBillableProductIds: string[];
+}
+
+export interface AppointmentInput {
+  customerId: string;
+  /** The PSA ticket it's for, if any. */
+  ticketId: string | null;
+  summary: string;
+  description: string;
+  startAt: string;
+  endAt: string;
+  location?: string;
+  /** Let the PSA email the customer about it. */
+  emailCustomer: boolean;
 }
 
 export interface TimeEntry {

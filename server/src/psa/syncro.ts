@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter, TimeEntry } from "./types.js";
+import type { AppointmentInput, CannedResponse, Contract, ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -175,6 +175,50 @@ export class SyncroAdapter implements PsaAdapter {
 
   async setStatus(ticketId: string, status: TicketStatus): Promise<void> {
     await this.call("PUT", `/tickets/${ticketId}`, { status: toSyncroStatus(status) });
+  }
+
+  /** GET /canned_responses?query= (the token needs "Ticket Canned Responses - Manage", even to read). */
+  async findCannedResponses(query: string): Promise<CannedResponse[]> {
+    const data = await this.call<Json>("GET", `/canned_responses?query=${encodeURIComponent(query)}`);
+    return ((data.canned_responses ?? []) as Json[]).map((c) => ({
+      title: String(c.title ?? ""),
+      subject: String(c.subject ?? ""),
+      body: String(c.body ?? ""),
+      category: String(c.category_name ?? ""),
+    }));
+  }
+
+  /** GET /contracts has no customer filter, so pages are filtered here. */
+  async listContracts(customerId: string): Promise<Contract[]> {
+    const contracts = await this.pages<Json>("/contracts", "contracts");
+    return contracts
+      .filter((c) => String(c.customer_id) === String(customerId))
+      .map((c) => ({
+        id: String(c.id),
+        name: String(c.name ?? `Contract ${c.id}`),
+        status: String(c.status ?? ""),
+        startDate: c.start_date ?? null,
+        endDate: c.end_date ?? null,
+        description: String(c.description ?? ""),
+        coveredProductIds: ((c.product_price_overrides ?? []) as Json[]).filter((o) => !o.blacklisted).map((o) => String(o.product_id)),
+        nonBillableProductIds: ((c.non_billable_product_ids ?? []) as unknown[]).map(String),
+      }));
+  }
+
+  /** POST /appointments, linked to the ticket. Syncro emails the customer only when asked. */
+  async createAppointment(input: AppointmentInput): Promise<{ id: string }> {
+    const data = await this.call<Json>("POST", "/appointments", {
+      summary: input.summary,
+      description: input.description,
+      start_at: input.startAt,
+      end_at: input.endAt,
+      customer_id: Number(input.customerId),
+      ...(input.ticketId ? { ticket_id: Number(input.ticketId) } : {}),
+      ...(input.location ? { location: input.location } : {}),
+      email_customer: input.emailCustomer,
+      do_not_email: !input.emailCustomer,
+    });
+    return { id: String(data.appointment?.id ?? data.id ?? "") };
   }
 
   /** POST /tickets/{id}/timer_entry: a recorded (not yet charged) timer entry; technicians decide what to bill. */
