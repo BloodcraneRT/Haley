@@ -209,13 +209,14 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
 
   app.get("/api/stats", async () => {
     const orgs = new Map(store.listOrgs().map((o) => [o.id, o]));
-    const open = store.listTickets({ status: "open", limit: 10_000 });
-    const slaBreached = open.filter((t) => {
+    const nowMs = Date.now();
+    let slaBreached = 0;
+    for (const t of store.openTicketsForSla()) {
       const org = orgs.get(t.org_id);
-      if (!org) return false;
-      const sla = slaFor(t, org.settings.sla);
-      return sla.response === "breached" || sla.resolution === "breached";
-    }).length;
+      if (!org) continue;
+      const sla = slaFor(t, org.settings.sla, nowMs);
+      if (sla.response === "breached" || sla.resolution === "breached") slaBreached++;
+    }
     return { ...store.stats(), slaBreached, schedules: store.listSchedules().filter((s) => s.enabled && s.next_run_at).length };
   });
   app.get("/api/providers", async () => PROVIDERS);

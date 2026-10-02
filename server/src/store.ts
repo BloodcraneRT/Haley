@@ -308,6 +308,21 @@ export class Store {
     return (this.db.prepare(sql).all(...args) as Row[]).map((r) => this.toTicket(r));
   }
 
+  /** Scan open tickets for SLA checks without a queue-size cap or a UI priority sort. */
+  *openTicketsForSla(): Generator<Ticket> {
+    // Page by immutable ticket number: SLA sweeps can change status and updated_at while scanning.
+    // Each query materializes only one batch and every open ticket is considered.
+    const statement = this.db.prepare(`SELECT * FROM tickets
+      WHERE status NOT IN ('resolved', 'closed') AND number > ? ORDER BY number LIMIT 1000`);
+    let after = 0;
+    for (;;) {
+      const rows = statement.all(after) as Row[];
+      if (!rows.length) return;
+      for (const row of rows) yield this.toTicket(row);
+      after = Number(rows[rows.length - 1].number);
+    }
+  }
+
   /** Exact client queue counts, independent of the dashboard's ticket-list limit. */
   countOpenTicketsByOrg(): Map<string, number> {
     const rows = this.db.prepare("SELECT org_id, COUNT(*) AS n FROM tickets WHERE status NOT IN ('resolved', 'closed') GROUP BY org_id").all() as Row[];
@@ -566,6 +581,13 @@ export class Store {
       )
       .get(id);
     return (row as unknown as Run) ?? null;
+  }
+
+  activeTicketRun(ticketId: string): Run | undefined {
+    const row = this.db.prepare(`SELECT id FROM runs WHERE ticket_id = ?
+      AND status IN ('queued', 'running', 'awaiting_approval') ORDER BY created_at DESC, rowid DESC LIMIT 1`)
+      .get(ticketId) as { id: string } | undefined;
+    return row ? this.getRun(row.id) ?? undefined : undefined;
   }
 
   listRuns(filter: { orgId?: string; ticketId?: string; kind?: RunKind; limit?: number } = {}): Run[] {
@@ -1274,9 +1296,8 @@ export class Store {
   }
 
   dueSchedules(at: string): Schedule[] {
-    return (this.db.prepare("SELECT id FROM schedules WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at").all(at) as Row[]).map(
-      (r) => this.getSchedule(r.id as string)!,
-    );
+    return (this.db.prepare("SELECT * FROM schedules WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at").all(at) as Row[])
+      .map((r) => ({ ...(r as unknown as Schedule), enabled: Boolean(r.enabled) }));
   }
 
   updateSchedule(

@@ -118,8 +118,11 @@ export class NinjaOneApi {
     const pageSize = 1000;
     const all: NinjaDevice[] = [];
     let after: number | undefined;
-    while (all.length < max) {
+    for (;;) {
       const page = await this.request<NinjaDevice[]>("GET", `/v2/organization/${orgId}/devices`, { pageSize, after });
+      if (all.length + (page?.length ?? 0) > max) {
+        throw new ConnectorError(`NinjaOne device collection is incomplete: more than ${max} devices. Use a numeric device id for an individual device.`);
+      }
       all.push(...(page ?? []));
       if (!page || page.length < pageSize) break;
       after = page[page.length - 1].id;

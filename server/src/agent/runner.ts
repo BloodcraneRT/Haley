@@ -109,7 +109,7 @@ export class AgentService {
   }
 
   activeRun(ticketId: string): Run | undefined {
-    return this.store.listRuns({ ticketId }).find((r) => ["queued", "running", "awaiting_approval"].includes(r.status));
+    return this.store.activeTicketRun(ticketId);
   }
 
   // ------------------------------------------------------------ approval

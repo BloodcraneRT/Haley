@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { readCapped, validatePublicHttpsUrl } from "../http.js";
+import { clip, readCapped, validatePublicHttpsUrl } from "../http.js";
 import { ConnectorError, defineTool, type HaleyTool } from "../types.js";
 
 /**
@@ -106,10 +106,17 @@ export class RestApi {
   /** Removes the secret wherever an API echoes it back (headers dumps, debug output, error messages). */
   scrub(text: string): string {
     const secret = this.config.authValue;
-    let out = text.split(secret).join("[redacted]");
+    let out = text;
+    const redact = (value: string) => {
+      // JSON responses escape quotes/backslashes in header values before we render them.
+      for (const form of new Set([JSON.stringify(value).slice(1, -1), value])) {
+        out = out.split(form).join("[redacted]");
+      }
+    };
+    redact(secret);
     // Also the bare token when the value is "Bearer xyz" / "Basic xyz".
     const token = secret.replace(/^\s*(bearer|basic|token|apikey)\s+/i, "");
-    if (token.length >= 8 && token !== secret) out = out.split(token).join("[redacted]");
+    if (token.length >= 8 && token !== secret) redact(token);
     return out;
   }
 
@@ -146,6 +153,11 @@ export class RestApi {
       }
     }
     let rendered = this.scrub(typeof data === "string" ? data : JSON.stringify(data));
+    // Scrub before clipping, so a credential at the truncation boundary cannot leak a prefix.
+    // Failed changes must take the runner's failure path, rather than being audited as executed.
+    if (method !== "GET" && !res.ok) {
+      throw new ConnectorError(`${this.config.name} API returned ${res.status}${rendered ? `: ${clip(rendered, 300)}` : ""}`, res.status);
+    }
     const truncated = cut || rendered.length > REST_MAX_RESULT;
     if (rendered.length > REST_MAX_RESULT) rendered = rendered.slice(0, REST_MAX_RESULT);
     // Structured JSON when it survived intact; otherwise the (possibly cut) text.

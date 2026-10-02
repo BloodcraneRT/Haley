@@ -56,15 +56,23 @@ export function itGlueTools(api: ItGlueApi, orgId: string): HaleyTool[] {
   const own = (r: Resource) => String(r.attributes["organization-id"]) === orgId;
 
   const list = async (kind: string, query: Record<string, string> = {}): Promise<Resource[]> => {
-    const { data } = await api.get<{ data: Resource[] }>(`${base}/${kind}`, { "page[size]": "1000", ...query });
-    return (data ?? []).filter(own);
+    const all: Resource[] = [];
+    const max = 5000;
+    for (let page = 1; ; page++) {
+      const { data = [] } = await api.get<{ data?: Resource[] }>(`${base}/${kind}`, { ...query, "page[size]": "1000", "page[number]": String(page) });
+      if (all.length + data.length > max) {
+        throw new ConnectorError(`IT Glue ${kind} collection is incomplete: more than ${max} records.`);
+      }
+      all.push(...data);
+      if (data.length < 1000) return all.filter(own);
+    }
   };
 
   return [
     defineTool({
       name: "itglue_search_documents",
       description:
-        "Search this client's IT Glue documents (runbooks, how-tos, network and vendor notes) by name. Check it before troubleshooting something client-specific, then read the right one with itglue_get_document.",
+        "Search this client's IT Glue documents (runbooks, how-tos, network and vendor notes) by name. Check it before troubleshooting something client-specific, then read the right one with itglue_get_document. At most 50 matches are shown; narrow the search when truncated is true.",
       input: z.object({ search: z.string().optional().describe("Words from the document name, e.g. 'VPN' or 'printer'") }),
       risk: "read",
       run: async ({ search }) => {
@@ -74,6 +82,7 @@ export function itGlueTools(api: ItGlueApi, orgId: string): HaleyTool[] {
         const hits = docs.filter((d) => words.every((w) => matches(w, String(d.attributes.name ?? ""))));
         return {
           count: hits.length,
+          truncated: hits.length > 50,
           documents: hits.slice(0, 50).map((d) => ({
             id: d.id,
             name: d.attributes.name,
@@ -118,7 +127,7 @@ export function itGlueTools(api: ItGlueApi, orgId: string): HaleyTool[] {
     defineTool({
       name: "itglue_list_configurations",
       description:
-        "List this client's IT Glue configurations (documented devices: servers, workstations, firewalls, switches, printers) with type, IP, serial, OS, model and warranty. Optional search matches name, hostname, IP or serial.",
+        "List this client's IT Glue configurations (documented devices: servers, workstations, firewalls, switches, printers) with type, IP, serial, OS, model and warranty. Optional search matches name, hostname, IP or serial. At most 100 matches are shown; narrow the search when truncated is true.",
       input: z.object({
         search: z.string().optional(),
         includeArchived: z.boolean().default(false),
@@ -134,6 +143,7 @@ export function itGlueTools(api: ItGlueApi, orgId: string): HaleyTool[] {
         ];
         return stripSecrets({
           count: configs.length,
+          truncated: configs.length > 100,
           configurations: configs.slice(0, 100).map((c) => ({
             id: c.id,
             ...Object.fromEntries(keep.filter((k) => c.attributes[k] != null).map((k) => [k, k === "notes" ? clip(htmlToText(String(c.attributes[k])), 500) : c.attributes[k]])),

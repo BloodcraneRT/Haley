@@ -35,6 +35,21 @@ export class HuduApi {
     if (!res.ok) throw await apiError(res, "Hudu");
     return (await res.json()) as T;
   }
+
+  /** Hudu's documented default pagination is 25 items, with numbered pages. */
+  async list<T>(path: string, key: string, query: Record<string, string | number | undefined>): Promise<T[]> {
+    const all: T[] = [];
+    const max = 5000;
+    for (let page = 1; ; page++) {
+      const response = await this.get<Record<string, T[]>>(path, { ...query, page });
+      const items = response[key] ?? [];
+      if (all.length + items.length > max) {
+        throw new ConnectorError(`Hudu ${key} collection is incomplete: more than ${max} results. Narrow the search.`);
+      }
+      all.push(...items);
+      if (items.length < 25) return all;
+    }
+  }
 }
 
 interface HuduArticle {
@@ -69,15 +84,16 @@ export function huduTools(api: HuduApi, companyId: number): HaleyTool[] {
     defineTool({
       name: "hudu_search_articles",
       description:
-        "Search this client's Hudu knowledge base articles (runbooks, how-tos, vendor and network notes). Check it before troubleshooting something client-specific, then read the right one with hudu_get_article.",
+        "Search this client's Hudu knowledge base articles (runbooks, how-tos, vendor and network notes). Check it before troubleshooting something client-specific, then read the right one with hudu_get_article. At most 50 matches are shown; narrow the search when truncated is true.",
       input: z.object({ search: z.string().optional().describe("Words to search for, e.g. 'VPN' or 'printer'") }),
       risk: "read",
       run: async ({ search }) => {
-        const { articles = [] } = await api.get<{ articles?: HuduArticle[] }>("/articles", { company_id: companyId, search: search?.trim(), page_size: 50 });
+        const articles = await api.list<HuduArticle>("/articles", "articles", { company_id: companyId, search: search?.trim() });
         const mine = articles.filter((a) => own(a) && !a.draft);
         return {
           count: mine.length,
-          articles: mine.map((a) => ({ id: a.id, name: a.name, updated: a.updated_at, url: a.url, preview: clip(htmlToText(a.content), 200) })),
+          truncated: mine.length > 50,
+          articles: mine.slice(0, 50).map((a) => ({ id: a.id, name: a.name, updated: a.updated_at, url: a.url, preview: clip(htmlToText(a.content), 200) })),
         };
       },
     }),
@@ -95,23 +111,23 @@ export function huduTools(api: HuduApi, companyId: number): HaleyTool[] {
     defineTool({
       name: "hudu_search_assets",
       description:
-        "Search this client's Hudu assets (computers, network gear, printers, contacts, applications, and other documented items) with their fields. Passwords are never included.",
+        "Search this client's Hudu assets (computers, network gear, printers, contacts, applications, and other documented items) with their fields. Passwords are never included. At most 50 matches are shown; narrow the search when truncated is true.",
       input: z.object({
         search: z.string().optional().describe("Name or other text to search for"),
         includeArchived: z.boolean().default(false),
       }),
       risk: "read",
       run: async ({ search, includeArchived }) => {
-        const { assets = [] } = await api.get<{ assets?: HuduAsset[] }>("/assets", {
+        const assets = await api.list<HuduAsset>("/assets", "assets", {
           company_id: companyId,
           search: search?.trim(),
           archived: includeArchived ? undefined : "false",
-          page_size: 50,
         });
         const mine = assets.filter((a) => own(a) && (includeArchived || !a.archived));
         return stripSecrets({
           count: mine.length,
-          assets: mine.map((a) => ({
+          truncated: mine.length > 50,
+          assets: mine.slice(0, 50).map((a) => ({
             id: a.id,
             name: a.name,
             type: a.asset_type,
