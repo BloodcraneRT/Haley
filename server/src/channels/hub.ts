@@ -61,11 +61,18 @@ export class ChannelHub implements ReplyDelivery {
     return null;
   }
 
+  /** The requester's private status page for a ticket (signed, expiring link). */
+  statusLink(ticket: Ticket): string | null {
+    return this.publicUrl ? `${this.publicUrl}/t/${this.store.statusToken(ticket.id)}` : null;
+  }
+
   async deliverReply(ticket: Ticket, text: string): Promise<DeliveryResult> {
     const adapter = this.adapterFor(ticket);
     if (!adapter) return { delivered: false, detail: "Posted on the ticket; no outbound channel is configured for this requester." };
+    // Emails carry a link to the request's status page, where the requester can follow, reply and confirm.
+    const link = adapter.channel === "email" ? this.statusLink(ticket) : null;
     try {
-      return await adapter.send(ticket, text);
+      return await adapter.send(ticket, link ? `${text}\n\n—\nSee or reply to this request: ${link}` : text);
     } catch (err) {
       return { delivered: false, detail: `Delivery over ${adapter.channel} failed: ${err instanceof Error ? err.message : String(err)}` };
     }

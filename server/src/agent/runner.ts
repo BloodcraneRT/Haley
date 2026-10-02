@@ -1,3 +1,4 @@
+import { incidentContext } from "../incidents.js";
 import { z } from "zod";
 import type { HaleyConfig } from "../config.js";
 import { SensitiveResult, type Connector, type HaleyTool, type ToolContext } from "../connectors/types.js";
@@ -78,7 +79,8 @@ export class AgentService {
       createdBy,
     });
     const history = this.store.listTicketEvents(ticketId).filter((event) => !event.meta.untrustedContinuation);
-    const intro = `${this.header(org)}\n\n${ticketContext(ticket, history)}\n\n${
+    const incident = incidentContext(this.store, this.store.getTicket(ticketId) ?? ticket);
+    const intro = `${this.header(org)}\n\n${ticketContext(ticket, history)}\n\n${incident ? `${incident}\n\n` : ""}${
       followUp
         ? `This is a follow-up you scheduled earlier on this ticket. Do this now: ${followUp}${mode === "plan" ? `\n\n${PLAN_MODE_TEXT}` : ""}`
         : mode === "plan"

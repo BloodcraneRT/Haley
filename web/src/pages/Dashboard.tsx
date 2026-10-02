@@ -23,6 +23,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api, errorMessage } from "../api";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
+import { OpenIncidentsBanner } from "../components/Incidents";
 import { PageHeader } from "../components/PageHeader";
 import { Priority } from "../components/Pill";
 import { RelativeTime } from "../components/RelativeTime";
@@ -199,6 +200,7 @@ export function DashboardPage() {
 
       {!noOrgs && (
         <>
+          <OpenIncidentsBanner />
           <div className="kpis kpis-dashboard">
             <Kpi label="Open tickets" value={stats?.openTickets} icon={<TicketIcon className="icon-sm" />} to="/tickets?status=open" />
             <Kpi

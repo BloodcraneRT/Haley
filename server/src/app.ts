@@ -12,7 +12,7 @@ import { AgentService, ApproverNotAllowedError, RunConflictError } from "./agent
 import { TASK_TEMPLATES, templateAvailability } from "./agent/templates.js";
 import type { HaleyConfig } from "./config.js";
 import { buildConnector, PROVIDERS, providerInfo, validateProviderConfig } from "./connectors/registry.js";
-import { ConnectorError, type Connector } from "./connectors/types.js";
+import { ConnectorError, type Connector, type HaleyTool } from "./connectors/types.js";
 import { openDb } from "./db.js";
 import { seedDemo } from "./demo.js";
 import { Store } from "./store.js";
@@ -24,6 +24,12 @@ import { TeamsChannel } from "./channels/teams.js";
 import { clientReport } from "./report.js";
 import { psaConnectorsFor } from "./psa/tools.js";
 import { SyncroAlertTickets } from "./monitoring/syncroAlerts.js";
+import { rankSimilar, tokens } from "./similar.js";
+import { IncidentDetector } from "./incidents.js";
+import { registerIncidentRoutes } from "./routes/incidents.js";
+import { assist } from "./copilot.js";
+import { registerStatusPage } from "./routes/statusPage.js";
+import { requesterSnapshot } from "./snapshot.js";
 import { runCost, usageCsv, usageReport } from "./usage.js";
 import { PSA_PROVIDERS, buildPsaAdapter } from "./psa/registry.js";
 import "./psa/dynamics.js";
@@ -154,7 +160,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   hub.register(psa.channelAdapter("autotask"));
   hub.register(psa.channelAdapter("halopsa"));
 
-  const agent = new AgentService(store, llm ? () => llm : (orgId) => models.clientFor(orgId), config, connectorsFor, hub);
+  const llmFor = llm ? () => llm : (orgId: string) => models.clientFor(orgId);
+  const agent = new AgentService(store, llmFor, config, connectorsFor, hub);
   hub.attach(agent);
   agent.recoverInterrupted();
   const alertTickets = new SyncroAlertTickets(store, agent, fetchImpl);
@@ -179,6 +186,10 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
 
   registerHooks(app, { config: ch, store, hub, slack, teams, log: (err) => app.log.error(err) });
   registerSecretLinks(app, store);
+  const incidents = new IncidentDetector(store);
+  store.onTicketCreated((ticket) => void incidents.onTicketCreated(ticket));
+  registerIncidentRoutes(app, { store, hub, detector: incidents, actor });
+  registerStatusPage(app, { store, hub });
   const syncroWebhook = registerSyncroWebhook(app, { store, psa, alerts: alertTickets, publicUrl: ch.publicUrl, actor, log: (err) => app.log.error(err) });
   app.addHook("onClose", async () => syncroWebhook.stop());
   registerMemoryRoutes(app, store, actor);
@@ -556,6 +567,61 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       { id: "teams", name: "Microsoft Teams", enabled: hub.has("teams"), inbound: hub.has("teams"), outbound: hub.has("teams"), webhookUrl: `${base}/hooks/teams/messages`, env: ["HALEY_TEAMS_APP_ID", "HALEY_TEAMS_APP_PASSWORD", "HALEY_TEAMS_TENANT_ID"] },
       { id: "chat", name: "Chat bridge (Google Chat, SMS, custom)", enabled: Boolean(config.channels.chatWebhookSecret), inbound: Boolean(config.channels.chatWebhookSecret), outbound: Boolean(config.channels.chatWebhookSecret), webhookUrl: `${base}/hooks/chat`, env: ["HALEY_CHAT_WEBHOOK_SECRET"] },
     ];
+  });
+
+  /** The technician copilot: a reply draft, next steps or a summary for a ticket. Nothing is sent or changed. */
+  app.post<{ Params: { id: string } }>("/api/tickets/:id/assist", async (req) => {
+    const ticket = store.getTicket(req.params.id);
+    if (!ticket) throw notFound("Ticket");
+    const input = body(z.object({ mode: z.enum(["draft_reply", "next_steps", "summarize"]), instruction: z.string().trim().max(1000).default("") }), req);
+    const org = store.getOrg(ticket.org_id);
+    if (org?.settings.paused) throw new HttpError(409, `Haley is paused for ${org.name}.`);
+    const result = await assist({ store, llm: llmFor(ticket.org_id) }, ticket, input.mode, input.instruction);
+    store.audit({ orgId: ticket.org_id, actor: actor(req), action: "ticket.assist", target: ticket.id, detail: { mode: input.mode, model: result.model } });
+    return result;
+  });
+
+  /** Past tickets like this one (with how they were fixed) and matching knowledge base articles. */
+  app.get<{ Params: { id: string } }>("/api/tickets/:id/similar", async (req) => {
+    const ticket = store.getTicket(req.params.id);
+    if (!ticket) throw notFound("Ticket");
+    const candidates = store.listTickets({ orgId: ticket.org_id, limit: 2000 });
+    const tickets = rankSimilar(ticket, candidates, 0.34, 6).map(({ ticket: t, score, shared }) => {
+      const run = store.listRuns({ ticketId: t.id }).find((r) => r.status === "completed" && r.mode === "live" && r.summary.trim());
+      return {
+        id: t.id,
+        number: t.number,
+        title: t.title,
+        status: t.status,
+        created_at: t.created_at,
+        resolved_at: t.resolved_at,
+        score: Math.round(score * 100) / 100,
+        matched: shared.slice(0, 6),
+        resolution: run ? run.summary.trim().slice(0, 400) : null,
+      };
+    });
+    const query = tokens(`${ticket.title} ${ticket.description}`, 8).join(" ");
+    const articles = query
+      ? store.searchArticles({ orgId: ticket.org_id, query: tokens(ticket.title, 4).join(" ") || query, limit: 5 }).map((a) => ({ id: a.id, title: a.title, scope: a.org_id ? "client" : "global" }))
+      : [];
+    return { tickets, articles };
+  });
+
+  /** The requester's status page link, for a technician to share. */
+  app.get<{ Params: { id: string } }>("/api/tickets/:id/status-link", async (req) => {
+    const ticket = store.getTicket(req.params.id);
+    if (!ticket) throw notFound("Ticket");
+    store.audit({ orgId: ticket.org_id, actor: actor(req), action: "ticket.status_link", target: ticket.id });
+    return { url: hub.statusLink(ticket) };
+  });
+
+  /** The requester's account, devices and recent tickets, from the client's connected systems (read-only). */
+  app.get<{ Params: { id: string } }>("/api/tickets/:id/requester", async (req) => {
+    const ticket = store.getTicket(req.params.id);
+    if (!ticket) throw notFound("Ticket");
+    const tools = new Map<string, HaleyTool>();
+    for (const connector of connectorsFor(ticket.org_id)) for (const tool of connector.tools) tools.set(tool.name, tool);
+    return requesterSnapshot(store, ticket, tools);
   });
 
   app.get<{ Params: { id: string } }>("/api/tickets/:id", async (req) => {

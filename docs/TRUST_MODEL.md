@@ -127,6 +127,18 @@ Ticket text, emails and chat messages come from end users. Haley treats them as 
 - Ticket runs can read shared knowledge articles but can only create or update articles for their own client. Global procedures can be authored through technician tasks.
 - **Client memory** (short notes Haley sees on every later run for a client) can't be planted by an end user. Notes Haley saves while working an end user's ticket stay *pending* and never reach the model until a technician confirms them on the client's page. Notes that look like credentials or codes are refused. Memory is per client and never shared across clients.
 
+## Help desk features
+
+- **Requester snapshot:** read-only lookups from the client's own systems, shown to technicians only. Nothing from it is sent to the model.
+- **Copilot (draft reply, next steps, summary):** one model call with no tools. It can't change anything or contact anyone. The technician edits and sends any draft, and each use is audited and billed to the client.
+- **Incidents:** these group tickets but change nothing on their own. Messaging everyone, or resolving everyone's tickets, is a technician action and is audited.
+- **Status page links:**
+  - A link is signed with the server's secret key, expires after 60 days, and is sent only to the requester.
+  - The page shows the public conversation only, never internal notes or actions.
+  - A link can be forwarded, so a reply from the page counts only as email-level identity. On tickets that began on Slack, Teams or chat, those replies are recorded for a technician without Haley acting on them.
+  - "It's fixed" can only close a resolved ticket.
+  - Messages are limited to 10 per hour per ticket.
+
 ## Accountability
 
 - Every tool call is recorded with its input, risk, Haley's stated rationale, the policy's reason and the outcome.

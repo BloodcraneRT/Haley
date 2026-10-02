@@ -5640,3 +5640,245 @@ a.psa-source-chip:hover {
   border-radius: var(--radius);
   background: var(--surface-2, var(--surface));
 }
+
+/* Requester snapshot (ticket sidebar) */
+.requester-snapshot .card-body {
+  font-size: var(--text-sm);
+}
+
+.snapshot-flags {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.snapshot-flag {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: var(--radius);
+  line-height: 1.35;
+}
+
+.snapshot-flag svg {
+  margin-top: 2px;
+  flex: none;
+}
+
+.snapshot-flag.is-warning {
+  background: var(--tone-amber-bg);
+  color: var(--tone-amber-fg);
+}
+
+.snapshot-flag.is-info {
+  background: var(--tone-blue-bg);
+  color: var(--tone-blue-fg);
+}
+
+.snapshot-facts {
+  display: grid;
+  grid-template-columns: minmax(70px, auto) 1fr;
+  gap: 6px 10px;
+  margin: 0;
+}
+
+.snapshot-facts dt {
+  color: var(--text-3);
+}
+
+.snapshot-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.snapshot-name {
+  font-weight: 560;
+}
+
+.snapshot-mfa {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--tone-green-fg);
+}
+
+.snapshot-mfa.is-missing {
+  color: var(--tone-red-fg);
+}
+
+.snapshot-section h3 {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  margin: 4px 0 6px;
+}
+
+.snapshot-devices,
+.snapshot-tickets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.snapshot-devices li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.snapshot-devices li svg {
+  margin-top: 3px;
+  flex: none;
+}
+
+.snapshot-device-name {
+  font-weight: 520;
+}
+
+.snapshot-device-issues {
+  color: var(--tone-amber-fg);
+}
+
+.snapshot-tickets li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.snapshot-tickets a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snapshot-unavailable,
+.snapshot-loading {
+  margin: 0;
+}
+
+/* Incidents (likely outages) */
+.incident-banners {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.incident-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--tone-amber-dot) 55%, var(--border));
+  background: var(--tone-amber-bg);
+  color: var(--tone-amber-fg);
+  border-radius: var(--radius-lg);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+.incident-banner:hover {
+  text-decoration: none;
+  border-color: var(--tone-amber-dot);
+}
+
+.incident-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.incident-banner-text .muted {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.incident-ticket {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Similar tickets (ticket sidebar) */
+.similar-tickets .card-body {
+  font-size: var(--text-sm);
+}
+
+.similar-list,
+.similar-articles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.similar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.similar-head a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.similar-resolution {
+  margin: 2px 0 0;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.similar-subhead {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  margin: 4px 0 6px;
+}
+
+.similar-articles li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Technician copilot */
+.copilot-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+  font-size: var(--text-sm);
+}
+
+.copilot-advice .card-header {
+  gap: 8px;
+}
+
+.copilot-advice .card-header h2 {
+  margin: 0;
+}
