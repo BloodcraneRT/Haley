@@ -5618,3 +5618,25 @@ a.psa-source-chip:hover {
   width: 100%;
   min-width: 0;
 }
+
+/* Syncro webhook URL on the PSA page */
+.syncro-webhook {
+  margin-top: 16px;
+}
+
+.syncro-webhook .card-header {
+  gap: 8px;
+}
+
+.webhook-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2, var(--surface));
+}

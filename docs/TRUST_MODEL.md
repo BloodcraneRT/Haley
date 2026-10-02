@@ -113,6 +113,11 @@ Ticket text, emails and chat messages come from end users. Haley treats them as 
 - Customer changes are gated by the policy above, whatever the model has been talked into.
 - Credentials never enter the model's context.
 - Tools only reach the ticket's own client.
+- The SyncroMSP webhook isn't signed by Syncro, so a delivery is only a nudge.
+  - Haley never reads its body; she re-reads tickets and alerts from Syncro's API, as the regular sync does.
+  - The URL holds a 48-character secret that can be rotated.
+  - Bursts are collapsed to at most one sync every 10 seconds.
+- Booking a PSA appointment is a write, so it follows the client's policy like any other change.
 - RMM alert text comes from the monitored machine, so it's handled like ticket text.
   - Syncro scripts are limited to a per-client allowlist the MSP enters.
   - Scripts whose names suggest removing or disabling something always wait for a technician.

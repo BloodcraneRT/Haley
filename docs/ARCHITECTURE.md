@@ -135,6 +135,17 @@ Ticket text comes from end users. The system prompt tells the model to treat it 
 - **Limits:** at most 5 tickets per check and 20 per client per hour; the rest wait for later checks.
 - **Policy:** the runner gives monitoring tickets a requester flagged `monitoring`, so in Unattended mode routine fixes run as in Autonomous mode (see [TRUST_MODEL.md](TRUST_MODEL.md)).
 
+## PSA tools and the Syncro webhook
+
+`psa/tools.ts` gives Haley tools from the client's PSA beyond ticket sync, for the first enabled PSA connection that maps the client. Each tool exists only when the adapter implements the optional method behind it:
+- `psa_find_canned_response` (`findCannedResponses`)
+- `psa_list_contracts` (`listContracts`)
+- `psa_book_appointment` (`createAppointment`), which is write risk and linked to the PSA ticket when the Haley ticket is synced
+
+Syncro implements all three.
+
+`routes/syncroWebhook.ts` serves `POST /hooks/syncro/:secret`. The secret is a sealed workspace setting, shown and rotated on the PSA page. A valid delivery runs a `Debouncer`: at most one run per 10 seconds, plus one trailing run. That run syncs every enabled Syncro connection and forces an alert check. The request body is never parsed.
+
 ## Adding a connector
 
 1. Define a normalized API interface for the platform (see `connectors/m365/api.ts`).

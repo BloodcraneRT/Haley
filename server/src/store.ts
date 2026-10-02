@@ -748,6 +748,18 @@ export class Store {
       .all(runId) as Array<{ model: string; calls: number; input_tokens: number; output_tokens: number }>;
   }
 
+  /** A workspace webhook secret (sealed at rest), created on first use. `rotate` replaces it. */
+  webhookSecret(name: string, rotate = false): string {
+    const key = `webhook:${name}`;
+    const row = this.db.prepare("SELECT value FROM workspace_settings WHERE key = ?").get(key) as Row | undefined;
+    if (row && !rotate) return unseal(this.secretKey, row.value as string);
+    const secret = randomBytes(24).toString("hex");
+    this.db
+      .prepare("INSERT INTO workspace_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(key, seal(this.secretKey, secret));
+    return secret;
+  }
+
   getBillingSettings(): BillingSettings {
     const row = this.db.prepare("SELECT value FROM workspace_settings WHERE key = 'billing'").get() as Row | undefined;
     return { ...DEFAULT_BILLING_SETTINGS, ...parse<Partial<BillingSettings>>(row?.value, {}) };

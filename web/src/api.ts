@@ -668,6 +668,12 @@ export interface SyncResult {
   errors: string[];
 }
 
+/** The workspace's Syncro webhook URL (Notification Center → Notification Sets). */
+export interface SyncroWebhook {
+  url: string;
+  minGapSeconds: number;
+}
+
 export interface PsaInput {
   kind: PsaKind;
   name?: string;
@@ -1059,6 +1065,8 @@ export const api = {
   psaCustomers: (id: string) => get<PsaCustomer[]>(`/api/psa/${enc(id)}/customers`),
   setPsaMapping: (id: string, map: Record<string, string>) => put<PsaConnection>(`/api/psa/${enc(id)}/mapping`, map),
   syncPsa: (id: string) => post<SyncResult>(`/api/psa/${enc(id)}/sync`),
+  syncroWebhook: () => get<SyncroWebhook>("/api/syncro/webhook"),
+  rotateSyncroWebhook: () => post<SyncroWebhook>("/api/syncro/webhook/rotate"),
 };
 
 export function errorMessage(err: unknown): string {

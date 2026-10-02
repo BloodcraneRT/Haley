@@ -22,6 +22,7 @@ import { ChannelHub } from "./channels/hub.js";
 import { SlackChannel } from "./channels/slack.js";
 import { TeamsChannel } from "./channels/teams.js";
 import { clientReport } from "./report.js";
+import { psaConnectorsFor } from "./psa/tools.js";
 import { SyncroAlertTickets } from "./monitoring/syncroAlerts.js";
 import { runCost, usageCsv, usageReport } from "./usage.js";
 import { PSA_PROVIDERS, buildPsaAdapter } from "./psa/registry.js";
@@ -35,6 +36,7 @@ import type { PsaAdapter, PsaConnection } from "./psa/types.js";
 import { registerHooks } from "./routes/hooks.js";
 import { registerM365Onboarding } from "./routes/m365Onboarding.js";
 import { registerMemoryRoutes } from "./routes/memories.js";
+import { Debouncer, registerSyncroWebhook } from "./routes/syncroWebhook.js";
 import { registerSecretLinks } from "./routes/secretLinks.js";
 import { nextOccurrence, Scheduler } from "./scheduler.js";
 import { slaFor } from "./sla.js";
@@ -87,6 +89,8 @@ export interface HaleyApp {
   agent: AgentService;
   scheduler: Scheduler;
   psa: PsaSync;
+  /** Syncro webhook deliveries trigger this (exposed for tests). */
+  syncroWebhook: Debouncer;
 }
 
 export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, psaFactory }: AppDeps): Promise<HaleyApp> {
@@ -115,15 +119,18 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     }
     return connector;
   };
-  const connectorsFor = (orgId: string): Connector[] =>
-    store.listIntegrations(orgId).flatMap((integration) => {
+  const connectorsFor = (orgId: string): Connector[] => [
+    ...store.listIntegrations(orgId).flatMap((integration) => {
       try {
         return [connectorFor(integration)];
       } catch (err) {
         store.setIntegrationStatus(integration.id, "error", err instanceof Error ? err.message : String(err));
         return [];
       }
-    });
+    }),
+    // Saved replies, contracts and appointments from the client's PSA (defined below; only called later).
+    ...psaConnectorsFor(store, orgId, (connection) => psa.adapterFor(connection)),
+  ];
 
   // End-user channels. Each is enabled by its own secrets; the simulator-backed chat adapter is always on.
   const ch = config.channels;
@@ -150,7 +157,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   const agent = new AgentService(store, llm ? () => llm : (orgId) => models.clientFor(orgId), config, connectorsFor, hub);
   hub.attach(agent);
   agent.recoverInterrupted();
-  const scheduler = new Scheduler(store, agent, psa, new SyncroAlertTickets(store, agent, fetchImpl));
+  const alertTickets = new SyncroAlertTickets(store, agent, fetchImpl);
+  const scheduler = new Scheduler(store, agent, psa, alertTickets);
 
   const withSla = (ticket: Ticket, org: Org | null | undefined) => ({ ...ticket, sla: org ? slaFor(ticket, org.settings.sla) : null });
 
@@ -171,6 +179,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
 
   registerHooks(app, { config: ch, store, hub, slack, teams, log: (err) => app.log.error(err) });
   registerSecretLinks(app, store);
+  const syncroWebhook = registerSyncroWebhook(app, { store, psa, alerts: alertTickets, publicUrl: ch.publicUrl, actor, log: (err) => app.log.error(err) });
+  app.addHook("onClose", async () => syncroWebhook.stop());
   registerMemoryRoutes(app, store, actor);
 
   app.setErrorHandler((err, _req, reply) => {
@@ -1153,5 +1163,5 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
 
   app.addHook("onClose", async () => db.close());
   app.addHook("onClose", async () => scheduler.stop());
-  return { app, store, agent, scheduler, psa };
+  return { app, store, agent, scheduler, psa, syncroWebhook };
 }

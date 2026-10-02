@@ -89,13 +89,13 @@ Haley's edge is unattended fixes for verified end users within per-client policy
 3. **Log Haley's time to the PSA (done for Syncro).** When Haley works a synced ticket, add a timer entry with the duration, a summary and a configurable labour product, billable or not. This makes Haley's work visible in the MSP's own billing and contracts.
    - Add it as an optional `logTime` on the PSA adapter. ConnectWise, Autotask and HaloPSA all have time-entry APIs.
    - It extends item 8 of the Dex comparison into the PSA.
-4. **Webhooks instead of polling.** Add a receiver for Syncro Notification Center webhooks (ticket and RMM-alert events), at a long secret URL.
+4. **Webhooks instead of polling (done).** One workspace URL (PSA sync page); a delivery triggers an immediate Syncro sync and alert check, collapsed to at most one every 10 seconds. Add a receiver for Syncro Notification Center webhooks (ticket and RMM-alert events), at a long secret URL.
    - On each delivery, re-fetch the ticket or alert from the API rather than trusting the payload.
    - Keep the two-minute poll as a fallback.
    - Customers' replies get picked up in seconds.
-5. **Use the MSP's canned responses.** Let Haley search Syncro canned responses and use them as reply templates, so replies sound like the MSP. This needs a token permission most MSPs will have to add.
-6. **Contract awareness.** Before work that would be billable, check the client's Syncro contract. If the work isn't covered, flag it to the technician rather than doing it silently.
-7. **On-site handoff.** When escalating hardware or on-site work, offer to create a Syncro appointment linked to the ticket for a technician to confirm.
+5. **Use the MSP's canned responses (done: `psa_find_canned_response`).** Let Haley search Syncro canned responses and use them as reply templates, so replies sound like the MSP. This needs a token permission most MSPs will have to add.
+6. **Contract awareness (done: `psa_list_contracts`, with guidance to flag uncovered work).** Before work that would be billable, check the client's Syncro contract. If the work isn't covered, flag it to the technician rather than doing it silently.
+7. **On-site handoff (done: `psa_book_appointment`, policy-gated, linked to the Syncro ticket).** When escalating hardware or on-site work, offer to create a Syncro appointment linked to the ticket for a technician to confirm.
 8. **Ideas from Syncro's AI:**
    - **Skill-based dispatch on escalation:** suggest a technician based on who handled this client and category before, and current load.
    - **A one-paragraph summary** at the top of every synced ticket.

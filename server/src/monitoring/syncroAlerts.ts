@@ -43,14 +43,19 @@ export class SyncroAlertTickets {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  async poll(nowMs = Date.now()): Promise<AlertPollResult> {
+  /** A Syncro webhook said something changed: check every client now, without waiting for the interval. */
+  pollNow(nowMs = Date.now()): Promise<AlertPollResult> {
+    return this.poll(nowMs, true);
+  }
+
+  async poll(nowMs = Date.now(), force = false): Promise<AlertPollResult> {
     const result: AlertPollResult = { created: [], updated: [], errors: [] };
     if (this.running) return result;
     this.running = true;
     try {
       for (const integration of this.store.listIntegrations().filter((i) => i.provider === "syncro_rmm")) {
         try {
-          await this.pollOne(integration, nowMs, result);
+          await this.pollOne(integration, nowMs, result, force);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           result.errors.push(`${integration.label}: ${message}`);
@@ -68,14 +73,14 @@ export class SyncroAlertTickets {
     return { cursor: null, seen: [], lastPollAt: null, ...(this.store.getIntegrationState<AlertState>(integration.id) ?? {}) };
   }
 
-  private async pollOne(integration: Integration, nowMs: number, result: AlertPollResult) {
+  private async pollOne(integration: Integration, nowMs: number, result: AlertPollResult, force: boolean) {
     const config = this.store.getIntegrationConfig(integration.id);
     const org = this.store.getOrg(integration.org_id);
     if (!org || !enabled(config)) return;
     // While Haley is paused, technicians own the client; alerts wait in Syncro and are picked up on resume.
     if (org.settings.paused) return;
     const state = this.state(integration);
-    if (state.lastPollAt && nowMs - Date.parse(state.lastPollAt) < ALERT_POLL_INTERVAL_MS) return;
+    if (!force && state.lastPollAt && nowMs - Date.parse(state.lastPollAt) < ALERT_POLL_INTERVAL_MS) return;
     const now = new Date(nowMs).toISOString();
     if (!state.cursor) {
       // First check after turning it on: start from now rather than ticketing every existing alert.

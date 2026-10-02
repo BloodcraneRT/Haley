@@ -25,6 +25,8 @@ export const PSA_PROVIDERS: PsaProviderInfo[] = [
       "In SyncroMSP go to Admin → API Tokens → New Token (custom permissions).",
       "Grant: Tickets (list/search, view details, create, edit, comment), Customers (list/search, view), Contacts (list/search, view), and Ticket Timers if Haley should log her time.",
       "Paste your subdomain and the token here, then map Syncro customers to Haley clients.",
+      "Optional: paste the SyncroMSP webhook URL from the PSA sync page into a Syncro Notification Set, so changes sync within seconds.",
+      "Optional: also grant Ticket Canned Responses (manage), Contracts (list) and Appointments, so Haley can use your saved replies, check contracts and book on-site visits.",
     ],
     timeEntries: true,
   },
