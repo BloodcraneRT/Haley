@@ -39,7 +39,7 @@ const action: Action = {
 };
 
 const settings: ApprovalSettingsView = {
-  slackChannel: "", slackTeamId: "", teamsConversation: null, chatApprovalMaxRisk: "destructive", escalationNotices: true,
+  slackChannel: "", slackTeamId: "", teamsConversation: null, chatApprovalMaxRisk: "destructive", escalationNotices: true, mspTenantId: "", teamsDefaultTenantId: "",
   slackConnected: false, slackAvailable: true, teamsAvailable: false, interactivityUrl: "https://haley.msp.example/hooks/slack/interactivity",
 };
 
@@ -76,6 +76,23 @@ describe("chat approval settings", () => {
     await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
     expect(save).toHaveBeenCalledWith({ slackBotToken: "xoxb-1-secret", slackChannel: "C0APPROV", chatApprovalMaxRisk: "write", escalationNotices: true });
     expect(node.querySelector<HTMLInputElement>("#ca-token")!.value).toBe("");
+  });
+
+  it("asks for the MSP's tenant when the Teams bot is set up, and shows the registered channel", async () => {
+    const registered = { ...settings, teamsAvailable: true, teamsDefaultTenantId: "aaaaaaaa-0000-0000-0000-000000000001",
+      teamsConversation: { serviceUrl: "https://smba", conversationId: "19:x", tenantId: "t", registeredBy: "Dana Reyes", registeredAt: "2026-10-08T00:00:00Z" } };
+    vi.spyOn(api, "approvalSettings").mockResolvedValue(registered);
+    const save = vi.spyOn(api, "updateApprovalSettings").mockResolvedValue(registered);
+    const { node } = await renderView(() => <MemoryRouter><ChatApprovalsModal open onClose={() => undefined} /></MemoryRouter>);
+    expect(node.textContent).toContain("Registered by Dana Reyes");
+    expect(node.querySelector<HTMLInputElement>("#ca-tenant")!.placeholder).toBe("aaaaaaaa-0000-0000-0000-000000000001");
+    const form = node.querySelector("#chat-approvals-form")!;
+    await change(node.querySelector<HTMLInputElement>("#ca-tenant")!, "contoso");
+    await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(save).not.toHaveBeenCalled();
+    await change(node.querySelector<HTMLInputElement>("#ca-tenant")!, "cccccccc-0000-0000-0000-000000000003");
+    await act(async () => { form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ mspTenantId: "cccccccc-0000-0000-0000-000000000003" }));
   });
 
   it("explains the missing signing secret instead of showing Slack fields", async () => {

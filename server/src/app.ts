@@ -46,6 +46,7 @@ import { registerTechnicianRoutes } from "./routes/technicians.js";
 import { registerApprovalRoutes } from "./routes/approvals.js";
 import { ApprovalNotifier } from "./approvals/notify.js";
 import { SlackApprovals } from "./approvals/slack.js";
+import { TeamsApprovals } from "./approvals/teams.js";
 import { Debouncer, registerSyncroWebhook } from "./routes/syncroWebhook.js";
 import { registerSecretLinks } from "./routes/secretLinks.js";
 import { nextOccurrence, Scheduler } from "./scheduler.js";
@@ -172,7 +173,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   agent.recoverInterrupted();
   // Approval cards and escalation notices in the MSP's own Slack (and Teams).
   const slackApprovals = new SlackApprovals(store, fetchImpl);
-  const approvalNotifier = new ApprovalNotifier(store, [slackApprovals], ch.publicUrl);
+  const teamsApprovals = teams ? new TeamsApprovals(store, teams, ch.teamsTenantId) : null;
+  const approvalNotifier = new ApprovalNotifier(store, teamsApprovals ? [slackApprovals, teamsApprovals] : [slackApprovals], ch.publicUrl);
   agent.attachApprovalEvents(approvalNotifier);
   store.onTicketStatusChanged((ticket, from, who) => approvalNotifier.escalated(ticket, from, who));
   const alertTickets = new SyncroAlertTickets(store, agent, fetchImpl);
@@ -195,7 +197,32 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     }
   });
 
-  registerHooks(app, { config: ch, store, hub, slack, teams, log: (err) => app.log.error(err) });
+  registerHooks(app, {
+    config: ch,
+    store,
+    hub,
+    slack,
+    teams,
+    log: (err) => app.log.error(err),
+    // Approval card buttons and "approvals here" arrive on the Teams bot endpoint too.
+    teamsIntercept: teamsApprovals
+      ? (activity) =>
+          teamsApprovals.intercept(activity, {
+            decide: (id, decision, technician, note) => agent.decideAction(id, decision, technician, note),
+            cardFor: (id) => {
+              const action = store.getAction(id);
+              const post = store.listApprovalPosts(id).find((p) => p.channel === "teams");
+              let evidence: string[] = [];
+              try {
+                evidence = JSON.parse(post?.ref.evidence ?? "[]");
+              } catch {
+                evidence = [];
+              }
+              return action ? approvalNotifier.card(action, evidence) : null;
+            },
+          })
+      : undefined,
+  });
   registerSecretLinks(app, store);
   const incidents = new IncidentDetector(store);
   store.onTicketCreated((ticket) => void incidents.onTicketCreated(ticket));
@@ -211,6 +238,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     slack: slackApprovals,
     slackSigningSecret: ch.slackSigningSecret,
     teamsEnabled: Boolean(teams),
+    teamsDefaultTenantId: ch.teamsTenantId,
     publicUrl: ch.publicUrl,
     actor,
     log: (err) => app.log.error(err),

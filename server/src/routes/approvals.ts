@@ -34,6 +34,8 @@ export function registerApprovalRoutes(
     slack: SlackApprovals;
     slackSigningSecret: string;
     teamsEnabled: boolean;
+    /** HALEY_TEAMS_TENANT_ID, used as the MSP tenant when none is set. */
+    teamsDefaultTenantId: string;
     publicUrl: string;
     actor: (req: FastifyRequest) => string;
     log: (err: unknown) => void;
@@ -48,6 +50,7 @@ export function registerApprovalRoutes(
     /** Slack needs HALEY_SLACK_SIGNING_SECRET to verify button clicks. */
     slackAvailable: Boolean(deps.slackSigningSecret),
     teamsAvailable: deps.teamsEnabled,
+    teamsDefaultTenantId: deps.teamsDefaultTenantId,
     interactivityUrl: base ? `${base}/hooks/slack/interactivity` : "/hooks/slack/interactivity",
   });
 
@@ -60,6 +63,7 @@ export function registerApprovalRoutes(
         slackChannel: channelId.optional(),
         chatApprovalMaxRisk: z.enum(["write", "destructive"]).optional(),
         escalationNotices: z.boolean().optional(),
+        mspTenantId: z.union([z.literal(""), z.string().trim().toLowerCase().uuid("The tenant id is a GUID")]).optional(),
         /** Only clearing is allowed here; a Teams conversation is registered from Teams. */
         teamsConversation: z.null().optional(),
       })

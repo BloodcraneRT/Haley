@@ -156,6 +156,21 @@ Syncro implements all three.
 - **`copilot.ts`:** makes one tool-less model call, and `model_usage` rows can now have no run (migration 12, `purpose = 'assist'`).
 - **`routes/statusPage.ts`:** serves `/t/<ticket>.<expiry>.<hmac>` as a server-rendered page with a strict CSP. The forms post url-encoded bodies to a scoped parser.
 
+## Technicians and chat approvals
+
+- **`technicians` table (migration 13):** name (the sign-in name), email, Slack user id, Teams object id, active. Behind `routes/technicians.ts`; renaming rewrites approver names in client rules.
+- **`AgentService.attachApprovalEvents()`:**
+  - `pending()` fires after a run parks actions, with the run's read steps as evidence.
+  - `decided()` fires after `decideAction` (approve, reject or `changes`), and when a failed run rejects what was still pending.
+- **`approvals/notify.ts`:** turns those events into cards for each `ApprovalChannel`, and records each post in `approval_posts` (migration 14) so every card can be updated later. It also posts escalation notices from `Store.onTicketStatusChanged`, only when the actor is Haley, the scheduler or the system.
+- **`approvals/slack.ts`:**
+  - posts Block Kit cards with `chat.postMessage` and updates them with `chat.update`;
+  - `/hooks/slack/interactivity` (`routes/approvals.ts`, with a scoped url-encoded parser that keeps the raw body for the signature) handles `block_actions` and the `views.open` modal for reject and changes.
+- **`approvals/teams.ts`:**
+  - posts Adaptive Cards and updates them with a PUT to the activity;
+  - `/hooks/teams/messages` hands `adaptiveCard/action` invokes and "approvals here" to it before end-user handling (`HookDeps.teamsIntercept`).
+- **Settings:** `ApprovalSettings` is a workspace setting. The Slack bot token is a sealed workspace secret (`Store.getWorkspaceSecret`), and a client can override the channel with `OrgSettings.approvalSlackChannel`.
+
 ## Adding a connector
 
 1. Define a normalized API interface for the platform (see `connectors/m365/api.ts`).
@@ -182,6 +197,7 @@ Connectors that call an MSP-configured host or tenant (NinjaOne, SyncroMSP RMM, 
 | `model_profiles` | AI models: provider, model, base URL, encrypted key, options, fallback, default flag. |
 | `verification_attempts`, `secret_links` | Step-up verification history (drives fatigue limits) and view-once credential links (hashed tokens). |
 | `psa_connections`, `ticket_links` | PSA credentials (encrypted), customer→client map, sync cursor and options; ticket ↔ PSA ticket links with seen comments and mirrored events. |
+| `technicians`, `approval_posts` | The MSP's technicians with their Slack and Teams ids; approval cards and escalation notices posted to chat, so they can be updated. |
 | `audit_log` | Append-only record of security-relevant events. |
 
 Schema changes are forward-only migrations in `db.ts`, tracked with `PRAGMA user_version`. SQLite (built into Node 22) keeps deployment to a single process and a single file. The `Store` class is the only thing that touches SQL, so moving to Postgres later is contained.

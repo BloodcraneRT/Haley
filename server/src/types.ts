@@ -364,6 +364,8 @@ export interface ApprovalSettings {
   slackTeamId: string;
   /** Default Teams conversation for approval cards. Null: no Teams cards. */
   teamsConversation: TeamsConversationRef | null;
+  /** The MSP's own Entra tenant: only its users can register a Teams channel or decide from Teams cards. Empty uses HALEY_TEAMS_TENANT_ID. */
+  mspTenantId: string;
   /** Highest risk that can be approved from chat; above it, cards say "approve in Haley". */
   chatApprovalMaxRisk: "write" | "destructive";
   /** Also post a notice when Haley escalates a ticket to a person. */
@@ -374,6 +376,7 @@ export const DEFAULT_APPROVAL_SETTINGS: ApprovalSettings = {
   slackChannel: "",
   slackTeamId: "",
   teamsConversation: null,
+  mspTenantId: "",
   chatApprovalMaxRisk: "destructive",
   escalationNotices: true,
 };

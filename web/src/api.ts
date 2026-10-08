@@ -430,6 +430,9 @@ export interface ApprovalSettingsView {
   teamsConversation: { serviceUrl: string; conversationId: string; tenantId: string; registeredBy: string; registeredAt: string } | null;
   chatApprovalMaxRisk: "write" | "destructive";
   escalationNotices: boolean;
+  mspTenantId: string;
+  /** HALEY_TEAMS_TENANT_ID, used when mspTenantId is empty. */
+  teamsDefaultTenantId: string;
   slackConnected: boolean;
   slackAvailable: boolean;
   teamsAvailable: boolean;
@@ -441,6 +444,7 @@ export interface ApprovalSettingsInput {
   slackChannel?: string;
   chatApprovalMaxRisk?: "write" | "destructive";
   escalationNotices?: boolean;
+  mspTenantId?: string;
   teamsConversation?: null;
 }
 

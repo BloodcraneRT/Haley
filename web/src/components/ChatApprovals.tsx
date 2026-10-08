@@ -12,6 +12,7 @@ import { Pill } from "./Pill";
 import { Switch } from "./Switch";
 
 const CHANNEL_RE = /^[CG][A-Z0-9]{2,20}$/;
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** One line for the Approvals page header: where approval cards go today. */
 export function chatApprovalsSummary(s: ApprovalSettingsView | undefined): string {
@@ -32,6 +33,7 @@ export function ChatApprovalsModal({ open, onClose, onSaved }: { open: boolean; 
   const [channel, setChannel] = useState<string | null>(null);
   const [maxRisk, setMaxRisk] = useState<"write" | "destructive" | null>(null);
   const [notices, setNotices] = useState<boolean | null>(null);
+  const [tenant, setTenant] = useState<string | null>(null);
   const [busy, setBusy] = useState<"save" | "test" | "disconnect" | "teams" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,6 +41,7 @@ export function ChatApprovalsModal({ open, onClose, onSaved }: { open: boolean; 
     channel: channel ?? s?.slackChannel ?? "",
     maxRisk: maxRisk ?? s?.chatApprovalMaxRisk ?? "destructive",
     notices: notices ?? s?.escalationNotices ?? true,
+    tenant: tenant ?? s?.mspTenantId ?? "",
   };
   const close = () => {
     if (busy) return;
@@ -46,6 +49,7 @@ export function ChatApprovalsModal({ open, onClose, onSaved }: { open: boolean; 
     setChannel(null);
     setMaxRisk(null);
     setNotices(null);
+    setTenant(null);
     setError(null);
     onClose();
   };
@@ -71,7 +75,10 @@ export function ChatApprovalsModal({ open, onClose, onSaved }: { open: boolean; 
     const ch = value.channel.trim();
     if (ch && !CHANNEL_RE.test(ch)) return setError("Use the channel id (like C0123ABCD), not its name.");
     if (token.trim() && !token.trim().startsWith("xoxb-")) return setError("Use the app's bot token, which starts with xoxb-.");
+    const tid = value.tenant.trim();
+    if (tid && !GUID_RE.test(tid)) return setError("The Microsoft 365 tenant id is a GUID like 00000000-0000-0000-0000-000000000000.");
     const input: ApprovalSettingsInput = { slackChannel: ch, chatApprovalMaxRisk: value.maxRisk, escalationNotices: value.notices };
+    if (s?.teamsAvailable) input.mspTenantId = tid;
     if (token.trim()) input.slackBotToken = token.trim();
     if (await run("save", async () => (await api.updateApprovalSettings(input), "Chat approval settings saved."))) {
       setToken("");
@@ -182,7 +189,21 @@ export function ChatApprovalsModal({ open, onClose, onSaved }: { open: boolean; 
               <p className="help" style={{ margin: 0 }}>
                 Needs the Haley Teams bot (<code>HALEY_TEAMS_APP_ID</code> and <code>HALEY_TEAMS_APP_PASSWORD</code> on the server).
               </p>
-            ) : s.teamsConversation ? (
+            ) : (
+              <div className="field">
+                <label htmlFor="ca-tenant">Your Microsoft 365 tenant id</label>
+                <input
+                  id="ca-tenant"
+                  className="input mono"
+                  value={value.tenant}
+                  onChange={(e) => setTenant(e.target.value)}
+                  placeholder={s.teamsDefaultTenantId || "00000000-0000-0000-0000-000000000000"}
+                  spellCheck={false}
+                />
+                <span className="help">Only people in this tenant can register a channel or decide from Teams cards.{s.teamsDefaultTenantId ? " Empty uses the bot's tenant." : ""}</span>
+              </div>
+            )}
+            {!s.teamsAvailable ? null : s.teamsConversation ? (
               <div className="row row-wrap" style={{ gap: 8 }}>
                 <span className="secondary">
                   Registered by {s.teamsConversation.registeredBy} on {new Date(s.teamsConversation.registeredAt).toLocaleDateString()}.

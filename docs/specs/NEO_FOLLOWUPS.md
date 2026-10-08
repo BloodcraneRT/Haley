@@ -1,6 +1,10 @@
 # Spec: features from the Neo Agent comparison
 
-Status: **draft for review**, 2026-10-08. Source: [research/NEOAGENT_COMPARISON.md](../research/NEOAGENT_COMPARISON.md), "What to incorporate".
+Status: **phase 1 built** (items 0, 1 and 9), 2026-10-08. Changes from this spec while building:
+
+- Slack and Teams accounts are linked by the email on the chat profile on a technician's first click. Slack uses `users.info` and Teams uses the Bot Framework members API, so no access to the MSP's own Microsoft 365 is needed.
+- The MSP's tenant for Teams is a setting, defaulting to `HALEY_TEAMS_TENANT_ID`.
+- Failed posts go to the audit log, not the ticket timeline, so Haley doesn't see them as ticket history. Source: [research/NEOAGENT_COMPARISON.md](../research/NEOAGENT_COMPARISON.md), "What to incorporate".
 
 This specs the nine items, plus one foundation they share (a technician directory). Each section says what changes, where in the code, the data model, the API and UI, safety rules, tests, and size. File references are to `main` at the time of writing. Migration numbers are indicative; the last one today is 12.
 
@@ -9,8 +13,8 @@ This specs the nine items, plus one foundation they share (a technician director
 
 ## Contents
 
-0. [Foundation: technician directory](#0-foundation-technician-directory)
-1. [Approve from Teams and Slack](#1-approve-from-teams-and-slack)
+0. [Foundation: technician directory](#0-foundation-technician-directory) (done)
+1. [Approve from Teams and Slack](#1-approve-from-teams-and-slack) (done: channel posting; DMs to approvers and reminders not yet)
 2. [Learn from technicians' decisions](#2-learn-from-technicians-decisions)
 3. ["What would Haley handle?" report](#3-what-would-haley-handle-report)
 4. [Suggest a technician on escalation](#4-suggest-a-technician-on-escalation)
@@ -18,7 +22,7 @@ This specs the nine items, plus one foundation they share (a technician director
 6. [QA before close, and frustration flags](#6-qa-before-close-and-frustration-flags)
 7. [Integrations by demand](#7-integrations-by-demand)
 8. [Phone through a partner](#8-phone-through-a-partner)
-9. [Cost per resolved ticket](#9-cost-per-resolved-ticket)
+9. [Cost per resolved ticket](#9-cost-per-resolved-ticket) (done)
 - [Suggested order](#suggested-order)
 - [Open questions](#open-questions)
 
