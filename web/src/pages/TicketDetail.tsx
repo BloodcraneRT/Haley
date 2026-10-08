@@ -555,8 +555,8 @@ function TimelineItem({ event: e, action }: { event: TicketEvent; action: Action
   if (e.kind === "action") {
     const decision = typeof e.meta.decision === "string" ? e.meta.decision : null;
     const failed = e.body.startsWith("Failed:");
-    const tone = decision === "rejected" ? "neutral" : failed ? "red" : decision === "approved" ? "amber" : "green";
-    const Icon = decision === "rejected" ? X : failed ? CircleX : decision === "approved" ? ShieldCheck : Check;
+    const tone = decision === "rejected" || decision === "changes_requested" ? "neutral" : failed ? "red" : decision === "approved" ? "amber" : "green";
+    const Icon = decision === "rejected" ? X : decision === "changes_requested" ? Undo2 : failed ? CircleX : decision === "approved" ? ShieldCheck : Check;
     const hasSecrets = Boolean(e.meta.hasSecrets) || Boolean(action?.has_secrets);
     return (
       <li className="tl-item">

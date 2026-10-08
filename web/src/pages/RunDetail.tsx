@@ -345,9 +345,9 @@ function ToolCall({
           />
         </div>
       )}
-      {action?.decided_by && action.decided_by !== "system" && (action.status === "executed" || action.status === "rejected" || action.status === "failed" || action.status === "approved") && (
+      {action?.decided_by && action.decided_by !== "system" && (action.status === "executed" || action.status === "rejected" || action.status === "changes_requested" || action.status === "failed" || action.status === "approved") && (
         <div className="muted" style={{ padding: "0 10px 6px", fontSize: "var(--text-sm)" }}>
-          {action.status === "rejected" ? "Rejected" : "Approved"} by {action.decided_by}
+          {action.status === "rejected" ? "Rejected" : action.status === "changes_requested" ? "Changes requested" : "Approved"} by {action.decided_by}
           {action.decision_note ? `: “${action.decision_note}”` : ""}
         </div>
       )}

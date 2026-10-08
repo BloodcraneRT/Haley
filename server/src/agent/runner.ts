@@ -4,7 +4,7 @@ import type { HaleyConfig } from "../config.js";
 import { SensitiveResult, type Connector, type HaleyTool, type ToolContext } from "../connectors/types.js";
 import type { PendingState, Store } from "../store.js";
 import type { ReplyDelivery } from "../channels/types.js";
-import { ASSURANCE_RANK, effectiveAssurance, type Action, type Org, type Run, type RunMode } from "../types.js";
+import { ASSURANCE_RANK, effectiveAssurance, type Action, type ApprovalDecision, type Org, type Run, type RunMode } from "../types.js";
 import { builtinTools } from "./builtinTools.js";
 import { textOf, toolCallsOf, type ChatMessage, type LlmClient, type ModelResponse, type Part, type ToolSpec } from "../ai/types.js";
 import { applyRails, applyRules, decide, targetsOf, type Decision, type Requester } from "./policy.js";
@@ -34,6 +34,19 @@ function truncate(text: string): string {
 
 const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+/** At most this many earlier read steps are listed as evidence on an approval request. */
+const MAX_EVIDENCE = 6;
+
+/**
+ * Told when actions start waiting for approval and when they're decided, so approval cards in Slack or Teams
+ * can be posted and kept current. Failures here never affect the run.
+ */
+export interface ApprovalEvents {
+  /** `evidence`: one line per read step Haley took earlier in the run (what she looked at, not what she found). */
+  pending(input: { run: Run; actions: Action[]; evidence: string[] }): void;
+  decided(action: Action): void;
+}
+
 /**
  * Drives Haley's tool-use loop. Each run's conversation is persisted after every model turn,
  * so a run can pause for technician approval and resume later, even from another request.
@@ -41,6 +54,7 @@ const errorMessage = (err: unknown) => (err instanceof Error ? err.message : Str
  */
 export class AgentService {
   private readonly inflight = new Map<string, Promise<void>>();
+  private events: ApprovalEvents | null = null;
 
   constructor(
     private readonly store: Store,
@@ -116,33 +130,49 @@ export class AgentService {
 
   // ------------------------------------------------------------ approval
 
-  /** Approve or reject one pending action. The run resumes once none of its actions are pending. */
-  async decideAction(actionId: string, approve: boolean, decidedBy: string, note = ""): Promise<Action> {
+  attachApprovalEvents(events: ApprovalEvents): void {
+    this.events = events;
+  }
+
+  private emit(work: (events: ApprovalEvents) => void): void {
+    if (!this.events) return;
+    try {
+      work(this.events);
+    } catch {
+      // Notifications are best effort; the dashboard queue is the record.
+    }
+  }
+
+  /**
+   * Approve, reject, or send back ("changes", with a note) one pending action. The run resumes once none of
+   * its actions are pending. `true`/`false` mean approve/reject.
+   */
+  async decideAction(actionId: string, decision: boolean | ApprovalDecision, decidedBy: string, note = ""): Promise<Action> {
+    const kind: ApprovalDecision = decision === true ? "approve" : decision === false ? "reject" : decision;
     const action = this.store.getAction(actionId);
     if (!action) throw new Error(`No action ${actionId}`);
+    if (kind === "changes" && !note.trim()) throw Object.assign(new Error("Say what should change."), { statusCode: 400 });
     if (action.status === "pending_approval" && action.approvers.length && !action.approvers.some((a) => a.toLowerCase() === decidedBy.toLowerCase())) {
       throw new ApproverNotAllowedError(`Only ${action.approvers.join(", ")} can decide this (client policy).`);
     }
-    if (!this.store.claimPendingAction(actionId, decidedBy, note, approve)) {
+    if (!this.store.claimPendingAction(actionId, decidedBy, note, kind)) {
       throw new RunConflictError(`Action ${actionId} is no longer awaiting approval.`);
     }
+    const status = kind === "approve" ? "approved" : kind === "reject" ? "rejected" : "changes_requested";
     this.store.audit({
       orgId: action.org_id,
       actor: decidedBy,
-      action: approve ? "action.approved" : "action.rejected",
+      action: `action.${status}`,
       target: actionId,
       detail: { tool: action.tool, description: action.description, note },
     });
     const run = this.store.getRun(action.run_id)!;
     if (run.ticket_id) {
-      this.store.addTicketEvent(
-        run.ticket_id,
-        "action",
-        decidedBy,
-        `${approve ? "Approved" : "Rejected"}: ${action.description}${note ? ` — ${note}` : ""}`,
-        { actionId, decision: approve ? "approved" : "rejected" },
-      );
+      const verb = kind === "approve" ? "Approved" : kind === "reject" ? "Rejected" : "Changes requested";
+      this.store.addTicketEvent(run.ticket_id, "action", decidedBy, `${verb}: ${action.description}${note ? ` — ${note}` : ""}`, { actionId, decision: status });
     }
+    const decided = this.store.getAction(actionId)!;
+    this.emit((e) => e.decided(decided));
     if (this.store.listActions({ runId: run.id, status: "pending_approval" }).length === 0) {
       this.kick(run.id, () => this.resume(run.id));
     }
@@ -233,6 +263,11 @@ export class AgentService {
           } else {
             result = await this.execute(run, action, tool, action.input);
           }
+        } else if (action.status === "changes_requested") {
+          result = {
+            content: `A technician (${action.decided_by}) asked for changes before this can run: "${action.decision_note}". Adjust the plan and propose the change again if it's still needed. Don't repeat the same request unchanged.`,
+            is_error: true,
+          };
         } else {
           result = {
             content: `A technician (${action.decided_by}) rejected this action.${action.decision_note ? ` Their note: ${action.decision_note}` : ""}`,
@@ -308,6 +343,22 @@ export class AgentService {
           return this.complete(runId, text);
       }
     }
+  }
+
+  /** What Haley looked at before asking: her read steps so far in this run, described without their results. */
+  private evidence(messages: ChatMessage[], tools: Map<string, HaleyTool>): string[] {
+    const lines: string[] = [];
+    for (const message of messages) {
+      if (message.role !== "assistant") continue;
+      for (const call of toolCallsOf(message.parts)) {
+        const tool = tools.get(call.name);
+        if (!tool || tool.risk !== "read") continue;
+        const parsed = tool.input.safeParse(call.input);
+        const line = (parsed.success && tool.describe?.(parsed.data)) || tool.name.replace(/_/g, " ");
+        if (!lines.includes(line)) lines.push(line);
+      }
+    }
+    return lines.slice(-MAX_EVIDENCE);
   }
 
   /** Executes or queues each tool call. Returns true when the run paused for approval. */
@@ -392,6 +443,8 @@ export class AgentService {
 
     if (awaiting > 0) {
       this.store.saveRunProgress(run.id, { pending, status: "awaiting_approval" });
+      const waiting = this.store.listActions({ runId: run.id, status: "pending_approval" });
+      this.emit((e) => e.pending({ run, actions: waiting, evidence: this.evidence(messages, tools) }));
       const current = run.ticket_id ? this.store.getTicket(run.ticket_id) : null;
       // An escalated ticket stays with its technician; don't dress it up as a routine approval.
       if (run.ticket_id && current?.status !== "escalated") {
@@ -587,6 +640,8 @@ export class AgentService {
     // Anything still queued for approval can no longer be resumed into this run.
     for (const action of this.store.listActions({ runId, status: "pending_approval" })) {
       this.store.finishAction(action.id, { status: "rejected", decidedBy: "system", decisionNote: "Run ended" });
+      const ended = this.store.getAction(action.id)!;
+      this.emit((e) => e.decided(ended));
     }
     if (run.ticket_id && run.mode === "plan") {
       this.store.addTicketEvent(run.ticket_id, "agent_note", AGENT, `Plan run stopped: ${error}`, { runId, error: true });

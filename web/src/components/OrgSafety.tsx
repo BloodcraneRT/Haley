@@ -1,5 +1,6 @@
 import { CirclePause, CirclePlay, OctagonPause, Plus, X } from "lucide-react";
 import { useId, useMemo, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Link } from "react-router-dom";
 import { api, errorMessage, TICKET_PRIORITIES, type OrgDetail, type OrgSettings, type TicketPriority } from "../api";
 import { useApp } from "../lib/app-context";
 import { useDraft } from "../hooks/useDraft";
@@ -235,6 +236,7 @@ type Draft = Omit<OrgSettings, "paused" | "modelProfileId" | "policyRules">;
 const toDraft = (s: OrgSettings): Draft => ({
   emailDomains: s.emailDomains,
   teamsTenantId: s.teamsTenantId,
+  approvalSlackChannel: s.approvalSlackChannel ?? "",
   authorizedRequesters: s.authorizedRequesters,
   protectedAccounts: s.protectedAccounts,
   maxAutoChangesPerHour: s.maxAutoChangesPerHour,
@@ -265,6 +267,8 @@ export function SafetySettingsForm({ org, onSaved, pause }: { org: OrgDetail; on
     e.preventDefault();
     const tenant = draft.teamsTenantId.trim();
     if (tenant && !GUID_RE.test(tenant)) return setError("The Teams tenant ID should be a GUID like 00000000-0000-0000-0000-000000000000.");
+    const approvalChannel = draft.approvalSlackChannel.trim();
+    if (approvalChannel && !/^[CG][A-Z0-9]{2,20}$/.test(approvalChannel)) return setError("The Slack channel for approvals should be a channel id like C0123ABCD.");
     for (const p of TICKET_PRIORITIES) {
       const t = draft.sla[p];
       if (!(t.responseMinutes >= 1) || !(t.resolutionMinutes >= 1)) return setError(`SLA targets for ${PRIORITY_META[p].label} must be at least 1 minute.`);
@@ -273,7 +277,13 @@ export function SafetySettingsForm({ org, onSaved, pause }: { org: OrgDetail; on
     setBusy(true);
     setError(null);
     try {
-      await api.updateOrg(org.id, { settings: { ...patch, ...(patch.teamsTenantId !== undefined ? { teamsTenantId: tenant } : {}) } });
+      await api.updateOrg(org.id, {
+        settings: {
+          ...patch,
+          ...(patch.teamsTenantId !== undefined ? { teamsTenantId: tenant } : {}),
+          ...(patch.approvalSlackChannel !== undefined ? { approvalSlackChannel: approvalChannel } : {}),
+        },
+      });
       setDraft((d) => d.teamsTenantId === draft.teamsTenantId ? { ...d, teamsTenantId: tenant } : d);
       toast("Self-service & safety settings saved.");
       onSaved();
@@ -361,6 +371,21 @@ export function SafetySettingsForm({ org, onSaved, pause }: { org: OrgDetail; on
               autoComplete="off"
             />
             <span className="help">Routes Microsoft Teams messages from this Entra tenant here. Not needed if a live Microsoft 365 integration is connected.</span>
+          </div>
+          <div className="field">
+            <label htmlFor="st-approval-channel">Slack channel for approvals</label>
+            <input
+              id="st-approval-channel"
+              className="input mono"
+              value={draft.approvalSlackChannel}
+              onChange={(e) => set("approvalSlackChannel", e.target.value)}
+              placeholder="Workspace default"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <span className="help">
+              A channel id (C0123ABCD) in your own Slack for this client's approval cards and escalations. Empty uses the default set on the <Link to="/approvals">Approvals</Link> page.
+            </span>
           </div>
         </div>
 

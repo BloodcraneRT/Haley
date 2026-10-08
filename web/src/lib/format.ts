@@ -113,6 +113,7 @@ export const ACTION_STATUS_META: Record<ActionStatus, { label: string; tone: Ton
   pending_approval: { label: "Needs approval", tone: "amber" },
   approved: { label: "Approved", tone: "teal" },
   rejected: { label: "Rejected", tone: "neutral" },
+  changes_requested: { label: "Changes requested", tone: "neutral" },
   blocked: { label: "Blocked by policy", tone: "neutral" },
   planned: { label: "Planned – not executed", tone: "blue" },
 };

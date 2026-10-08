@@ -5,6 +5,7 @@ import { tx, type Db } from "./db.js";
 import type {
   Action,
   ActionStatus,
+  ApprovalDecision,
   AuditEntry,
   Assurance,
   ClientMemory,
@@ -31,7 +32,7 @@ import type {
   TicketStatus,
   Technician,
 } from "./types.js";
-import { DEFAULT_BILLING_SETTINGS, DEFAULT_ORG_SETTINGS, type BillingSettings } from "./types.js";
+import { DEFAULT_APPROVAL_SETTINGS, DEFAULT_BILLING_SETTINGS, DEFAULT_ORG_SETTINGS, type ApprovalSettings, type BillingSettings } from "./types.js";
 import type { ModelProfile } from "./ai/providers.js";
 import { DEFAULT_PSA_OPTIONS, type PsaConnection, type PsaKind, type PsaOptions, type TicketLink } from "./psa/types.js";
 
@@ -320,6 +321,12 @@ export class Store {
   // ------------------------------------------------------------ incidents
 
   /** Called after every new ticket (incident detection). Listener errors never fail ticket creation. */
+  private readonly statusListeners: Array<(ticket: Ticket, from: TicketStatus, actor: string) => void> = [];
+  /** Called after any ticket status change, with the updated ticket. Listeners must not throw into the caller. */
+  onTicketStatusChanged(listener: (ticket: Ticket, from: TicketStatus, actor: string) => void): void {
+    this.statusListeners.push(listener);
+  }
+
   private readonly ticketCreatedListeners: Array<(ticket: Ticket) => void> = [];
   onTicketCreated(listener: (ticket: Ticket) => void): void {
     this.ticketCreatedListeners.push(listener);
@@ -580,6 +587,15 @@ export class Store {
         // Same instant as the ticket's updated_at/resolved_at, so the event can stand in for them later.
         next.updated_at,
       );
+    }
+    if (changes.status) {
+      for (const listener of this.statusListeners) {
+        try {
+          listener(next, changes.status.from as TicketStatus, actor);
+        } catch {
+          // Notifications are best effort.
+        }
+      }
     }
     return next;
   }
@@ -886,6 +902,47 @@ export class Store {
     return secret;
   }
 
+  /** A sealed workspace credential (e.g. the MSP's Slack bot token), or null. */
+  getWorkspaceSecret(name: string): string | null {
+    const row = this.db.prepare("SELECT value FROM workspace_settings WHERE key = ?").get(`secret:${name}`) as Row | undefined;
+    return row ? unseal(this.secretKey, row.value as string) : null;
+  }
+
+  setWorkspaceSecret(name: string, value: string | null): void {
+    if (value === null) {
+      this.db.prepare("DELETE FROM workspace_settings WHERE key = ?").run(`secret:${name}`);
+      return;
+    }
+    this.db
+      .prepare("INSERT INTO workspace_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(`secret:${name}`, seal(this.secretKey, value));
+  }
+
+  getApprovalSettings(): ApprovalSettings {
+    const row = this.db.prepare("SELECT value FROM workspace_settings WHERE key = 'approvals'").get() as Row | undefined;
+    return { ...DEFAULT_APPROVAL_SETTINGS, ...parse<Partial<ApprovalSettings>>(row?.value, {}) };
+  }
+
+  setApprovalSettings(patch: Partial<ApprovalSettings>): ApprovalSettings {
+    const next = { ...this.getApprovalSettings(), ...patch };
+    this.db
+      .prepare("INSERT INTO workspace_settings (key, value) VALUES ('approvals', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(json(next));
+    return next;
+  }
+
+  /** Records an approval card or escalation notice posted to Slack or Teams, so it can be updated later. */
+  addApprovalPost(input: { actionId: string | null; ticketId: string | null; channel: "slack" | "teams"; ref: Record<string, string> }): void {
+    this.db
+      .prepare("INSERT INTO approval_posts (id, action_id, ticket_id, channel, ref, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(newId("apost"), input.actionId, input.ticketId, input.channel, json(input.ref), now());
+  }
+
+  listApprovalPosts(actionId: string): Array<{ channel: "slack" | "teams"; ref: Record<string, string> }> {
+    const rows = this.db.prepare("SELECT channel, ref FROM approval_posts WHERE action_id = ? ORDER BY created_at").all(actionId) as Row[];
+    return rows.map((r) => ({ channel: r.channel as "slack" | "teams", ref: parse<Record<string, string>>(r.ref, {}) }));
+  }
+
   getBillingSettings(): BillingSettings {
     const row = this.db.prepare("SELECT value FROM workspace_settings WHERE key = 'billing'").get() as Row | undefined;
     return { ...DEFAULT_BILLING_SETTINGS, ...parse<Partial<BillingSettings>>(row?.value, {}) };
@@ -1136,13 +1193,14 @@ export class Store {
   }
 
   /** Atomically moves an action out of pending_approval; returns false if someone else already decided. */
-  claimPendingAction(id: string, decidedBy: string, note: string, approve: boolean): boolean {
+  claimPendingAction(id: string, decidedBy: string, note: string, decision: ApprovalDecision): boolean {
+    const status: ActionStatus = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "changes_requested";
     const res = this.db
       .prepare(
         `UPDATE actions SET status = ?, decided_by = ?, decision_note = ?, decided_at = ?
          WHERE id = ? AND status = 'pending_approval'`,
       )
-      .run(approve ? "approved" : "rejected", decidedBy, note, now(), id);
+      .run(status, decidedBy, note, now(), id);
     return res.changes > 0;
   }
 

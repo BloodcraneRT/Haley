@@ -1,4 +1,4 @@
-import { Building, Check, MessageSquareText, ShieldQuestion, Sparkles, Ticket as TicketIcon, UserCheck, Wrench, X, Zap } from "lucide-react";
+import { Building, Check, MessageSquareText, ShieldQuestion, Sparkles, Ticket as TicketIcon, Undo2, UserCheck, Wrench, X, Zap } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError, errorMessage, type Action, type Approval } from "../api";
@@ -9,7 +9,7 @@ import { Markdown } from "./Markdown";
 import { RiskPill } from "./Pill";
 import { RelativeTime } from "./RelativeTime";
 
-type Decision = "approve" | "reject";
+type Decision = "approve" | "reject" | "changes";
 
 export function ApprovalCard({
   action,
@@ -35,11 +35,28 @@ export function ApprovalCard({
   const ctx = "org_name" in action ? action : null;
 
   const decide = async (decision: Decision) => {
+    if (decision === "changes" && note.trim().length < 3) {
+      setShowNote(true);
+      setDenied("Say what should change in the note, then click Ask for changes again.");
+      window.setTimeout(() => document.getElementById(noteId)?.focus(), 0);
+      return;
+    }
     setBusy(decision);
     setDenied(null);
     try {
-      const updated = decision === "approve" ? await api.approve(action.id, note.trim()) : await api.reject(action.id, note.trim());
-      toast(decision === "approve" ? `Approved: ${action.description}. Haley will continue.` : `Rejected: ${action.description}.`);
+      const updated =
+        decision === "approve"
+          ? await api.approve(action.id, note.trim())
+          : decision === "reject"
+            ? await api.reject(action.id, note.trim())
+            : await api.requestChanges(action.id, note.trim());
+      toast(
+        decision === "approve"
+          ? `Approved: ${action.description}. Haley will continue.`
+          : decision === "reject"
+            ? `Rejected: ${action.description}.`
+            : `Sent back to Haley with your note.`,
+      );
       setLeaving(true);
       window.setTimeout(() => onDecided?.(updated, decision), 180);
     } catch (err) {
@@ -71,6 +88,9 @@ export function ApprovalCard({
       <button className="btn" onClick={() => decide("reject")} disabled={busy !== null}>
         {busy === "reject" ? <Spinner /> : <X className="icon-sm" aria-hidden="true" />} Reject
       </button>
+      <button className="btn" onClick={() => decide("changes")} disabled={busy !== null} title="Send it back to Haley with what should be different">
+        {busy === "changes" ? <Spinner /> : <Undo2 className="icon-sm" aria-hidden="true" />} Ask for changes
+      </button>
       {showNote ? (
         <>
           <label htmlFor={noteId} className="sr-only">
@@ -79,7 +99,7 @@ export function ApprovalCard({
           <input
             id={noteId}
             className="input"
-            placeholder="Optional note for the audit log and Haley"
+            placeholder="Note for the audit log and Haley (needed to ask for changes)"
             value={note}
             onChange={(e) => setNote(e.target.value)}
             onKeyDown={(e) => {

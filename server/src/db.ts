@@ -306,6 +306,16 @@ const MIGRATIONS: string[] = [
    CREATE UNIQUE INDEX IF NOT EXISTS idx_technicians_email ON technicians(email COLLATE NOCASE) WHERE email IS NOT NULL;
    CREATE UNIQUE INDEX IF NOT EXISTS idx_technicians_slack ON technicians(slack_user_id) WHERE slack_user_id IS NOT NULL;
    CREATE UNIQUE INDEX IF NOT EXISTS idx_technicians_teams ON technicians(teams_aad_id) WHERE teams_aad_id IS NOT NULL;`,
+  // 14: approval cards and escalation notices posted to the MSP's Slack and Teams, so they can be updated
+  `CREATE TABLE IF NOT EXISTS approval_posts (
+     id TEXT PRIMARY KEY,
+     action_id TEXT REFERENCES actions(id) ON DELETE CASCADE,
+     ticket_id TEXT REFERENCES tickets(id) ON DELETE CASCADE,
+     channel TEXT NOT NULL,
+     ref TEXT NOT NULL,
+     created_at TEXT NOT NULL
+   );
+   CREATE INDEX IF NOT EXISTS idx_approval_posts_action ON approval_posts(action_id);`,
 ];
 
 export function openDb(path: string): Db {

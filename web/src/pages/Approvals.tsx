@@ -1,8 +1,9 @@
-import { CircleCheck } from "lucide-react";
+import { CircleCheck, MessageSquareShare } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type Risk } from "../api";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { ChatApprovalsModal, chatApprovalsSummary } from "../components/ChatApprovals";
 import { EmptyState, ErrorBanner, Loading } from "../components/Feedback";
 import { OrgSelect } from "../components/OrgSelect";
 import { PageHeader } from "../components/PageHeader";
@@ -14,6 +15,8 @@ export function ApprovalsPage() {
   const approvals = usePoll(() => api.approvals(), [], 5000);
   const [orgId, setOrgId] = useState("");
   const [risk, setRisk] = useState<"" | Risk>("");
+  const [chatOpen, setChatOpen] = useState(false);
+  const chat = usePoll(() => api.approvalSettings(), []);
 
   const items = approvals.data ?? [];
   const orgs = useMemo(() => {
@@ -33,7 +36,14 @@ export function ApprovalsPage() {
       <PageHeader
         title="Approvals"
         subtitle="Changes Haley wants to make to customer systems that need a technician's sign-off. Haley continues the run as soon as every pending action in it is decided."
+        actions={
+          <button className="btn" onClick={() => setChatOpen(true)} title={chatApprovalsSummary(chat.data)}>
+            <MessageSquareShare className="icon-sm" aria-hidden="true" /> Slack &amp; Teams
+            {chat.data && <span className="muted hide-sm"> · {chatApprovalsSummary(chat.data)}</span>}
+          </button>
+        }
       />
+      <ChatApprovalsModal open={chatOpen} onClose={() => setChatOpen(false)} onSaved={() => void chat.reload()} />
 
       {approvals.error && <ErrorBanner error={approvals.error} onRetry={approvals.reload} />}
 
