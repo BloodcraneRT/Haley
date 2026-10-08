@@ -134,6 +134,8 @@ The full list is below.
 
 ## What to incorporate (prioritized)
 
+The implementation spec for these items is [specs/NEO_FOLLOWUPS.md](../specs/NEO_FOLLOWUPS.md).
+
 1. **Approve from Teams and Slack.** This is the biggest day-to-day gap. Approvals now wait in the dashboard, so an "approval required" change sits until someone looks.
    - Post an approval card to a per-client (or workspace) Teams or Slack channel, or DM the client's named approvers.
    - Show the change, the policy reason ("needs approval because …") and the evidence Haley read.
