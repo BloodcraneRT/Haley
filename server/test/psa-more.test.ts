@@ -545,9 +545,12 @@ describe("HaloPSA adapter", () => {
 
 describe("New PSAs end to end", () => {
   it("imports a HaloPSA ticket, replies as an emailed action, and wakes Haley only for the customer's reply", async () => {
-    // A tiny stateful Halo: one ticket whose actions grow as Haley and the customer write.
-    const actions: any[] = [{ id: 1, who: "Megan Bowen", who_type: 1, note: "Teams crashes every morning", hiddenfromuser: false, datetime: "2026-09-27T09:00:00" }];
-    let lastAction = "2026-09-27T09:00:00";
+    // A tiny stateful Halo: one ticket whose actions grow as Haley and the customer write. The app uses the real
+    // clock (first sync looks back 7 days), so times are relative to now, in Halo's zone-less format.
+    const start = Date.now() - 2 * 3_600_000;
+    const at = (minutes: number) => new Date(start + minutes * 60_000).toISOString().slice(0, 19);
+    const actions: any[] = [{ id: 1, who: "Megan Bowen", who_type: 1, note: "Teams crashes every morning", hiddenfromuser: false, datetime: at(0) }];
+    let lastAction = at(0);
     const ticket = () => ({ id: 42, summary: "Teams crashing", details: "Teams crashes every morning", client_id: 12, client_name: "Contoso Ltd", user_name: "Megan Bowen", user_email: "megan.bowen@contoso.example", status_id: 1, priority_id: 3, lastactiondate: lastAction });
     const net = fakeFetch([
       [/\/auth\/token/, () => ({ access_token: "t" })],
@@ -560,7 +563,7 @@ describe("New PSAs end to end", () => {
       [/\/api\/Actions$/, (c) => {
         const [a] = c.json();
         const id = actions.length + 1;
-        lastAction = `2026-09-27T09:0${id}:00`;
+        lastAction = at(id);
         actions.push({ id, who: "Haley API", who_type: 0, who_agentid: 3, note: a.note, hiddenfromuser: a.hiddenfromuser, datetime: lastAction });
         return { id };
       }],
@@ -586,8 +589,8 @@ describe("New PSAs end to end", () => {
     // Haley's own action doesn't come back as a customer message; the customer's reply does.
     await psa.sync(connection.id);
     expect(store.listRuns({ ticketId: t.id })).toHaveLength(1);
-    actions.push({ id: 99, who: "Megan Bowen", who_type: 1, note: "Only when on VPN", hiddenfromuser: false, datetime: "2026-09-27T11:00:00" });
-    lastAction = "2026-09-27T11:00:00";
+    actions.push({ id: 99, who: "Megan Bowen", who_type: 1, note: "Only when on VPN", hiddenfromuser: false, datetime: at(60) });
+    lastAction = at(60);
     const pulled = await psa.sync(connection.id);
     expect(pulled.errors).toEqual([]);
     expect(store.listTicketEvents(t.id).some((e) => e.body === "Only when on VPN")).toBe(true);
