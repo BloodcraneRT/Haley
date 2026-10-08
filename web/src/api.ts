@@ -430,7 +430,16 @@ export interface UsageClientRow {
   unpricedTokens: number;
   aiCostUsd: number;
   billableAiUsd: number;
+  ticketAiCostUsd: number;
+  taskAiCostUsd: number;
+  copilotAiCostUsd: number;
+  unpricedTicketTokens: number;
+  ticketsWorked: number;
   ticketsResolvedByHaley: number;
+  /** All AI cost on ticket runs ÷ tickets resolved by Haley alone; null with none resolved or unpriced usage. */
+  aiCostPerResolvedUsd: number | null;
+  billablePerResolvedUsd: number | null;
+  aiCostPerTicketWorkedUsd: number | null;
   confirmedByRequester: number;
   automaticChanges: number;
   recipeRuns: number;
@@ -449,7 +458,14 @@ export interface UsageReport {
     unpricedTokens: number;
     aiCostUsd: number;
     billableAiUsd: number;
+    ticketAiCostUsd: number;
+    taskAiCostUsd: number;
+    copilotAiCostUsd: number;
+    ticketsWorked: number;
     ticketsResolvedByHaley: number;
+    aiCostPerResolvedUsd: number | null;
+    billablePerResolvedUsd: number | null;
+    aiCostPerTicketWorkedUsd: number | null;
     confirmedByRequester: number;
     hoursSaved: number;
   };

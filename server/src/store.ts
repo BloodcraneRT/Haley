@@ -50,6 +50,9 @@ const parse = <T>(text: unknown, fallback: T): T => {
   }
 };
 
+/** What a model call was for, for billing: a ticket run, a task run, or a call outside runs (the copilot). */
+export type UsageKind = "ticket" | "task" | "assist";
+
 export interface PendingState {
   /** tool_use ids in the order the model emitted them. */
   order: string[];
@@ -799,16 +802,33 @@ export class Store {
       .run(input.runId, input.orgId, input.model, input.inputTokens, input.outputTokens, now(), input.purpose ?? "run");
   }
 
-  /** Token totals per client and model in [from, to). */
-  modelUsageSummary(from: string, to: string, orgId?: string): Array<{ org_id: string; model: string; calls: number; input_tokens: number; output_tokens: number }> {
-    const where = `created_at >= ? AND created_at < ?${orgId ? " AND org_id = ?" : ""}`;
+  /**
+   * Token totals per client, model and kind of work in [from, to): "ticket" runs, "task" runs (recipes and
+   * scheduled work), and "assist" calls made outside any run (the technician copilot).
+   */
+  modelUsageSummary(from: string, to: string, orgId?: string): Array<{ org_id: string; model: string; kind: UsageKind; calls: number; input_tokens: number; output_tokens: number }> {
+    const where = `mu.created_at >= ? AND mu.created_at < ?${orgId ? " AND mu.org_id = ?" : ""}`;
     const args: SQLInputValue[] = orgId ? [from, to, orgId] : [from, to];
     return this.db
       .prepare(
-        `SELECT org_id, model, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens
-         FROM model_usage WHERE ${where} GROUP BY org_id, model`,
+        `SELECT mu.org_id, mu.model,
+                CASE WHEN mu.run_id IS NULL THEN 'assist' WHEN r.ticket_id IS NOT NULL THEN 'ticket' ELSE 'task' END AS kind,
+                COUNT(*) AS calls, SUM(mu.input_tokens) AS input_tokens, SUM(mu.output_tokens) AS output_tokens
+         FROM model_usage mu LEFT JOIN runs r ON r.id = mu.run_id
+         WHERE ${where} GROUP BY mu.org_id, mu.model, kind`,
       )
-      .all(...args) as Array<{ org_id: string; model: string; calls: number; input_tokens: number; output_tokens: number }>;
+      .all(...args) as Array<{ org_id: string; model: string; kind: UsageKind; calls: number; input_tokens: number; output_tokens: number }>;
+  }
+
+  /** How many distinct tickets Haley made model calls on in [from, to), per client. */
+  ticketsWorkedByOrg(from: string, to: string): Map<string, number> {
+    const rows = this.db
+      .prepare(
+        `SELECT mu.org_id, COUNT(DISTINCT r.ticket_id) AS n FROM model_usage mu JOIN runs r ON r.id = mu.run_id
+         WHERE r.ticket_id IS NOT NULL AND mu.created_at >= ? AND mu.created_at < ? GROUP BY mu.org_id`,
+      )
+      .all(from, to) as Array<{ org_id: string; n: number }>;
+    return new Map(rows.map((r) => [r.org_id, r.n]));
   }
 
   /** Token totals per model for one run. */

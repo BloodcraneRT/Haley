@@ -1,6 +1,6 @@
 import type { ModelProfile } from "./ai/providers.js";
 import { clientReport } from "./report.js";
-import type { Store } from "./store.js";
+import type { Store, UsageKind } from "./store.js";
 
 export interface ModelPrice {
   input: number;
@@ -55,19 +55,27 @@ export function usageReport(store: Store, from: Date, to: Date) {
   const days = Math.max(1, Math.round((to.getTime() - from.getTime()) / 86_400_000));
   const unpriced = new Set<string>();
 
+  const worked = store.ticketsWorkedByOrg(from.toISOString(), to.toISOString());
+  const markup = 1 + settings.aiMarkupPercent / 100;
+  /** Cost per unit, or null when there are no units or some of the cost is unpriced. */
+  const per = (cost: number, unpricedTokens: number, units: number) => (units > 0 && unpricedTokens === 0 ? usd(cost / units) : null);
+
   const clients = store.listOrgs().map((org) => {
     const rows = usage.filter((u) => u.org_id === org.id);
-    let cost = 0;
-    let unpricedTokens = 0;
+    const cost: Record<UsageKind, number> = { ticket: 0, task: 0, assist: 0 };
+    const unpricedByKind: Record<UsageKind, number> = { ticket: 0, task: 0, assist: 0 };
     for (const row of rows) {
       const price = priceFor(profiles, row.model);
-      if (price) cost += costOf(price, row.input_tokens, row.output_tokens);
+      if (price) cost[row.kind] += costOf(price, row.input_tokens, row.output_tokens);
       else {
         unpriced.add(row.model);
-        unpricedTokens += row.input_tokens + row.output_tokens;
+        unpricedByKind[row.kind] += row.input_tokens + row.output_tokens;
       }
     }
+    const total = cost.ticket + cost.task + cost.assist;
     const report = clientReport(store, org, { days, minutesPerTicket: settings.minutesPerTicket, minutesPerAction: settings.minutesPerAction, from, to });
+    const resolved = report.tickets.resolvedByHaleyAlone;
+    const ticketsWorked = worked.get(org.id) ?? 0;
     return {
       orgId: org.id,
       name: org.name,
@@ -75,10 +83,24 @@ export function usageReport(store: Store, from: Date, to: Date) {
       inputTokens: rows.reduce((n, r) => n + r.input_tokens, 0),
       outputTokens: rows.reduce((n, r) => n + r.output_tokens, 0),
       /** Tokens on models without a price; the cost below leaves them out. */
-      unpricedTokens,
-      aiCostUsd: usd(cost),
-      billableAiUsd: usd(cost * (1 + settings.aiMarkupPercent / 100)),
-      ticketsResolvedByHaley: report.tickets.resolvedByHaleyAlone,
+      unpricedTokens: unpricedByKind.ticket + unpricedByKind.task + unpricedByKind.assist,
+      aiCostUsd: usd(total),
+      billableAiUsd: usd(total * markup),
+      /** AI cost split by kind of work: ticket runs, task runs (recipes), and the technician copilot. */
+      ticketAiCostUsd: usd(cost.ticket),
+      taskAiCostUsd: usd(cost.task),
+      copilotAiCostUsd: usd(cost.assist),
+      /** Unpriced tokens on ticket runs; while there are any, the per-ticket figures are unknown. */
+      unpricedTicketTokens: unpricedByKind.ticket,
+      ticketsWorked,
+      ticketsResolvedByHaley: resolved,
+      /**
+       * Fully loaded: all AI cost on ticket runs, including tickets Haley escalated, divided by the tickets
+       * she resolved alone. The figure to compare with per-ticket pricing.
+       */
+      aiCostPerResolvedUsd: per(cost.ticket, unpricedByKind.ticket, resolved),
+      billablePerResolvedUsd: per(cost.ticket * markup, unpricedByKind.ticket, resolved),
+      aiCostPerTicketWorkedUsd: per(cost.ticket, unpricedByKind.ticket, ticketsWorked),
       confirmedByRequester: report.tickets.confirmedByRequester,
       automaticChanges: report.changes.automatic,
       recipeRuns: report.timeSaved.recipeRuns,
@@ -88,6 +110,8 @@ export function usageReport(store: Store, from: Date, to: Date) {
 
   const sum = (key: keyof (typeof clients)[number]) => clients.reduce((n, c) => n + (c[key] as number), 0);
   const technicians = store.activeTechnicians(from.toISOString(), to.toISOString());
+  const ticketCost = sum("ticketAiCostUsd");
+  const unpricedTicketTokens = sum("unpricedTicketTokens");
   return {
     period: { from: from.toISOString(), to: to.toISOString(), days },
     settings,
@@ -99,7 +123,14 @@ export function usageReport(store: Store, from: Date, to: Date) {
       unpricedTokens: sum("unpricedTokens"),
       aiCostUsd: usd(sum("aiCostUsd")),
       billableAiUsd: usd(sum("billableAiUsd")),
+      ticketAiCostUsd: usd(ticketCost),
+      taskAiCostUsd: usd(sum("taskAiCostUsd")),
+      copilotAiCostUsd: usd(sum("copilotAiCostUsd")),
+      ticketsWorked: sum("ticketsWorked"),
       ticketsResolvedByHaley: sum("ticketsResolvedByHaley"),
+      aiCostPerResolvedUsd: per(ticketCost, unpricedTicketTokens, sum("ticketsResolvedByHaley")),
+      billablePerResolvedUsd: per(ticketCost * markup, unpricedTicketTokens, sum("ticketsResolvedByHaley")),
+      aiCostPerTicketWorkedUsd: per(ticketCost, unpricedTicketTokens, sum("ticketsWorked")),
       confirmedByRequester: sum("confirmedByRequester"),
       hoursSaved: Math.round(sum("hoursSaved") * 10) / 10,
     },
@@ -121,6 +152,9 @@ const csvCell = (v: unknown) => {
   return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 };
 
+/** Four decimals, or empty when unknown (no resolved tickets, or unpriced usage). */
+const money = (n: number | null | undefined) => (n == null ? "" : n.toFixed(4));
+
 /** One row per client, for billing exports. */
 export function usageCsv(report: UsageReport): string {
   const header = [
@@ -133,7 +167,14 @@ export function usageCsv(report: UsageReport): string {
     "unpriced_tokens",
     "ai_cost_usd",
     "billable_ai_usd",
+    "ticket_ai_cost_usd",
+    "task_ai_cost_usd",
+    "copilot_ai_cost_usd",
+    "tickets_worked",
     "tickets_resolved_by_haley",
+    "ai_cost_per_resolved_usd",
+    "billable_per_resolved_usd",
+    "ai_cost_per_ticket_worked_usd",
     "confirmed_by_requester",
     "automatic_changes",
     "recipe_runs",
@@ -149,7 +190,14 @@ export function usageCsv(report: UsageReport): string {
     c.unpricedTokens,
     c.aiCostUsd.toFixed(4),
     c.billableAiUsd.toFixed(4),
+    money(c.ticketAiCostUsd),
+    money(c.taskAiCostUsd),
+    money(c.copilotAiCostUsd),
+    c.ticketsWorked,
     c.ticketsResolvedByHaley,
+    money(c.aiCostPerResolvedUsd),
+    money(c.billablePerResolvedUsd),
+    money(c.aiCostPerTicketWorkedUsd),
     c.confirmedByRequester,
     c.automaticChanges,
     c.recipeRuns,

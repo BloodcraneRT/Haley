@@ -24,6 +24,62 @@ describe("billing report regressions", () => {
     }
   });
 
+  it("splits AI cost by kind of work and prices each ticket Haley resolved alone, fully loaded", async () => {
+    const { app, store } = await makeApp();
+    try {
+      const org = store.createOrg({ name: "Per ticket" });
+      store.createModelProfile({ name: "Scripted", provider: "test", model: "scripted", options: { inputUsdPerMTok: 3, outputUsdPerMTok: 15 } });
+      const bill = (runId: string | null, inputTokens: number, outputTokens: number) =>
+        store.recordModelUsage({ orgId: org.id, runId, model: "test/scripted", inputTokens, outputTokens, purpose: runId ? "run" : "assist" });
+      // Resolved by Haley alone: $0.03. Escalated: $0.06, which still counts against the resolved one.
+      const solved = store.createTicket({ orgId: org.id, title: "Password reset" });
+      bill(store.createRun({ orgId: org.id, ticketId: solved.id, kind: "ticket", title: "Reset", instruction: "Fix", createdBy: "haley" }).id, 5000, 1000);
+      store.setTicketStatus(solved.id, "resolved", "haley");
+      const escalated = store.createTicket({ orgId: org.id, title: "Printer on fire" });
+      bill(store.createRun({ orgId: org.id, ticketId: escalated.id, kind: "ticket", title: "Printer", instruction: "Fix", createdBy: "haley" }).id, 10_000, 2000);
+      // A recipe run and a copilot call are reported separately and stay out of the per-ticket figures.
+      bill(store.createRun({ orgId: org.id, kind: "task", title: "Audit", instruction: "Check", createdBy: "Jordan" }).id, 1000, 0);
+      bill(null, 2000, 0);
+
+      const nowMs = Date.now();
+      const report = usageReport(store, new Date(nowMs - 86_400_000), new Date(nowMs + 86_400_000));
+      expect(report.clients[0]).toMatchObject({
+        aiCostUsd: 0.099,
+        ticketAiCostUsd: 0.09,
+        taskAiCostUsd: 0.003,
+        copilotAiCostUsd: 0.006,
+        ticketsWorked: 2,
+        ticketsResolvedByHaley: 1,
+        aiCostPerResolvedUsd: 0.09,
+        billablePerResolvedUsd: 0.09,
+        aiCostPerTicketWorkedUsd: 0.045,
+      });
+      expect(report.totals).toMatchObject({ aiCostPerResolvedUsd: 0.09, ticketsWorked: 2, copilotAiCostUsd: 0.006 });
+
+      // Unpriced usage on a ticket run makes the per-ticket figures unknown rather than too low.
+      store.recordModelUsage({ orgId: org.id, runId: store.listRuns({ ticketId: solved.id })[0].id, model: "test/unpriced", inputTokens: 10, outputTokens: 10 });
+      const unknown = usageReport(store, new Date(nowMs - 86_400_000), new Date(nowMs + 86_400_000));
+      expect(unknown.clients[0]).toMatchObject({ aiCostPerResolvedUsd: null, aiCostPerTicketWorkedUsd: null, unpricedTicketTokens: 20 });
+      expect(unknown.totals.aiCostPerResolvedUsd).toBeNull();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("leaves per-ticket cost empty when Haley resolved nothing", async () => {
+    const { app, store } = await makeApp();
+    try {
+      const org = store.createOrg({ name: "Nothing resolved" });
+      const ticket = store.createTicket({ orgId: org.id, title: "Escalated" });
+      store.recordModelUsage({ orgId: org.id, runId: store.createRun({ orgId: org.id, ticketId: ticket.id, kind: "ticket", title: "T", instruction: "Fix", createdBy: "haley" }).id, model: "test/scripted", inputTokens: 1, outputTokens: 1 });
+      const nowMs = Date.now();
+      const row = usageReport(store, new Date(nowMs - 86_400_000), new Date(nowMs + 86_400_000)).clients[0];
+      expect(row).toMatchObject({ ticketsWorked: 1, ticketsResolvedByHaley: 0, aiCostPerResolvedUsd: null });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("excludes the end instant from both resolutions and model usage", async () => {
     const { app, store } = await makeApp();
     try {

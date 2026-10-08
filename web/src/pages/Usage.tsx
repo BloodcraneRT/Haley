@@ -1,4 +1,4 @@
-import { CircleCheck, Coins, Download, Hourglass, Settings2, TriangleAlert, Users } from "lucide-react";
+import { CircleCheck, Coins, Download, Hourglass, Receipt, Settings2, TriangleAlert, Users } from "lucide-react";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, errorMessage, type BillingSettings, type UsageReport } from "../api";
@@ -120,6 +120,18 @@ function UsageBody({ usage: u, refreshing }: { usage: UsageReport; refreshing: b
           value={formatUsd(t.billableAiUsd)}
           hint={markup ? `with your ${formatNumber(markup)}% markup` : "no markup set"}
         />
+        <Kpi
+          icon={<Receipt className="icon-sm" />}
+          label="AI cost per resolved ticket"
+          value={formatUsd(t.aiCostPerResolvedUsd)}
+          hint={
+            t.aiCostPerResolvedUsd == null
+              ? t.ticketsResolvedByHaley
+                ? "unknown until every model used on tickets has a price"
+                : "no tickets resolved by Haley alone yet"
+              : `${formatUsd(t.billablePerResolvedUsd)} billable · ${formatUsd(t.aiCostPerTicketWorkedUsd)} per ticket worked`
+          }
+        />
         <Kpi icon={<Hourglass className="icon-sm" />} label="Hours saved" value={formatNumber(t.hoursSaved)} hint="estimated technician time" />
         <Kpi
           icon={<CircleCheck className="icon-sm" />}
@@ -160,6 +172,9 @@ function UsageBody({ usage: u, refreshing }: { usage: UsageReport; refreshing: b
                   <th scope="col" className="col-num hide-sm">
                     Resolved alone
                   </th>
+                  <th scope="col" className="col-num hide-sm">
+                    Per resolved
+                  </th>
                   <th scope="col" className="col-num hide-md">
                     Confirmed
                   </th>
@@ -177,9 +192,16 @@ function UsageBody({ usage: u, refreshing }: { usage: UsageReport; refreshing: b
                     </td>
                     <td className="col-num hide-sm">{formatNumber(c.modelCalls)}</td>
                     <td className="col-num hide-md">{formatTokens(c.inputTokens + c.outputTokens)}</td>
-                    <td className="col-num">{formatUsd(c.aiCostUsd)}</td>
+                    <td className="col-num">
+                      {formatUsd(c.aiCostUsd)}
+                      {c.copilotAiCostUsd > 0 && <div className="cell-sub">{formatUsd(c.copilotAiCostUsd)} copilot</div>}
+                    </td>
                     <td className="col-num">{formatUsd(c.billableAiUsd)}</td>
                     <td className="col-num hide-sm">{formatNumber(c.ticketsResolvedByHaley)}</td>
+                    <td className="col-num hide-sm">
+                      {formatUsd(c.aiCostPerResolvedUsd)}
+                      {c.aiCostPerTicketWorkedUsd != null && <div className="cell-sub">{formatUsd(c.aiCostPerTicketWorkedUsd)} per ticket worked</div>}
+                    </td>
                     <td className="col-num hide-md">{formatNumber(c.confirmedByRequester)}</td>
                     <td className="col-num">{formatNumber(c.hoursSaved)}</td>
                   </tr>
@@ -192,7 +214,7 @@ function UsageBody({ usage: u, refreshing }: { usage: UsageReport; refreshing: b
 
       <p className="secondary usage-notes">
         Hours saved assumes {formatNumber(u.settings.minutesPerTicket)} minutes per ticket Haley resolved alone and {formatNumber(u.settings.minutesPerAction)} per automatic change, plus
-        each completed recipe's estimate. AI cost uses the prices on the AI models page. {u.technicians.note} Resolved tickets with no reply close after{" "}
+        each completed recipe's estimate. AI cost uses the prices on the AI models page. Cost per resolved ticket is fully loaded: all AI cost on ticket runs, including tickets Haley escalated, divided by the tickets she resolved alone; recipe runs and the technician copilot are counted separately. {u.technicians.note} Resolved tickets with no reply close after{" "}
         {u.settings.autoCloseResolvedDays ? `${u.settings.autoCloseResolvedDays} day${u.settings.autoCloseResolvedDays === 1 ? "" : "s"}` : "never (auto-close is off)"}. Pricing options are in{" "}
         <code>docs/PRICING.md</code>.
       </p>
