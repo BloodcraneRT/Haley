@@ -421,6 +421,19 @@ export interface BillingSettings {
   minutesPerAction: number;
 }
 
+/** server/src/types.ts Technician */
+export interface Technician {
+  id: string;
+  name: string;
+  email: string | null;
+  slack_user_id: string | null;
+  teams_aad_id: string | null;
+  psa_refs: Record<string, string>;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface UsageClientRow {
   orgId: string;
   name: string;
@@ -1082,6 +1095,11 @@ export const api = {
   /** Edit a note, or confirm a pending one with `status: "active"`. */
   updateMemory: (id: string, input: { content?: string; status?: "active" }) => patch<ClientMemory>(`/api/memories/${enc(id)}`, input),
   deleteMemory: (id: string) => del<{ ok: true }>(`/api/memories/${enc(id)}`),
+  technicians: () => get<{ technicians: Technician[]; suggestions: string[] }>("/api/technicians"),
+  addTechnician: (input: { name: string; email?: string }) => post<Technician>("/api/technicians", input),
+  updateTechnician: (id: string, input: { name?: string; email?: string | null; slackUserId?: string | null; teamsAadId?: string | null; active?: boolean }) =>
+    patch<Technician>(`/api/technicians/${enc(id)}`, input),
+  deleteTechnician: (id: string) => del<Technician>(`/api/technicians/${enc(id)}`),
 
   tickets: (q: { orgId?: string; status?: string; search?: string } = {}) => get<TicketWithOrg[]>("/api/tickets", q),
   ticket: (id: string) => get<TicketDetail>(`/api/tickets/${enc(id)}`),

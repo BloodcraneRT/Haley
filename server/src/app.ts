@@ -42,6 +42,7 @@ import type { PsaAdapter, PsaConnection } from "./psa/types.js";
 import { registerHooks } from "./routes/hooks.js";
 import { registerM365Onboarding } from "./routes/m365Onboarding.js";
 import { registerMemoryRoutes } from "./routes/memories.js";
+import { registerTechnicianRoutes } from "./routes/technicians.js";
 import { Debouncer, registerSyncroWebhook } from "./routes/syncroWebhook.js";
 import { registerSecretLinks } from "./routes/secretLinks.js";
 import { nextOccurrence, Scheduler } from "./scheduler.js";
@@ -193,6 +194,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   const syncroWebhook = registerSyncroWebhook(app, { store, psa, alerts: alertTickets, publicUrl: ch.publicUrl, actor, log: (err) => app.log.error(err) });
   app.addHook("onClose", async () => syncroWebhook.stop());
   registerMemoryRoutes(app, store, actor);
+  registerTechnicianRoutes(app, store, actor);
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof HttpError) return reply.status(err.statusCode).send({ error: err.message });

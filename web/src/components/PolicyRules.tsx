@@ -295,6 +295,13 @@ function RuleModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, rule === "new" ? "new" : rule?.id]);
 
+  // Approvers come from the technician directory once it has anyone in it.
+  const directory = usePoll(() => (open ? api.technicians() : Promise.resolve(null)), [open]);
+  const technicianNames = (directory.data?.technicians ?? []).filter((t) => t.active).map((t) => t.name);
+  const unknownApprovers = technicianNames.length
+    ? draft.approvers.filter((a) => !technicianNames.some((n) => n.toLowerCase() === a.trim().toLowerCase()))
+    : [];
+
   // The client's real change tools, for autocomplete. Reads never hit a rule, so they're left out.
   const directories = org.integrations.filter((i) => i.provider === "m365" || i.provider === "google");
   const tools = usePoll(
@@ -403,9 +410,15 @@ function RuleModal({
             values={draft.approvers}
             onChange={(v) => set("approvers", v)}
             placeholder="Technician name"
-            suggestions={user ? [user] : undefined}
+            suggestions={technicianNames.length ? technicianNames : user ? [user] : undefined}
             help="Technician names as they sign in to the dashboard. Leave empty to let any technician approve."
           />
+        )}
+        {draft.effect === "approve" && unknownApprovers.length > 0 && (
+          <p className="help" role="status">
+            Not in the technician directory: {unknownApprovers.join(", ")}. They can still approve in the dashboard by signing in with that name, but not from Slack or
+            Teams until they're added on the Technicians page.
+          </p>
         )}
         {draft.effect === "allow" && (
           <div className="field">

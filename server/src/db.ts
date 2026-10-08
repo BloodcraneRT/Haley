@@ -290,6 +290,22 @@ const MIGRATIONS: string[] = [
    ALTER TABLE model_usage_v12 RENAME TO model_usage;
    CREATE INDEX IF NOT EXISTS idx_model_usage_org ON model_usage(org_id, created_at);
    CREATE INDEX IF NOT EXISTS idx_model_usage_run ON model_usage(run_id);`,
+  // 13: technician directory: who the MSP's technicians are, and their Slack and Teams identities
+  `CREATE TABLE IF NOT EXISTS technicians (
+     id TEXT PRIMARY KEY,
+     name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+     email TEXT,
+     slack_user_id TEXT,
+     teams_aad_id TEXT,
+     psa_refs TEXT NOT NULL DEFAULT '{}',
+     working_hours TEXT,
+     active INTEGER NOT NULL DEFAULT 1,
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL
+   );
+   CREATE UNIQUE INDEX IF NOT EXISTS idx_technicians_email ON technicians(email COLLATE NOCASE) WHERE email IS NOT NULL;
+   CREATE UNIQUE INDEX IF NOT EXISTS idx_technicians_slack ON technicians(slack_user_id) WHERE slack_user_id IS NOT NULL;
+   CREATE UNIQUE INDEX IF NOT EXISTS idx_technicians_teams ON technicians(teams_aad_id) WHERE teams_aad_id IS NOT NULL;`,
 ];
 
 export function openDb(path: string): Db {

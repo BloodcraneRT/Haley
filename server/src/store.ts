@@ -29,6 +29,7 @@ import type {
   TicketPriority,
   TicketChannel,
   TicketStatus,
+  Technician,
 } from "./types.js";
 import { DEFAULT_BILLING_SETTINGS, DEFAULT_ORG_SETTINGS, type BillingSettings } from "./types.js";
 import type { ModelProfile } from "./ai/providers.js";
@@ -907,6 +908,82 @@ export class Store {
       )
       .all(from, to) as Array<{ actor: string }>;
     return rows.map((r) => r.actor).sort((a, b) => a.localeCompare(b));
+  }
+
+  // ------------------------------------------------------------- technicians
+
+  private technicianRow(row: Row | undefined): Technician | null {
+    if (!row) return null;
+    return {
+      id: row.id as string,
+      name: row.name as string,
+      email: (row.email as string | null) ?? null,
+      slack_user_id: (row.slack_user_id as string | null) ?? null,
+      teams_aad_id: (row.teams_aad_id as string | null) ?? null,
+      psa_refs: parse<Record<string, string>>(row.psa_refs, {}),
+      active: row.active === 1,
+      created_at: row.created_at as string,
+      updated_at: row.updated_at as string,
+    };
+  }
+
+  /** Active technicians first, then by name. */
+  listTechnicians(opts: { activeOnly?: boolean } = {}): Technician[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM technicians ${opts.activeOnly ? "WHERE active = 1" : ""} ORDER BY active DESC, name COLLATE NOCASE`)
+      .all() as Row[];
+    return rows.map((r) => this.technicianRow(r)!);
+  }
+
+  getTechnician(id: string): Technician | null {
+    return this.technicianRow(this.db.prepare("SELECT * FROM technicians WHERE id = ?").get(id) as Row | undefined);
+  }
+
+  /** An active technician by sign-in name, email, Slack user id or Teams (Entra) object id. Names and emails ignore case. */
+  findTechnician(by: { name?: string; email?: string; slackUserId?: string; teamsAadId?: string }): Technician | null {
+    const [column, value] = by.name
+      ? ["name", by.name.trim()]
+      : by.email
+        ? ["email", by.email.trim()]
+        : by.slackUserId
+          ? ["slack_user_id", by.slackUserId]
+          : by.teamsAadId
+            ? ["teams_aad_id", by.teamsAadId.toLowerCase()]
+            : [null, null];
+    if (!column || !value) return null;
+    const nocase = column === "name" || column === "email" ? " COLLATE NOCASE" : "";
+    return this.technicianRow(this.db.prepare(`SELECT * FROM technicians WHERE active = 1 AND ${column} = ?${nocase}`).get(value) as Row | undefined);
+  }
+
+  createTechnician(input: { name: string; email?: string | null; slackUserId?: string | null; teamsAadId?: string | null }): Technician {
+    const id = newId("tech");
+    const ts = now();
+    this.db
+      .prepare("INSERT INTO technicians (id, name, email, slack_user_id, teams_aad_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(id, input.name.trim(), input.email?.trim().toLowerCase() || null, input.slackUserId || null, input.teamsAadId?.toLowerCase() || null, ts, ts);
+    return this.getTechnician(id)!;
+  }
+
+  updateTechnician(
+    id: string,
+    patch: { name?: string; email?: string | null; slackUserId?: string | null; teamsAadId?: string | null; active?: boolean; psaRefs?: Record<string, string> },
+  ): Technician | null {
+    const current = this.getTechnician(id);
+    if (!current) return null;
+    const pick = <T>(value: T | undefined, fallback: T) => (value === undefined ? fallback : value);
+    this.db
+      .prepare("UPDATE technicians SET name = ?, email = ?, slack_user_id = ?, teams_aad_id = ?, active = ?, psa_refs = ?, updated_at = ? WHERE id = ?")
+      .run(
+        pick(patch.name?.trim(), current.name),
+        patch.email === undefined ? current.email : patch.email?.trim().toLowerCase() || null,
+        pick(patch.slackUserId, current.slack_user_id) || null,
+        patch.teamsAadId === undefined ? current.teams_aad_id : patch.teamsAadId?.toLowerCase() || null,
+        pick(patch.active, current.active) ? 1 : 0,
+        json(pick(patch.psaRefs, current.psa_refs)),
+        now(),
+        id,
+      );
+    return this.getTechnician(id);
   }
 
   // ------------------------------------------------------------- memory

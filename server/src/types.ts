@@ -321,6 +321,23 @@ export interface ClientMemory {
   updated_at: string;
 }
 
+/**
+ * One of the MSP's technicians. `name` is the name they sign in to the dashboard with, so policy rules that
+ * name approvers keep matching; the Slack and Teams ids let them decide approvals from chat.
+ */
+export interface Technician {
+  id: string;
+  name: string;
+  email: string | null;
+  slack_user_id: string | null;
+  teams_aad_id: string | null;
+  /** PSA member or resource id per PSA connection. */
+  psa_refs: Record<string, string>;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 /** Workspace-wide billing and reporting settings. */
 export interface BillingSettings {
   /** Markup applied to AI cost when it's passed through to clients, in percent. */
