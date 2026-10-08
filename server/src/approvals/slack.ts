@@ -126,6 +126,10 @@ export class SlackApprovals implements ApprovalChannel {
     return { teamId: String(data.team_id), team: String(data.team ?? "") };
   }
 
+  configured(org: Org): boolean {
+    return this.destination(org) !== null;
+  }
+
   private destination(org: Org): string | null {
     if (!this.token()) return null;
     return org.settings.approvalSlackChannel || this.store.getApprovalSettings().slackChannel || null;

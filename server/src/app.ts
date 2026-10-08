@@ -1285,6 +1285,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     });
   }
 
+  // Let approval posts already in flight finish before the database closes.
+  app.addHook("onClose", async () => approvalNotifier.idle());
   app.addHook("onClose", async () => db.close());
   app.addHook("onClose", async () => scheduler.stop());
   return { app, store, agent, scheduler, psa, syncroWebhook, approvalNotifier };

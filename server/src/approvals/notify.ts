@@ -26,6 +26,8 @@ export interface EscalationNotice {
 /** Slack or Teams, as seen by the notifier. Each returns the ref needed to update the post later, or null if it isn't set up. */
 export interface ApprovalChannel {
   readonly channel: "slack" | "teams";
+  /** Whether this client's cards have somewhere to go, checked before doing any work. */
+  configured(org: Org): boolean;
   postApproval(card: ApprovalCard, org: Org): Promise<Record<string, string> | null>;
   updateApproval(ref: Record<string, string>, card: ApprovalCard): Promise<void>;
   postEscalation(notice: EscalationNotice, org: Org): Promise<Record<string, string> | null>;
@@ -64,8 +66,11 @@ export class ApprovalNotifier implements ApprovalEvents {
     while (this.inflight.size) await Promise.allSettled([...this.inflight]);
   }
 
+  /** Runs background work; it never rejects, since nothing awaits it except `idle()`. */
   private track(work: () => Promise<void>): void {
-    const p = work().finally(() => this.inflight.delete(p));
+    const p = work()
+      .catch(() => undefined)
+      .finally(() => this.inflight.delete(p));
     this.inflight.add(p);
   }
 
@@ -101,10 +106,12 @@ export class ApprovalNotifier implements ApprovalEvents {
   pending({ run, actions, evidence }: { run: Run; actions: Action[]; evidence: string[] }): void {
     const org = this.store.getOrg(run.org_id);
     if (!org) return;
+    const channels = this.channels.filter((c) => c.configured(org));
+    if (!channels.length) return;
     for (const action of actions) {
       const card = this.card(action, evidence);
       if (!card) continue;
-      for (const channel of this.channels) {
+      for (const channel of channels) {
         this.track(async () => {
           try {
             const ref = await channel.postApproval(card, org);
@@ -147,6 +154,8 @@ export class ApprovalNotifier implements ApprovalEvents {
     if (!this.store.getApprovalSettings().escalationNotices) return;
     const org = this.store.getOrg(ticket.org_id);
     if (!org) return;
+    const channels = this.channels.filter((c) => c.configured(org));
+    if (!channels.length) return;
     // The escalation reason is written right after the status change; read it on the next tick.
     this.track(async () => {
       await new Promise((resolve) => setImmediate(resolve));
@@ -158,7 +167,7 @@ export class ApprovalNotifier implements ApprovalEvents {
         reason: latest?.body.slice(0, 600) || (actor === "scheduler" ? "The SLA target was missed." : "Haley handed this to a person."),
         url: this.link(`/tickets/${ticket.id}`),
       };
-      for (const channel of this.channels) {
+      for (const channel of channels) {
         try {
           const ref = await channel.postEscalation(notice, org);
           if (ref) this.store.addApprovalPost({ actionId: null, ticketId: ticket.id, channel: channel.channel, ref });

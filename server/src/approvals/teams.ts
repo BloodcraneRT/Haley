@@ -101,6 +101,10 @@ export class TeamsApprovals implements ApprovalChannel {
     private readonly defaultTenantId: string,
   ) {}
 
+  configured(_org: Org): boolean {
+    return this.store.getApprovalSettings().teamsConversation !== null;
+  }
+
   private mspTenant(): string {
     return (this.store.getApprovalSettings().mspTenantId || this.defaultTenantId).toLowerCase();
   }
