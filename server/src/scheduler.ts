@@ -1,7 +1,7 @@
 import type { AgentService } from "./agent/runner.js";
 import type { PsaSync } from "./psa/sync.js";
 import { slaFor } from "./sla.js";
-import type { SyncroAlertTickets } from "./monitoring/syncroAlerts.js";
+import type { AlertTickets } from "./monitoring/alerts.js";
 import type { Store } from "./store.js";
 import type { Cadence, Schedule } from "./types.js";
 
@@ -36,7 +36,7 @@ export class Scheduler {
     private readonly store: Store,
     private readonly agent: AgentService,
     private readonly psa: PsaSync | null = null,
-    private readonly alerts: SyncroAlertTickets | null = null,
+    private readonly alerts: AlertTickets | null = null,
     /** Sends the one reminder for approvals left waiting (when the workspace turns reminders on). */
     private readonly reminders: { remind(nowMs: number): void } | null = null,
   ) {}
