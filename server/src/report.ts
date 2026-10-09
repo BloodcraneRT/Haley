@@ -74,7 +74,7 @@ export function clientReport(store: Store, org: Org, options: ReportOptions) {
   const articles = store.searchArticles({ orgId: org.id, limit: 100_000 }).filter((a) => a.org_id === org.id);
   // Recipes count only when a live run finished with every change it attempted done.
   // Check its entire action history: a recipe may span the start of the period.
-  const incompleteRuns = new Set(allActions.filter((a) => ["failed", "rejected", "blocked", "pending_approval"].includes(a.status)).map((a) => a.run_id));
+  const incompleteRuns = new Set(allActions.filter((a) => ["failed", "rejected", "changes_requested", "blocked", "pending_approval"].includes(a.status)).map((a) => a.run_id));
   const recipeRuns = store
     .listRuns({ orgId: org.id, kind: "task", limit: 100_000 })
     .filter((r) => r.template_id && r.mode === "live" && r.status === "completed" && inPeriod(r.updated_at))
@@ -113,7 +113,7 @@ export function clientReport(store: Store, org: Org, options: ReportOptions) {
       executed: executedChanges.length,
       automatic: autoChanges.length,
       approvedByTechnician: executedChanges.length - autoChanges.length,
-      rejected: changes.filter((a) => a.status === "rejected" && a.decided_by !== "system").length,
+      rejected: changes.filter((a) => (a.status === "rejected" || a.status === "changes_requested") && a.decided_by !== "system").length,
       blockedByPolicy: changes.filter((a) => a.status === "blocked").length,
       byTool: count(executedChanges, (a) => a.tool),
     },

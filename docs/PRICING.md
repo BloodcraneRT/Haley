@@ -11,7 +11,9 @@ This document covers how an MSP can charge for Haley and how Haley itself could 
 | Model calls, input and output tokens | Every call Haley made to an AI model on that client's tickets and tasks, including fallbacks. |
 | AI cost | Tokens × the prices you enter on each model on the **AI models** page. Haley doesn't hard-code vendor prices, because they change and you may have discounts. A model without prices shows as *unpriced* and is left out of the cost. Cached input tokens are counted at the full input price, so on providers with prompt-cache discounts the figure is an upper bound. |
 | Billable AI | AI cost plus your **AI markup** (a workspace setting), for passing costs through to the client. |
+| Ticket, recipe and copilot cost | AI cost split by kind of work: ticket runs, recipe and scheduled task runs, and the technician copilot (draft reply, next steps, summary). |
 | Resolved by Haley | Tickets Haley resolved with no technician touching them. |
+| AI cost per resolved ticket | All AI cost on ticket runs, **including tickets Haley worked and then escalated**, divided by the tickets she resolved alone. This fully loaded figure is the one to compare with per-ticket pricing. Shown with your markup as *billable per resolved ticket*, and next to *AI cost per ticket worked* (the same cost over every ticket Haley ran on). It's left blank when she resolved nothing, or while any model used on tickets has no price, rather than showing a figure that's too low. |
 | Confirmed by requester | Of those, how many the end user confirmed were fixed. |
 | Automatic changes and recipe runs | Changes Haley made without approval, and recipe tasks that completed cleanly. |
 | Hours saved | Minutes per ticket resolved alone, plus minutes per automatic change, plus each completed recipe's hands-on estimate. Both per-ticket and per-change minutes are workspace settings, and the assumption is printed with every report. |
@@ -69,6 +71,12 @@ These are options, not a decision. They're here so the numbers above cover which
 - Haley is hosted and the AI cost is included, and the MSP pays per ticket Haley resolves alone, or per confirmed resolution.
 - **Pros:** pay only for results, which makes it easy to trial.
 - **Cons:** revenue is unpredictable, and it creates pressure to call tickets "resolved". Confirmation counting helps with that. Dex moved away from this model.
+
+### Benchmark: what a resolved ticket costs elsewhere
+
+Credit-priced competitors make per-ticket cost explicit. Neo Agent (October 2026) charges $0.12–$0.20 per credit depending on plan, and an agent-run ticket that can make changes costs 3 credits. That's about **$0.36–$0.60 per agent-handled ticket**, before its $500/month minimum. See [research/NEOAGENT_COMPARISON.md](research/NEOAGENT_COMPARISON.md).
+
+To compare, read *AI cost per resolved ticket* on the Usage page. It is fully loaded, so it's comparable to a price charged per ticket. It depends heavily on the model you choose: a smaller model for triage and simple fixes, with a larger fallback, usually costs a fraction of a frontier model on every ticket. Your markup on top is the margin.
 
 ### Recommendation
 

@@ -150,6 +150,36 @@ export class TeamsChannel implements ChannelAdapter {
     return this.botToken.value;
   }
 
+  /** Calls the Bot Framework connector (serviceUrl) as the bot. Returns the parsed body ({} when empty). */
+  async botRequest(method: "GET" | "POST" | "PUT", url: string, body?: unknown): Promise<Json> {
+    const res = await this.fetchImpl(url, {
+      method,
+      headers: { authorization: `Bearer ${await this.accessToken()}`, "content-type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const raw = await res.text();
+    if (!res.ok) throw new Error(`Teams returned ${res.status}`);
+    try {
+      return raw ? (JSON.parse(raw) as Json) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** A conversation member as Teams reports them (email or UPN, and Entra object id), or null. */
+  async member(serviceUrl: string, conversationId: string, userId: string): Promise<{ email: string | null; aadObjectId: string | null } | null> {
+    try {
+      const m = await this.botRequest(
+        "GET",
+        `${serviceUrl.replace(/\/$/, "")}/v3/conversations/${encodeURIComponent(conversationId)}/members/${encodeURIComponent(userId)}`,
+      );
+      const email = String(m.email ?? m.userPrincipalName ?? "").toLowerCase() || null;
+      return { email, aadObjectId: m.objectId ?? m.aadObjectId ?? null };
+    } catch {
+      return null;
+    }
+  }
+
   async send(ticket: Ticket, text: string): Promise<DeliveryResult> {
     const { serviceUrl, conversationId } = ticket.channel_ref;
     if (!serviceUrl || !conversationId) return { delivered: false, detail: "No Teams conversation on this ticket." };

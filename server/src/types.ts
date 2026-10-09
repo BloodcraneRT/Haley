@@ -65,8 +65,13 @@ export type ActionStatus =
   | "pending_approval"
   | "approved"
   | "rejected"
+  /** A technician sent it back with a note; Haley adjusts and may propose it again. */
+  | "changes_requested"
   | "blocked"
   | "planned";
+
+/** A technician's decision on a pending action: run it, don't, or send it back with a note. */
+export type ApprovalDecision = "approve" | "reject" | "changes";
 
 /** live runs act; plan runs are dry runs that simulate every change and report what would happen. */
 export type RunMode = "live" | "plan";
@@ -92,6 +97,8 @@ export interface OrgSettings {
   modelProfileId: string;
   /** Client-specific rules layered on the autonomy policy, checked in order; the first match wins. */
   policyRules: PolicyRule[];
+  /** Slack channel id (in the MSP's own workspace) for this client's approval cards; empty uses the workspace default. */
+  approvalSlackChannel: string;
 }
 
 export type PolicyEffect = "allow" | "approve" | "deny";
@@ -137,6 +144,7 @@ export const DEFAULT_ORG_SETTINGS: OrgSettings = {
   paused: false,
   modelProfileId: "",
   policyRules: [],
+  approvalSlackChannel: "",
   sla: {
     urgent: { responseMinutes: 15, resolutionMinutes: 240 },
     high: { responseMinutes: 60, resolutionMinutes: 480 },
@@ -320,6 +328,58 @@ export interface ClientMemory {
   created_at: string;
   updated_at: string;
 }
+
+/**
+ * One of the MSP's technicians. `name` is the name they sign in to the dashboard with, so policy rules that
+ * name approvers keep matching; the Slack and Teams ids let them decide approvals from chat.
+ */
+export interface Technician {
+  id: string;
+  name: string;
+  email: string | null;
+  slack_user_id: string | null;
+  teams_aad_id: string | null;
+  /** PSA member or resource id per PSA connection. */
+  psa_refs: Record<string, string>;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A Teams channel or group chat the Haley bot was registered in (by a technician typing "approvals here"). */
+export interface TeamsConversationRef {
+  serviceUrl: string;
+  conversationId: string;
+  tenantId: string;
+  /** Who registered it and when, for the settings page. */
+  registeredBy: string;
+  registeredAt: string;
+}
+
+/** Where approval cards and escalation notices go, in the MSP's own Slack and Teams. */
+export interface ApprovalSettings {
+  /** Default Slack channel id for approval cards; clients can override it. Empty: no Slack cards. */
+  slackChannel: string;
+  /** The MSP's Slack workspace (team id), set when the bot token is saved. */
+  slackTeamId: string;
+  /** Default Teams conversation for approval cards. Null: no Teams cards. */
+  teamsConversation: TeamsConversationRef | null;
+  /** The MSP's own Entra tenant: only its users can register a Teams channel or decide from Teams cards. Empty uses HALEY_TEAMS_TENANT_ID. */
+  mspTenantId: string;
+  /** Highest risk that can be approved from chat; above it, cards say "approve in Haley". */
+  chatApprovalMaxRisk: "write" | "destructive";
+  /** Also post a notice when Haley escalates a ticket to a person. */
+  escalationNotices: boolean;
+}
+
+export const DEFAULT_APPROVAL_SETTINGS: ApprovalSettings = {
+  slackChannel: "",
+  slackTeamId: "",
+  teamsConversation: null,
+  mspTenantId: "",
+  chatApprovalMaxRisk: "destructive",
+  escalationNotices: true,
+};
 
 /** Workspace-wide billing and reporting settings. */
 export interface BillingSettings {

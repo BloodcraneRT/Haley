@@ -5,6 +5,7 @@ import { tx, type Db } from "./db.js";
 import type {
   Action,
   ActionStatus,
+  ApprovalDecision,
   AuditEntry,
   Assurance,
   ClientMemory,
@@ -29,8 +30,9 @@ import type {
   TicketPriority,
   TicketChannel,
   TicketStatus,
+  Technician,
 } from "./types.js";
-import { DEFAULT_BILLING_SETTINGS, DEFAULT_ORG_SETTINGS, type BillingSettings } from "./types.js";
+import { DEFAULT_APPROVAL_SETTINGS, DEFAULT_BILLING_SETTINGS, DEFAULT_ORG_SETTINGS, type ApprovalSettings, type BillingSettings } from "./types.js";
 import type { ModelProfile } from "./ai/providers.js";
 import { DEFAULT_PSA_OPTIONS, type PsaConnection, type PsaKind, type PsaOptions, type TicketLink } from "./psa/types.js";
 
@@ -49,6 +51,9 @@ const parse = <T>(text: unknown, fallback: T): T => {
     return fallback;
   }
 };
+
+/** What a model call was for, for billing: a ticket run, a task run, or a call outside runs (the copilot). */
+export type UsageKind = "ticket" | "task" | "assist";
 
 export interface PendingState {
   /** tool_use ids in the order the model emitted them. */
@@ -316,6 +321,12 @@ export class Store {
   // ------------------------------------------------------------ incidents
 
   /** Called after every new ticket (incident detection). Listener errors never fail ticket creation. */
+  private readonly statusListeners: Array<(ticket: Ticket, from: TicketStatus, actor: string) => void> = [];
+  /** Called after any ticket status change, with the updated ticket. Listeners must not throw into the caller. */
+  onTicketStatusChanged(listener: (ticket: Ticket, from: TicketStatus, actor: string) => void): void {
+    this.statusListeners.push(listener);
+  }
+
   private readonly ticketCreatedListeners: Array<(ticket: Ticket) => void> = [];
   onTicketCreated(listener: (ticket: Ticket) => void): void {
     this.ticketCreatedListeners.push(listener);
@@ -577,6 +588,15 @@ export class Store {
         next.updated_at,
       );
     }
+    if (changes.status) {
+      for (const listener of this.statusListeners) {
+        try {
+          listener(next, changes.status.from as TicketStatus, actor);
+        } catch {
+          // Notifications are best effort.
+        }
+      }
+    }
     return next;
   }
 
@@ -799,16 +819,33 @@ export class Store {
       .run(input.runId, input.orgId, input.model, input.inputTokens, input.outputTokens, now(), input.purpose ?? "run");
   }
 
-  /** Token totals per client and model in [from, to). */
-  modelUsageSummary(from: string, to: string, orgId?: string): Array<{ org_id: string; model: string; calls: number; input_tokens: number; output_tokens: number }> {
-    const where = `created_at >= ? AND created_at < ?${orgId ? " AND org_id = ?" : ""}`;
+  /**
+   * Token totals per client, model and kind of work in [from, to): "ticket" runs, "task" runs (recipes and
+   * scheduled work), and "assist" calls made outside any run (the technician copilot).
+   */
+  modelUsageSummary(from: string, to: string, orgId?: string): Array<{ org_id: string; model: string; kind: UsageKind; calls: number; input_tokens: number; output_tokens: number }> {
+    const where = `mu.created_at >= ? AND mu.created_at < ?${orgId ? " AND mu.org_id = ?" : ""}`;
     const args: SQLInputValue[] = orgId ? [from, to, orgId] : [from, to];
     return this.db
       .prepare(
-        `SELECT org_id, model, COUNT(*) AS calls, SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens
-         FROM model_usage WHERE ${where} GROUP BY org_id, model`,
+        `SELECT mu.org_id, mu.model,
+                CASE WHEN mu.run_id IS NULL THEN 'assist' WHEN r.ticket_id IS NOT NULL THEN 'ticket' ELSE 'task' END AS kind,
+                COUNT(*) AS calls, SUM(mu.input_tokens) AS input_tokens, SUM(mu.output_tokens) AS output_tokens
+         FROM model_usage mu LEFT JOIN runs r ON r.id = mu.run_id
+         WHERE ${where} GROUP BY mu.org_id, mu.model, kind`,
       )
-      .all(...args) as Array<{ org_id: string; model: string; calls: number; input_tokens: number; output_tokens: number }>;
+      .all(...args) as Array<{ org_id: string; model: string; kind: UsageKind; calls: number; input_tokens: number; output_tokens: number }>;
+  }
+
+  /** How many distinct tickets Haley made model calls on in [from, to), per client. */
+  ticketsWorkedByOrg(from: string, to: string): Map<string, number> {
+    const rows = this.db
+      .prepare(
+        `SELECT mu.org_id, COUNT(DISTINCT r.ticket_id) AS n FROM model_usage mu JOIN runs r ON r.id = mu.run_id
+         WHERE r.ticket_id IS NOT NULL AND mu.created_at >= ? AND mu.created_at < ? GROUP BY mu.org_id`,
+      )
+      .all(from, to) as Array<{ org_id: string; n: number }>;
+    return new Map(rows.map((r) => [r.org_id, r.n]));
   }
 
   /** Token totals per model for one run. */
@@ -865,6 +902,47 @@ export class Store {
     return secret;
   }
 
+  /** A sealed workspace credential (e.g. the MSP's Slack bot token), or null. */
+  getWorkspaceSecret(name: string): string | null {
+    const row = this.db.prepare("SELECT value FROM workspace_settings WHERE key = ?").get(`secret:${name}`) as Row | undefined;
+    return row ? unseal(this.secretKey, row.value as string) : null;
+  }
+
+  setWorkspaceSecret(name: string, value: string | null): void {
+    if (value === null) {
+      this.db.prepare("DELETE FROM workspace_settings WHERE key = ?").run(`secret:${name}`);
+      return;
+    }
+    this.db
+      .prepare("INSERT INTO workspace_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(`secret:${name}`, seal(this.secretKey, value));
+  }
+
+  getApprovalSettings(): ApprovalSettings {
+    const row = this.db.prepare("SELECT value FROM workspace_settings WHERE key = 'approvals'").get() as Row | undefined;
+    return { ...DEFAULT_APPROVAL_SETTINGS, ...parse<Partial<ApprovalSettings>>(row?.value, {}) };
+  }
+
+  setApprovalSettings(patch: Partial<ApprovalSettings>): ApprovalSettings {
+    const next = { ...this.getApprovalSettings(), ...patch };
+    this.db
+      .prepare("INSERT INTO workspace_settings (key, value) VALUES ('approvals', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(json(next));
+    return next;
+  }
+
+  /** Records an approval card or escalation notice posted to Slack or Teams, so it can be updated later. */
+  addApprovalPost(input: { actionId: string | null; ticketId: string | null; channel: "slack" | "teams"; ref: Record<string, string> }): void {
+    this.db
+      .prepare("INSERT INTO approval_posts (id, action_id, ticket_id, channel, ref, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(newId("apost"), input.actionId, input.ticketId, input.channel, json(input.ref), now());
+  }
+
+  listApprovalPosts(actionId: string): Array<{ channel: "slack" | "teams"; ref: Record<string, string> }> {
+    const rows = this.db.prepare("SELECT channel, ref FROM approval_posts WHERE action_id = ? ORDER BY created_at").all(actionId) as Row[];
+    return rows.map((r) => ({ channel: r.channel as "slack" | "teams", ref: parse<Record<string, string>>(r.ref, {}) }));
+  }
+
   getBillingSettings(): BillingSettings {
     const row = this.db.prepare("SELECT value FROM workspace_settings WHERE key = 'billing'").get() as Row | undefined;
     return { ...DEFAULT_BILLING_SETTINGS, ...parse<Partial<BillingSettings>>(row?.value, {}) };
@@ -887,6 +965,82 @@ export class Store {
       )
       .all(from, to) as Array<{ actor: string }>;
     return rows.map((r) => r.actor).sort((a, b) => a.localeCompare(b));
+  }
+
+  // ------------------------------------------------------------- technicians
+
+  private technicianRow(row: Row | undefined): Technician | null {
+    if (!row) return null;
+    return {
+      id: row.id as string,
+      name: row.name as string,
+      email: (row.email as string | null) ?? null,
+      slack_user_id: (row.slack_user_id as string | null) ?? null,
+      teams_aad_id: (row.teams_aad_id as string | null) ?? null,
+      psa_refs: parse<Record<string, string>>(row.psa_refs, {}),
+      active: row.active === 1,
+      created_at: row.created_at as string,
+      updated_at: row.updated_at as string,
+    };
+  }
+
+  /** Active technicians first, then by name. */
+  listTechnicians(opts: { activeOnly?: boolean } = {}): Technician[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM technicians ${opts.activeOnly ? "WHERE active = 1" : ""} ORDER BY active DESC, name COLLATE NOCASE`)
+      .all() as Row[];
+    return rows.map((r) => this.technicianRow(r)!);
+  }
+
+  getTechnician(id: string): Technician | null {
+    return this.technicianRow(this.db.prepare("SELECT * FROM technicians WHERE id = ?").get(id) as Row | undefined);
+  }
+
+  /** An active technician by sign-in name, email, Slack user id or Teams (Entra) object id. Names and emails ignore case. */
+  findTechnician(by: { name?: string; email?: string; slackUserId?: string; teamsAadId?: string }): Technician | null {
+    const [column, value] = by.name
+      ? ["name", by.name.trim()]
+      : by.email
+        ? ["email", by.email.trim()]
+        : by.slackUserId
+          ? ["slack_user_id", by.slackUserId]
+          : by.teamsAadId
+            ? ["teams_aad_id", by.teamsAadId.toLowerCase()]
+            : [null, null];
+    if (!column || !value) return null;
+    const nocase = column === "name" || column === "email" ? " COLLATE NOCASE" : "";
+    return this.technicianRow(this.db.prepare(`SELECT * FROM technicians WHERE active = 1 AND ${column} = ?${nocase}`).get(value) as Row | undefined);
+  }
+
+  createTechnician(input: { name: string; email?: string | null; slackUserId?: string | null; teamsAadId?: string | null }): Technician {
+    const id = newId("tech");
+    const ts = now();
+    this.db
+      .prepare("INSERT INTO technicians (id, name, email, slack_user_id, teams_aad_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(id, input.name.trim(), input.email?.trim().toLowerCase() || null, input.slackUserId || null, input.teamsAadId?.toLowerCase() || null, ts, ts);
+    return this.getTechnician(id)!;
+  }
+
+  updateTechnician(
+    id: string,
+    patch: { name?: string; email?: string | null; slackUserId?: string | null; teamsAadId?: string | null; active?: boolean; psaRefs?: Record<string, string> },
+  ): Technician | null {
+    const current = this.getTechnician(id);
+    if (!current) return null;
+    const pick = <T>(value: T | undefined, fallback: T) => (value === undefined ? fallback : value);
+    this.db
+      .prepare("UPDATE technicians SET name = ?, email = ?, slack_user_id = ?, teams_aad_id = ?, active = ?, psa_refs = ?, updated_at = ? WHERE id = ?")
+      .run(
+        pick(patch.name?.trim(), current.name),
+        patch.email === undefined ? current.email : patch.email?.trim().toLowerCase() || null,
+        pick(patch.slackUserId, current.slack_user_id) || null,
+        patch.teamsAadId === undefined ? current.teams_aad_id : patch.teamsAadId?.toLowerCase() || null,
+        pick(patch.active, current.active) ? 1 : 0,
+        json(pick(patch.psaRefs, current.psa_refs)),
+        now(),
+        id,
+      );
+    return this.getTechnician(id);
   }
 
   // ------------------------------------------------------------- memory
@@ -1039,13 +1193,14 @@ export class Store {
   }
 
   /** Atomically moves an action out of pending_approval; returns false if someone else already decided. */
-  claimPendingAction(id: string, decidedBy: string, note: string, approve: boolean): boolean {
+  claimPendingAction(id: string, decidedBy: string, note: string, decision: ApprovalDecision): boolean {
+    const status: ActionStatus = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "changes_requested";
     const res = this.db
       .prepare(
         `UPDATE actions SET status = ?, decided_by = ?, decision_note = ?, decided_at = ?
          WHERE id = ? AND status = 'pending_approval'`,
       )
-      .run(approve ? "approved" : "rejected", decidedBy, note, now(), id);
+      .run(status, decidedBy, note, now(), id);
     return res.changes > 0;
   }
 

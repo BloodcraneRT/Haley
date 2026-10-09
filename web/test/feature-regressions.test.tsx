@@ -134,15 +134,32 @@ describe("usage clients", () => {
       period: { from: "2026-09-01", to: "2026-10-01", days: 30 },
       settings: { aiMarkupPercent: 0, autoCloseResolvedDays: 7, minutesPerTicket: 20, minutesPerAction: 5 },
       clients: [{ orgId: "first", name: "First client", modelCalls: 0, inputTokens: 0, outputTokens: 0, unpricedTokens: 0, aiCostUsd: 0,
-        billableAiUsd: 0, ticketsResolvedByHaley: 0, confirmedByRequester: 0, automaticChanges: 2, recipeRuns: 0, hoursSaved: 0.2 }],
-      totals: { modelCalls: 0, inputTokens: 0, outputTokens: 0, unpricedTokens: 0, aiCostUsd: 0, billableAiUsd: 0,
-        ticketsResolvedByHaley: 0, confirmedByRequester: 0, hoursSaved: 0.2 },
+        billableAiUsd: 0, ticketAiCostUsd: 0, taskAiCostUsd: 0, copilotAiCostUsd: 0, unpricedTicketTokens: 0, ticketsWorked: 0, ticketsResolvedByHaley: 0,
+        aiCostPerResolvedUsd: null, billablePerResolvedUsd: null, aiCostPerTicketWorkedUsd: null, confirmedByRequester: 0, automaticChanges: 2, recipeRuns: 0, hoursSaved: 0.2 }],
+      totals: { modelCalls: 0, inputTokens: 0, outputTokens: 0, unpricedTokens: 0, aiCostUsd: 0, billableAiUsd: 0, ticketAiCostUsd: 0, taskAiCostUsd: 0,
+        copilotAiCostUsd: 0, ticketsWorked: 0, ticketsResolvedByHaley: 0, aiCostPerResolvedUsd: null, billablePerResolvedUsd: null, aiCostPerTicketWorkedUsd: null,
+        confirmedByRequester: 0, hoursSaved: 0.2 },
       unpricedModels: [], technicians: { names: [], count: 0, note: "Estimated" },
   };
   it("shows a client whose only usage is automatic changes", async () => {
     vi.spyOn(api, "usage").mockResolvedValue(usage);
     const { node } = await renderView(() => <MemoryRouter><UsagePage /></MemoryRouter>);
     expect(node.querySelector(".usage-table tbody")?.textContent).toContain("First client");
+    expect(node.textContent).toContain("no tickets resolved by Haley alone yet");
+  });
+
+  it("shows AI cost per resolved ticket and per ticket worked, with copilot cost apart", async () => {
+    const row = { ...usage.clients[0], aiCostUsd: 0.5, ticketAiCostUsd: 0.4, copilotAiCostUsd: 0.1, ticketsWorked: 4, ticketsResolvedByHaley: 2,
+      aiCostPerResolvedUsd: 0.2, billablePerResolvedUsd: 0.25, aiCostPerTicketWorkedUsd: 0.1 };
+    vi.spyOn(api, "usage").mockResolvedValue({ ...usage, clients: [row], totals: { ...usage.totals, aiCostUsd: 0.5, ticketsResolvedByHaley: 2, ticketsWorked: 4,
+      aiCostPerResolvedUsd: 0.2, billablePerResolvedUsd: 0.25, aiCostPerTicketWorkedUsd: 0.1 } });
+    const { node } = await renderView(() => <MemoryRouter><UsagePage /></MemoryRouter>);
+    const kpi = [...node.querySelectorAll(".kpi")].find((k) => k.textContent?.includes("AI cost per resolved ticket"))!;
+    expect(kpi.textContent).toContain("$0.20");
+    expect(kpi.textContent).toContain("$0.25 billable");
+    const cells = node.querySelector(".usage-table tbody")!.textContent!;
+    expect(cells).toContain("$0.10 copilot");
+    expect(cells).toContain("$0.10 per ticket worked");
   });
 
   it("allows fractional markup and time estimates in the browser, while keeping auto-close days integral", async () => {

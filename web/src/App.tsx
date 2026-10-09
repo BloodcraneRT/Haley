@@ -26,6 +26,7 @@ const RunDetailPage = lazy(() => import("./pages/RunDetail").then((m) => ({ defa
 const RunsPage = lazy(() => import("./pages/Runs").then((m) => ({ default: m.RunsPage })));
 const SettingsPage = lazy(() => import("./pages/Settings").then((m) => ({ default: m.SettingsPage })));
 const SimulatorPage = lazy(() => import("./pages/Simulator").then((m) => ({ default: m.SimulatorPage })));
+const TechniciansPage = lazy(() => import("./pages/Technicians").then((m) => ({ default: m.TechniciansPage })));
 const TasksPage = lazy(() => import("./pages/Tasks").then((m) => ({ default: m.TasksPage })));
 const TicketDetailPage = lazy(() => import("./pages/TicketDetail").then((m) => ({ default: m.TicketDetailPage })));
 const IncidentDetailPage = lazy(() => import("./pages/IncidentDetail").then((m) => ({ default: m.IncidentDetailPage })));
@@ -125,6 +126,7 @@ export function App() {
             <Route path="psa" element={<PsaPage />} />
             <Route path="psa/:id/customers" element={<Keyed><PsaMappingPage /></Keyed>} />
             <Route path="models" element={<ModelsPage />} />
+            <Route path="technicians" element={<TechniciansPage />} />
             <Route path="tickets" element={<TicketsPage />} />
             <Route path="tickets/:id" element={<Keyed><TicketDetailPage /></Keyed>} />
             <Route path="tasks" element={<TasksPage />} />

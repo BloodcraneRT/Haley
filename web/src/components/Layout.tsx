@@ -15,6 +15,7 @@ import {
   Sparkles,
   Ticket,
   Zap,
+  UsersRound,
 } from "lucide-react";
 import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
@@ -102,6 +103,9 @@ export function Layout() {
           </NavItem>
           <NavItem to="/psa" icon={<ArrowLeftRight className="icon" aria-hidden="true" />}>
             PSA sync
+          </NavItem>
+          <NavItem to="/technicians" icon={<UsersRound className="icon" aria-hidden="true" />}>
+            Technicians
           </NavItem>
           <NavItem to="/models" icon={<BrainCircuit className="icon" aria-hidden="true" />}>
             AI models

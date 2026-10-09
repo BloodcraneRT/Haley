@@ -5882,3 +5882,25 @@ a.psa-source-chip:hover {
 .copilot-advice .card-header h2 {
   margin: 0;
 }
+
+/* ------------------------------------------------------------------ technicians */
+
+.hide-sm-up {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .hide-sm-up {
+    display: block;
+  }
+}
+
+.technicians-table tr.is-muted td {
+  color: var(--text-3);
+}
+
+.technicians-table .col-actions {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}

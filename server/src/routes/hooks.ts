@@ -60,6 +60,8 @@ export interface HookDeps {
   slack: SlackChannel | null;
   teams: TeamsChannel | null;
   log: (err: unknown) => void;
+  /** Handles approval-card invokes and "approvals here" before end-user handling; null passes the activity on. */
+  teamsIntercept?: (activity: Record<string, any>) => Promise<{ status: number; body?: unknown } | null>;
 }
 
 /**
@@ -124,6 +126,8 @@ export function registerHooks(app: FastifyInstance, deps: HookDeps) {
     } catch (err) {
       return reply.status(401).send({ error: err instanceof Error ? err.message : "Unauthorized" });
     }
+    const intercepted = deps.teamsIntercept ? await deps.teamsIntercept(activity) : null;
+    if (intercepted) return reply.status(intercepted.status).send(intercepted.body ?? "");
     void (async () => {
       const inbound = await deps.teams!.toInbound(activity);
       if (inbound) await hub.receive(inbound);

@@ -52,7 +52,7 @@ export const TICKET_PRIORITIES: TicketPriority[] = ["low", "normal", "high", "ur
 export type RunStatus = "queued" | "running" | "awaiting_approval" | "completed" | "failed";
 export type RunKind = "ticket" | "task";
 export type Risk = "read" | "internal" | "write" | "destructive";
-export type ActionStatus = "executed" | "failed" | "pending_approval" | "approved" | "rejected" | "blocked" | "planned";
+export type ActionStatus = "executed" | "failed" | "pending_approval" | "approved" | "rejected" | "changes_requested" | "blocked" | "planned";
 
 export interface SlaTarget {
   responseMinutes: number;
@@ -77,6 +77,8 @@ export interface OrgSettings {
   modelProfileId: string;
   /** Client rules layered on the autonomy policy, checked in order; the first enabled match wins. */
   policyRules: PolicyRule[];
+  /** Slack channel id for this client's approval cards; empty uses the workspace default. */
+  approvalSlackChannel: string;
 }
 
 /** deny: blocked; approve: goes to the approval queue; allow: runs without a sign-off the autonomy level would have asked for. */
@@ -421,6 +423,44 @@ export interface BillingSettings {
   minutesPerAction: number;
 }
 
+/** server/src/types.ts ApprovalSettings, plus what the server can do. */
+export interface ApprovalSettingsView {
+  slackChannel: string;
+  slackTeamId: string;
+  teamsConversation: { serviceUrl: string; conversationId: string; tenantId: string; registeredBy: string; registeredAt: string } | null;
+  chatApprovalMaxRisk: "write" | "destructive";
+  escalationNotices: boolean;
+  mspTenantId: string;
+  /** HALEY_TEAMS_TENANT_ID, used when mspTenantId is empty. */
+  teamsDefaultTenantId: string;
+  slackConnected: boolean;
+  slackAvailable: boolean;
+  teamsAvailable: boolean;
+  interactivityUrl: string;
+}
+
+export interface ApprovalSettingsInput {
+  slackBotToken?: string | null;
+  slackChannel?: string;
+  chatApprovalMaxRisk?: "write" | "destructive";
+  escalationNotices?: boolean;
+  mspTenantId?: string;
+  teamsConversation?: null;
+}
+
+/** server/src/types.ts Technician */
+export interface Technician {
+  id: string;
+  name: string;
+  email: string | null;
+  slack_user_id: string | null;
+  teams_aad_id: string | null;
+  psa_refs: Record<string, string>;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface UsageClientRow {
   orgId: string;
   name: string;
@@ -430,7 +470,16 @@ export interface UsageClientRow {
   unpricedTokens: number;
   aiCostUsd: number;
   billableAiUsd: number;
+  ticketAiCostUsd: number;
+  taskAiCostUsd: number;
+  copilotAiCostUsd: number;
+  unpricedTicketTokens: number;
+  ticketsWorked: number;
   ticketsResolvedByHaley: number;
+  /** All AI cost on ticket runs ÷ tickets resolved by Haley alone; null with none resolved or unpriced usage. */
+  aiCostPerResolvedUsd: number | null;
+  billablePerResolvedUsd: number | null;
+  aiCostPerTicketWorkedUsd: number | null;
   confirmedByRequester: number;
   automaticChanges: number;
   recipeRuns: number;
@@ -449,7 +498,14 @@ export interface UsageReport {
     unpricedTokens: number;
     aiCostUsd: number;
     billableAiUsd: number;
+    ticketAiCostUsd: number;
+    taskAiCostUsd: number;
+    copilotAiCostUsd: number;
+    ticketsWorked: number;
     ticketsResolvedByHaley: number;
+    aiCostPerResolvedUsd: number | null;
+    billablePerResolvedUsd: number | null;
+    aiCostPerTicketWorkedUsd: number | null;
     confirmedByRequester: number;
     hoursSaved: number;
   };
@@ -1066,6 +1122,11 @@ export const api = {
   /** Edit a note, or confirm a pending one with `status: "active"`. */
   updateMemory: (id: string, input: { content?: string; status?: "active" }) => patch<ClientMemory>(`/api/memories/${enc(id)}`, input),
   deleteMemory: (id: string) => del<{ ok: true }>(`/api/memories/${enc(id)}`),
+  technicians: () => get<{ technicians: Technician[]; suggestions: string[] }>("/api/technicians"),
+  addTechnician: (input: { name: string; email?: string }) => post<Technician>("/api/technicians", input),
+  updateTechnician: (id: string, input: { name?: string; email?: string | null; slackUserId?: string | null; teamsAadId?: string | null; active?: boolean }) =>
+    patch<Technician>(`/api/technicians/${enc(id)}`, input),
+  deleteTechnician: (id: string) => del<Technician>(`/api/technicians/${enc(id)}`),
 
   tickets: (q: { orgId?: string; status?: string; search?: string } = {}) => get<TicketWithOrg[]>("/api/tickets", q),
   ticket: (id: string) => get<TicketDetail>(`/api/tickets/${enc(id)}`),
@@ -1098,6 +1159,10 @@ export const api = {
   approvals: () => get<Approval[]>("/api/approvals"),
   approve: (id: string, note = "") => post<Action>(`/api/actions/${enc(id)}/approve`, { note }),
   reject: (id: string, note = "") => post<Action>(`/api/actions/${enc(id)}/reject`, { note }),
+  requestChanges: (id: string, note: string) => post<Action>(`/api/actions/${enc(id)}/request-changes`, { note }),
+  approvalSettings: () => get<ApprovalSettingsView>("/api/approvals/settings"),
+  updateApprovalSettings: (input: ApprovalSettingsInput) => request<ApprovalSettingsView>("PUT", "/api/approvals/settings", input),
+  testApprovals: (orgId?: string) => post<{ ok: true; channel: string }>("/api/approvals/test", orgId ? { orgId } : {}),
   reveal: (id: string) => post<Record<string, string>>(`/api/actions/${enc(id)}/reveal`),
 
   kb: (q: { orgId?: string; q?: string } = {}) => get<KbArticleListItem[]>("/api/kb", q),

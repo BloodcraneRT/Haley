@@ -139,6 +139,20 @@ Ticket text, emails and chat messages come from end users. Haley treats them as 
   - "It's fixed" can only close a resolved ticket.
   - Messages are limited to 10 per hour per ticket.
 
+## Technicians and chat approvals
+
+- **The directory.** The **Technicians** page lists who the MSP's technicians are. A technician's name is the name they sign in to the dashboard with, so client rules that name approvers keep matching. Renaming someone renames them in those rules too.
+- **Dashboard identity.** In the dashboard, the name a technician types is not verified: one shared API token protects the API.
+- **Chat identity is stronger.** In Slack and Teams, a decision is accepted only when all of these hold:
+  - the click is signed by Slack (signing secret) or by Bot Framework (JWT);
+  - it comes from the MSP's own workspace or tenant;
+  - the person is an active directory technician. They're matched by linked id, or by the email on their chat profile the first time, which then links the account.
+- **Same rules everywhere.** Every decision from chat goes through the same path as the dashboard: named-approver rules, an atomic claim (only one decision wins), and the policy re-check before an approved change runs.
+- **Workspace risk cap.** The workspace can keep sensitive changes approvable only in the dashboard; forged clicks are refused as well.
+- **What cards never contain:** action inputs or tool results. "What she checked" lists Haley's read steps (for example "Look up isaiah@contoso.com"), not what they returned.
+- **Untrusted text is escaped:** ticket titles, requester names and Haley's text. In Slack that stops `@channel` mentions and forged links; in Teams it breaks Markdown link syntax.
+- **Ask for changes.** This sends a change back with a technician's note. Haley sees the note as the failed tool's result, so she can adjust and propose again; she can't treat it as approval.
+
 ## Accountability
 
 - Every tool call is recorded with its input, risk, Haley's stated rationale, the policy's reason and the outcome.

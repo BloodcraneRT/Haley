@@ -99,6 +99,35 @@ PSA tickets are a channel too. Connect a PSA on the dashboard's **PSA sync** pag
 
 Imported requesters get `none` identity by default, because the PSA doesn't tell Haley how they were authenticated. Step-up verification covers that gap. The API details are in [research/INTEGRATION_API_NOTES.md](research/INTEGRATION_API_NOTES.md).
 
+## Approvals in your own Slack and Teams
+
+These channels are for **technicians**, not end users. When a change needs approval, Haley posts a card to your team's channel. The card shows:
+- the client, ticket and requester, with how the requester was verified;
+- the change and its risk;
+- why it needs approval, and Haley's reasoning;
+- what she checked first.
+
+Technicians in the directory (**Technicians** page) can **Approve**, **Reject** or **Ask for changes** from the card. A change request needs a note, which Haley gets back so she can adjust. When a change is decided anywhere, every card for it updates in place, and the dashboard queue stays the record. The same channel also gets a notice when Haley (or the SLA sweep) escalates a ticket to a person.
+
+Configure it on **Approvals → Slack & Teams**.
+
+**Slack** uses the same Slack app clients use, installed once more in your own workspace.
+1. In the app's settings, turn on **Interactivity & Shortcuts**. Set the Request URL to `{HALEY_PUBLIC_URL}/hooks/slack/interactivity`; it is signed with the same signing secret as events.
+2. Install the app in your workspace and paste its bot token. Haley stores it encrypted and records the workspace, and clicks from any other workspace are ignored.
+3. Invite the app to the approvals channel (`/invite @Haley`), paste the channel id (C…), and use **Send test message**.
+4. Optionally, give a client its own channel id in the client's **Self-service & safety** settings.
+
+A technician's Slack account is linked the first time they click a card, by matching the email on their Slack profile to the directory. This uses the `users:read.email` scope, which the app already has.
+
+**Microsoft Teams** uses the Haley bot.
+1. Add the app to your team.
+2. In the channel where approvals should go, post `@Haley approvals here`.
+   - It works only from your own Microsoft 365 tenant: the tenant set on the settings page, or `HALEY_TEAMS_TENANT_ID`.
+   - It works only in a channel or group chat, and only for a technician in the directory. Teams reports the sender's email, which is matched to the directory, and the Entra object id is linked.
+3. Card buttons are Adaptive Card Universal Actions (`Action.Execute`). Teams delivers them to the bot's messages endpoint as signed `invoke` activities, and Haley answers with the refreshed card.
+
+**What can be approved from chat:** everything by default. Choose *Routine changes only* to keep sensitive changes (password resets, sign-in blocks, wipes) in the dashboard; their cards then show only **Approve in Haley**. Client rules that name approvers apply in chat as well, and hard rails are never approvable.
+
 ## PSA / API intake
 
 `POST /api/intake` with the technician API token. The body is `{ from, fromName, subject, body, verified?, autoRun? }`. Use `verified: true` only when the PSA authenticated the requester, which gives `email` assurance.

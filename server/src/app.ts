@@ -42,6 +42,11 @@ import type { PsaAdapter, PsaConnection } from "./psa/types.js";
 import { registerHooks } from "./routes/hooks.js";
 import { registerM365Onboarding } from "./routes/m365Onboarding.js";
 import { registerMemoryRoutes } from "./routes/memories.js";
+import { registerTechnicianRoutes } from "./routes/technicians.js";
+import { registerApprovalRoutes } from "./routes/approvals.js";
+import { ApprovalNotifier } from "./approvals/notify.js";
+import { SlackApprovals } from "./approvals/slack.js";
+import { TeamsApprovals } from "./approvals/teams.js";
 import { Debouncer, registerSyncroWebhook } from "./routes/syncroWebhook.js";
 import { registerSecretLinks } from "./routes/secretLinks.js";
 import { nextOccurrence, Scheduler } from "./scheduler.js";
@@ -97,6 +102,8 @@ export interface HaleyApp {
   psa: PsaSync;
   /** Syncro webhook deliveries trigger this (exposed for tests). */
   syncroWebhook: Debouncer;
+  /** Posts and updates approval cards in Slack and Teams (exposed for tests to await). */
+  approvalNotifier: ApprovalNotifier;
 }
 
 export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, psaFactory }: AppDeps): Promise<HaleyApp> {
@@ -164,6 +171,12 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   const agent = new AgentService(store, llmFor, config, connectorsFor, hub);
   hub.attach(agent);
   agent.recoverInterrupted();
+  // Approval cards and escalation notices in the MSP's own Slack (and Teams).
+  const slackApprovals = new SlackApprovals(store, fetchImpl);
+  const teamsApprovals = teams ? new TeamsApprovals(store, teams, ch.teamsTenantId) : null;
+  const approvalNotifier = new ApprovalNotifier(store, teamsApprovals ? [slackApprovals, teamsApprovals] : [slackApprovals], ch.publicUrl);
+  agent.attachApprovalEvents(approvalNotifier);
+  store.onTicketStatusChanged((ticket, from, who) => approvalNotifier.escalated(ticket, from, who));
   const alertTickets = new SyncroAlertTickets(store, agent, fetchImpl);
   const scheduler = new Scheduler(store, agent, psa, alertTickets);
 
@@ -184,7 +197,32 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     }
   });
 
-  registerHooks(app, { config: ch, store, hub, slack, teams, log: (err) => app.log.error(err) });
+  registerHooks(app, {
+    config: ch,
+    store,
+    hub,
+    slack,
+    teams,
+    log: (err) => app.log.error(err),
+    // Approval card buttons and "approvals here" arrive on the Teams bot endpoint too.
+    teamsIntercept: teamsApprovals
+      ? (activity) =>
+          teamsApprovals.intercept(activity, {
+            decide: (id, decision, technician, note) => agent.decideAction(id, decision, technician, note),
+            cardFor: (id) => {
+              const action = store.getAction(id);
+              const post = store.listApprovalPosts(id).find((p) => p.channel === "teams");
+              let evidence: string[] = [];
+              try {
+                evidence = JSON.parse(post?.ref.evidence ?? "[]");
+              } catch {
+                evidence = [];
+              }
+              return action ? approvalNotifier.card(action, evidence) : null;
+            },
+          })
+      : undefined,
+  });
   registerSecretLinks(app, store);
   const incidents = new IncidentDetector(store);
   store.onTicketCreated((ticket) => void incidents.onTicketCreated(ticket));
@@ -193,6 +231,18 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   const syncroWebhook = registerSyncroWebhook(app, { store, psa, alerts: alertTickets, publicUrl: ch.publicUrl, actor, log: (err) => app.log.error(err) });
   app.addHook("onClose", async () => syncroWebhook.stop());
   registerMemoryRoutes(app, store, actor);
+  registerTechnicianRoutes(app, store, actor);
+  registerApprovalRoutes(app, {
+    store,
+    agent,
+    slack: slackApprovals,
+    slackSigningSecret: ch.slackSigningSecret,
+    teamsEnabled: Boolean(teams),
+    teamsDefaultTenantId: ch.teamsTenantId,
+    publicUrl: ch.publicUrl,
+    actor,
+    log: (err) => app.log.error(err),
+  });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof HttpError) return reply.status(err.statusCode).send({ error: err.message });
@@ -287,6 +337,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
         z.object({ responseMinutes: z.number().int().min(1).max(100_000), resolutionMinutes: z.number().int().min(1).max(100_000) }),
       ),
       policyRules: z.array(policyRuleInput).max(100),
+      approvalSlackChannel: z.union([z.literal(""), z.string().trim().regex(/^[CG][A-Z0-9]{2,20}$/, "Slack channel ids look like C0123ABCD")]),
     })
     .partial();
   /** Gives new client rules a stable id. */
@@ -1149,6 +1200,13 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     return agent.decideAction(req.params.id, false, actor(req), body(decision, req).note);
   });
 
+  /** Send a change back to Haley with what should be different; she adjusts and may propose it again. */
+  app.post<{ Params: { id: string } }>("/api/actions/:id/request-changes", async (req) => {
+    if (!store.getAction(req.params.id)) throw notFound("Action");
+    const { note } = body(z.object({ note: z.string().trim().min(3, "Say what should change.").max(1000) }), req);
+    return agent.decideAction(req.params.id, "changes", actor(req), note);
+  });
+
   app.post<{ Params: { id: string } }>("/api/actions/:id/reveal", async (req) => {
     const action = store.getAction(req.params.id);
     if (!action) throw notFound("Action");
@@ -1227,7 +1285,9 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     });
   }
 
+  // Let approval posts already in flight finish before the database closes.
+  app.addHook("onClose", async () => approvalNotifier.idle());
   app.addHook("onClose", async () => db.close());
   app.addHook("onClose", async () => scheduler.stop());
-  return { app, store, agent, scheduler, psa, syncroWebhook };
+  return { app, store, agent, scheduler, psa, syncroWebhook, approvalNotifier };
 }
