@@ -48,6 +48,7 @@ import { policyRuleInput } from "./policyRuleSchema.js";
 import { FrustrationDetector } from "./frustration.js";
 import { onEscalated, rankTechnicians } from "./dispatch.js";
 import { editRatio, LessonService } from "./lessons.js";
+import { INLINE_TYPES } from "./attachments.js";
 import { registerApprovalRoutes } from "./routes/approvals.js";
 import { ApprovalNotifier } from "./approvals/notify.js";
 import { SlackApprovals } from "./approvals/slack.js";
@@ -720,6 +721,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       events: store.listTicketEvents(ticket.id),
       runs,
       actions: runs.flatMap((r) => store.listActions({ runId: r.id })),
+      attachments: store.listAttachments(ticket.id),
     };
   });
 
@@ -789,6 +791,27 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     if (!store.decideRuleSuggestion(suggestion.id, "dismissed", actor(req))) throw new HttpError(409, "This suggestion was already decided.");
     store.audit({ orgId: suggestion.org_id, actor: actor(req), action: "rule.suggestion_dismissed", target: suggestion.id });
     return { ok: true };
+  });
+
+  /**
+   * An attachment's bytes for technicians. Never rendered as a page: images keep their checked type for
+   * previews, everything else downloads, and the CSP forbids running anything.
+   */
+  app.get<{ Params: { id: string } }>("/api/attachments/:id/content", async (req, reply) => {
+    const attachment = store.getAttachment(req.params.id);
+    if (!attachment) throw notFound("Attachment");
+    const data = store.attachmentData(attachment.id);
+    if (!data) throw new HttpError(404, "This file wasn't kept (it's listed by name only).");
+    const ticket = store.getTicket(attachment.ticket_id);
+    store.audit({ orgId: ticket?.org_id ?? null, actor: actor(req), action: "attachment.downloaded", target: attachment.id, detail: { ticket: ticket?.number } });
+    const inline = INLINE_TYPES.has(attachment.media_type);
+    return reply
+      .header("content-type", inline ? attachment.media_type : "application/octet-stream")
+      .header("content-disposition", `${inline ? "inline" : "attachment"}; filename="${attachment.filename.replace(/[^\w.\- ]/g, "_")}"`)
+      .header("x-content-type-options", "nosniff")
+      .header("content-security-policy", "default-src 'none'; sandbox")
+      .header("cache-control", "private, no-store")
+      .send(Buffer.from(data));
   });
 
   /** The best technicians for a ticket, with why (no model call). */
@@ -924,6 +947,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       extraHeaders: z.record(z.string(), z.string()),
       inputUsdPerMTok: z.number().min(0).max(10_000),
       outputUsdPerMTok: z.number().min(0).max(10_000),
+      vision: z.boolean(),
     })
     .partial();
   const providerIds = PROVIDER_PRESETS.map((p) => p.id) as [string, ...string[]];
@@ -1295,6 +1319,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       qaModelCheck: z.boolean(),
       sentimentModelCheck: z.boolean(),
       autoAssignOnEscalation: z.enum(["off", "suggested"]),
+      attachmentRetentionDays: z.number().int().min(0).max(3650),
     })
     .partial();
 

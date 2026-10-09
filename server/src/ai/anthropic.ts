@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { LlmError, type ChatMessage, type LlmClient, type LlmRequest, type ModelResponse, type Part, type StopReason } from "./types.js";
+import { imagePlaceholder, LlmError, withoutImages, type ChatMessage, type LlmClient, type LlmRequest, type ModelResponse, type Part, type StopReason } from "./types.js";
 
 type BetaMessageParam = Anthropic.Beta.BetaMessageParam;
 type BetaContentBlock = Anthropic.Beta.BetaContentBlock;
@@ -13,6 +13,8 @@ export interface AnthropicOptions {
   maxTokens?: number;
   /** Server-side refusal fallbacks (Claude API only; turn off behind Bedrock/Vertex/Foundry or a proxy). */
   fallbacks?: boolean;
+  /** Whether this model reads images; when false, images are sent as text placeholders. Default true. */
+  vision?: boolean;
 }
 
 const STOP: Record<string, StopReason> = {
@@ -35,6 +37,11 @@ function toAnthropic(message: ChatMessage, model: string): BetaMessageParam {
   }
   const content = message.parts.map((p) => {
     if (p.type === "text") return { type: "text" as const, text: p.text };
+    if (p.type === "image") {
+      return p.data
+        ? { type: "image" as const, source: { type: "base64" as const, media_type: p.mediaType, data: p.data } }
+        : { type: "text" as const, text: imagePlaceholder(p.name, "not shown again here") };
+    }
     if (p.type === "tool_call") return { type: "tool_use" as const, id: safeId(p.id), name: p.name, input: p.input };
     return { type: "tool_result" as const, tool_use_id: safeId(p.toolCallId), content: p.content, is_error: p.isError };
   });
@@ -90,7 +97,7 @@ export class AnthropicLlm implements LlmClient {
         system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
         cache_control: { type: "ephemeral" },
         tools: apiTools,
-        messages: messages.map((m) => toAnthropic(m, model)),
+        messages: (this.options.vision === false ? withoutImages(messages) : messages).map((m) => toAnthropic(m, model)),
         ...(this.options.fallbacks ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
       });
       try {

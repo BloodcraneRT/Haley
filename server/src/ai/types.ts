@@ -3,10 +3,17 @@
  * converts to and from its own wire format, so any model with tool calling can drive Haley.
  */
 
+export type ImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+
 export type Part =
   | { type: "text"; text: string }
   | { type: "tool_call"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; toolCallId: string; content: string; isError: boolean };
+  | { type: "tool_result"; toolCallId: string; content: string; isError: boolean }
+  /**
+   * A picture from the requester (a screenshot). Stored conversations keep only the attachment id; the runner
+   * fills in `data` (base64) just before a model call, for the few most recent images.
+   */
+  | { type: "image"; name: string; mediaType: ImageMediaType; attachmentId?: string; data?: string };
 
 export interface NativeContent {
   provider: string;
@@ -62,6 +69,18 @@ export class LlmError extends Error {
     super(message);
     this.name = "LlmError";
   }
+}
+
+/** What a model that can't see an image (or an image not loaded for this call) gets instead. */
+export const imagePlaceholder = (name: string, why = "this model can't read images") => `[Image "${name}" attached; ${why}.]`;
+
+/** Replaces image parts with text placeholders, for models without vision. */
+export function withoutImages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) =>
+    m.parts.some((p) => p.type === "image")
+      ? { ...m, parts: m.parts.map((p) => (p.type === "image" ? { type: "text" as const, text: imagePlaceholder(p.name) } : p)) }
+      : m,
+  );
 }
 
 export const textOf = (parts: Part[]) =>

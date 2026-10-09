@@ -48,9 +48,11 @@ import {
   type AssistResult,
   type QaResult,
   type AssigneeSuggestion,
+  type Attachment,
 } from "../api";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { CloseCheckModal } from "../components/CloseCheck";
+import { AttachmentList } from "../components/Attachments";
 import { Avatar, displayName, isHaley } from "../components/Avatar";
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
 import { Markdown } from "../components/Markdown";
@@ -276,7 +278,12 @@ export function TicketDetailPage() {
             </h2>
             <ol className="timeline">
               {events.map((e) => (
-                <TimelineItem key={e.id} event={e} action={typeof e.meta.actionId === "string" ? actionsById.get(e.meta.actionId) : undefined} />
+                <TimelineItem
+                  key={e.id}
+                  event={e}
+                  action={typeof e.meta.actionId === "string" ? actionsById.get(e.meta.actionId) : undefined}
+                  attachments={(detail.data?.attachments ?? []).filter((a) => (e.kind === "created" ? a.event_id === null : a.event_id === e.id))}
+                />
               ))}
             </ol>
           </section>
@@ -606,7 +613,7 @@ function TicketProps({ detail, onPatch }: { detail: TicketDetail; onPatch: (p: T
   );
 }
 
-function TimelineItem({ event: e, action }: { event: TicketEvent; action: Action | undefined }) {
+function TimelineItem({ event: e, action, attachments = [] }: { event: TicketEvent; action: Action | undefined; attachments?: Attachment[] }) {
   const who = displayName(e.author);
   const time = <RelativeTime iso={e.created_at} />;
   const runLink = typeof e.meta.runId === "string" ? <Link to={`/runs/${e.meta.runId}`}>View run</Link> : null;
@@ -771,6 +778,7 @@ function TimelineItem({ event: e, action }: { event: TicketEvent; action: Action
           {runLink}
         </header>
         <div className="tl-card-body">{body}</div>
+        <AttachmentList attachments={attachments} />
         {e.kind === "reply" && isDelivery(e.meta.delivery) && <DeliveryLine delivery={e.meta.delivery} />}
       </article>
     </li>

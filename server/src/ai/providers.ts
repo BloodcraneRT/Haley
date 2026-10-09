@@ -161,6 +161,11 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 
 export const presetFor = (id: string) => PROVIDER_PRESETS.find((p) => p.id === id);
 
+const VISION_BY_DEFAULT = new Set<ProviderKind>(["anthropic", "openai", "azure_openai", "google_gemini"]);
+
+/** Whether a profile's model gets images: its own setting, else on for the big hosted providers. */
+export const supportsVision = (profile: Pick<ModelProfile, "provider" | "options">) => profile.options?.vision ?? VISION_BY_DEFAULT.has(profile.provider);
+
 export interface ModelOptions {
   maxTokens?: number;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
@@ -170,6 +175,8 @@ export interface ModelOptions {
   reasoningEffort?: string;
   apiVersion?: string;
   extraHeaders?: Record<string, string>;
+  /** Whether the model reads images (screenshots). Unset: on for Anthropic, OpenAI, Azure OpenAI and Gemini. */
+  vision?: boolean;
   /** Your price per million input tokens (USD), for usage and cost reporting. Not sent to the provider. */
   inputUsdPerMTok?: number;
   /** Your price per million output tokens (USD). */
@@ -202,6 +209,7 @@ export function buildLlm(profile: ModelProfile, apiKey: string, fetchImpl: typeo
       maxTokens: o.maxTokens,
       // Server-side fallbacks only exist on the first-party Claude API.
       fallbacks: (o.refusalFallbacks ?? true) && !baseUrl,
+      vision: supportsVision(profile),
     });
   }
   const base = (profile.base_url || presetFor(profile.provider)?.baseUrl || "").replace(/\/+$/, "");
@@ -222,6 +230,7 @@ export function buildLlm(profile: ModelProfile, apiKey: string, fetchImpl: typeo
       temperature: o.temperature,
       reasoningEffort: o.reasoningEffort,
       extraHeaders: o.extraHeaders,
+      vision: supportsVision(profile),
     },
     fetchImpl,
   );

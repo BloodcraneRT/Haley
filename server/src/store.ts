@@ -33,6 +33,7 @@ import type {
   TicketFlags,
   AssigneeSuggestion,
   RuleSuggestion,
+  Attachment,
   Technician,
 } from "./types.js";
 import {
@@ -1122,6 +1123,62 @@ export class Store {
         id,
       );
     return this.getTechnician(id);
+  }
+
+  // ------------------------------------------------------------- attachments
+
+  addAttachment(input: {
+    ticketId: string;
+    eventId: string | null;
+    source: string;
+    filename: string;
+    mediaType: string;
+    kind: Attachment["kind"];
+    size: number;
+    sha256: string;
+    extractedText?: string | null;
+    note?: string;
+    data?: Uint8Array | null;
+  }): Attachment {
+    const id = newId("att");
+    this.db
+      .prepare(
+        `INSERT INTO attachments (id, ticket_id, event_id, source, filename, media_type, kind, size, sha256, extracted_text, note, data, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(id, input.ticketId, input.eventId, input.source, input.filename, input.mediaType, input.kind, input.size, input.sha256, input.extractedText ?? null, input.note ?? "", input.data ?? null, now());
+    return this.getAttachment(id)!;
+  }
+
+  private static readonly ATTACHMENT_COLUMNS = "id, ticket_id, event_id, source, filename, media_type, kind, size, sha256, note, created_at";
+
+  getAttachment(id: string): Attachment | null {
+    return (this.db.prepare(`SELECT ${Store.ATTACHMENT_COLUMNS} FROM attachments WHERE id = ?`).get(id) as unknown as Attachment | undefined) ?? null;
+  }
+
+  /** Oldest first. */
+  listAttachments(ticketId: string): Attachment[] {
+    return this.db.prepare(`SELECT ${Store.ATTACHMENT_COLUMNS} FROM attachments WHERE ticket_id = ? ORDER BY created_at, rowid`).all(ticketId) as unknown as Attachment[];
+  }
+
+  /** Ties attachments stored before their message event existed to that event. */
+  linkAttachments(ids: string[], eventId: string): void {
+    for (const id of ids) this.db.prepare("UPDATE attachments SET event_id = ? WHERE id = ? AND event_id IS NULL").run(eventId, id);
+  }
+
+  attachmentData(id: string): Uint8Array | null {
+    const row = this.db.prepare("SELECT data FROM attachments WHERE id = ?").get(id) as { data: Uint8Array | null } | undefined;
+    return row?.data ?? null;
+  }
+
+  attachmentText(id: string): string | null {
+    const row = this.db.prepare("SELECT extracted_text FROM attachments WHERE id = ?").get(id) as { extracted_text: string | null } | undefined;
+    return row?.extracted_text ?? null;
+  }
+
+  /** Deletes attachments older than a time (retention). Returns how many. */
+  purgeAttachmentsBefore(before: string): number {
+    return Number(this.db.prepare("DELETE FROM attachments WHERE created_at < ?").run(before).changes);
   }
 
   // ------------------------------------------------------------- lessons

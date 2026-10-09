@@ -177,6 +177,26 @@ export interface Integration {
   created_at: string;
 }
 
+/**
+ * A file that came with a ticket message. Images, PDFs and text files are kept and read (images by models
+ * with vision, the others as extracted text); anything else is only listed by name.
+ */
+export interface Attachment {
+  id: string;
+  ticket_id: string;
+  event_id: string | null;
+  /** The channel it came in on: email, slack, teams, chat, ... */
+  source: string;
+  filename: string;
+  media_type: string;
+  kind: "image" | "pdf" | "text" | "other";
+  size: number;
+  sha256: string;
+  /** Why it isn't readable (too large, unsupported type), shown to technicians. */
+  note: string;
+  created_at: string;
+}
+
 /** A policy rule Haley suggested from a technician's feedback; it applies only once a technician accepts it. */
 export interface RuleSuggestion {
   id: string;
@@ -423,6 +443,8 @@ export interface HelpdeskSettings {
   sentimentModelCheck: boolean;
   /** When Haley escalates: only suggest a technician, or assign the suggested one. */
   autoAssignOnEscalation: "off" | "suggested";
+  /** Attachments are deleted this many days after they arrive (0 keeps them). */
+  attachmentRetentionDays: number;
 }
 
 export const DEFAULT_HELPDESK_SETTINGS: HelpdeskSettings = {
@@ -430,6 +452,7 @@ export const DEFAULT_HELPDESK_SETTINGS: HelpdeskSettings = {
   qaModelCheck: false,
   sentimentModelCheck: false,
   autoAssignOnEscalation: "off",
+  attachmentRetentionDays: 180,
 };
 
 /** What a model call was for, for billing and reporting. */

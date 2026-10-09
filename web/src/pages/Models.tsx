@@ -600,6 +600,8 @@ interface Draft {
   apiVersion: string;
   inputPrice: string;
   outputPrice: string;
+  /** "" uses the provider default. */
+  vision: "" | "on" | "off";
 }
 
 function draftFor(profile: ModelProfile | null, preset: ModelProviderPreset | undefined): Draft {
@@ -623,6 +625,7 @@ function draftFor(profile: ModelProfile | null, preset: ModelProviderPreset | un
     apiVersion: o.apiVersion ?? "",
     inputPrice: o.inputUsdPerMTok !== undefined ? String(o.inputUsdPerMTok) : "",
     outputPrice: o.outputUsdPerMTok !== undefined ? String(o.outputUsdPerMTok) : "",
+    vision: o.vision === undefined ? "" : o.vision ? "on" : "off",
   };
 }
 
@@ -722,6 +725,7 @@ function ModelDialog({
       options.inputUsdPerMTok = input;
       options.outputUsdPerMTok = output;
     }
+    if (d.vision) options.vision = d.vision === "on";
     const name = d.name.trim() || autoName(preset, d.model);
     setBusy(true);
     setError(null);
@@ -959,6 +963,15 @@ function ModelDialog({
                     placeholder="Provider default"
                   />
                   <span className="help">Per response, 256–200,000.</span>
+                </div>
+                <div className="field">
+                  <label htmlFor="md-vision">Screenshots</label>
+                  <select id="md-vision" className="select" value={d.vision} onChange={(e) => set({ vision: e.target.value as Draft["vision"] })}>
+                    <option value="">Provider default</option>
+                    <option value="on">This model reads images</option>
+                    <option value="off">Text only (describe images instead)</option>
+                  </select>
+                  <span className="help">On by default for Anthropic, OpenAI, Azure OpenAI and Gemini. Text-only models get a note that an image was attached.</span>
                 </div>
                 <div className="field">
                   <label htmlFor="md-price-in">

@@ -57,6 +57,9 @@ export class Scheduler {
       for (const schedule of this.store.dueSchedules(new Date(nowMs).toISOString())) this.fire(schedule, nowMs, result);
       this.sweepSla(nowMs, result);
       this.closeUnconfirmed(nowMs, result);
+      // Attachment retention (a cheap delete; 0 keeps them forever).
+      const keepDays = this.store.getHelpdeskSettings().attachmentRetentionDays;
+      if (keepDays > 0) this.store.purgeAttachmentsBefore(new Date(nowMs - keepDays * 86_400_000).toISOString());
       if (this.psa) await this.psa.syncAll();
       if (this.alerts) await this.alerts.poll(nowMs);
     } finally {

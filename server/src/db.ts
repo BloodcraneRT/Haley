@@ -340,6 +340,23 @@ const MIGRATIONS: string[] = [
      created_at TEXT NOT NULL
    );
    CREATE INDEX IF NOT EXISTS idx_rule_suggestions_org ON rule_suggestions(org_id, status);`,
+  // 17: attachments (screenshots, PDFs, text files) on tickets; the bytes stay in the database file
+  `CREATE TABLE IF NOT EXISTS attachments (
+     id TEXT PRIMARY KEY,
+     ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+     event_id TEXT,
+     source TEXT NOT NULL,
+     filename TEXT NOT NULL,
+     media_type TEXT NOT NULL,
+     kind TEXT NOT NULL,
+     size INTEGER NOT NULL,
+     sha256 TEXT NOT NULL,
+     extracted_text TEXT,
+     note TEXT NOT NULL DEFAULT '',
+     data BLOB,
+     created_at TEXT NOT NULL
+   );
+   CREATE INDEX IF NOT EXISTS idx_attachments_ticket ON attachments(ticket_id, created_at);`,
 ];
 
 export function openDb(path: string): Db {

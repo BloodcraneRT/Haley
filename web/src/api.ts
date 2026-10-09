@@ -623,6 +623,8 @@ export interface ModelOptions {
   apiVersion?: string;
   extraHeaders?: Record<string, string>;
   /** Your price in USD per million tokens, for AI cost reporting (never sent to the provider). */
+  /** Whether the model reads images (screenshots); unset uses the provider default. */
+  vision?: boolean;
   inputUsdPerMTok?: number;
   outputUsdPerMTok?: number;
 }
@@ -901,8 +903,24 @@ export interface Delivery {
   detail: string;
 }
 
+/** server/src/types.ts Attachment */
+export interface Attachment {
+  id: string;
+  ticket_id: string;
+  event_id: string | null;
+  source: string;
+  filename: string;
+  media_type: string;
+  kind: "image" | "pdf" | "text" | "other";
+  size: number;
+  note: string;
+  created_at: string;
+}
+
 export interface TicketDetail {
   ticket: TicketWithOrg;
+  /** Files that came with the ticket's messages. */
+  attachments?: Attachment[];
   /** Follow-ups Haley scheduled on this ticket. */
   schedules: Schedule[];
   /** PSA tickets this ticket is synced with (imported or exported). */
@@ -1040,6 +1058,21 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
     throw new ApiError(res.status, message);
   }
   return data as T;
+}
+
+/** Fetches a file with the session's credentials (images for previews; the route needs the token). */
+async function fetchBlob(path: string): Promise<Blob> {
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (user) headers["x-haley-user"] = user;
+  let res: Response;
+  try {
+    res = await fetch(path, { headers });
+  } catch {
+    throw new ApiError(0, "Can't reach the Haley server. Check that it is running.");
+  }
+  if (!res.ok) throw new ApiError(res.status, `Couldn't load the file (${res.status})`);
+  return res.blob();
 }
 
 /** Fetches a file with the session's credentials and hands it to the browser as a download. */
@@ -1195,6 +1228,8 @@ export const api = {
   ticket: (id: string) => get<TicketDetail>(`/api/tickets/${enc(id)}`),
   createTicket: (input: NewTicketInput) => post<Ticket & { runId: string | null }>("/api/tickets", input),
   updateTicket: (id: string, input: TicketPatch) => patch<Ticket>(`/api/tickets/${enc(id)}`, input),
+  attachmentBlob: (id: string) => fetchBlob(`/api/attachments/${enc(id)}/content`),
+  downloadAttachment: (a: Attachment) => download(`/api/attachments/${enc(a.id)}/content`, a.filename),
   ticketQa: (id: string) => post<QaResult>(`/api/tickets/${enc(id)}/qa`),
   helpdeskSettings: () => get<HelpdeskSettings>("/api/helpdesk/settings"),
   updateHelpdeskSettings: (input: Partial<HelpdeskSettings>) => patch<HelpdeskSettings>("/api/helpdesk/settings", input),

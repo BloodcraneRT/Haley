@@ -8,6 +8,7 @@ import type { ChannelHub } from "../channels/hub.js";
 import { verifySlackSignature, type SlackChannel } from "../channels/slack.js";
 import type { TeamsChannel } from "../channels/teams.js";
 import type { Store } from "../store.js";
+import type { IncomingFile } from "../attachments.js";
 
 export const rawBody = (req: FastifyRequest) => (req as FastifyRequest & { rawBody?: string }).rawBody ?? "";
 
@@ -23,6 +24,24 @@ function secretMatches(expected: string, got: string | undefined): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/** Files posted with an email or chat message: base64 content, as relays and bridges send it. */
+const attachmentInput = z
+  .array(
+    z.object({
+      filename: z.string().max(300).default("attachment"),
+      contentType: z.string().max(200).default("application/octet-stream"),
+      content: z.string().max(20 * 1024 * 1024),
+    }),
+  )
+  .max(20)
+  .default([]);
+
+const toFiles = (items: z.infer<typeof attachmentInput>): IncomingFile[] =>
+  items.map((a) => ({ filename: a.filename, contentType: a.contentType, data: Buffer.from(a.content, "base64") })).filter((f) => f.data.length > 0);
+
+/** Messages with attachments can be large; only these two webhooks accept bodies this big. */
+const ATTACHMENT_BODY_LIMIT = 25 * 1024 * 1024;
+
 const emailSchema = z.object({
   from: z.string().email(),
   fromName: z.string().default(""),
@@ -35,6 +54,7 @@ const emailSchema = z.object({
   dmarc: z.string().optional(),
   dkim: z.string().optional(),
   spf: z.string().optional(),
+  attachments: attachmentInput,
 });
 
 const chatSchema = z.object({
@@ -47,7 +67,8 @@ const chatSchema = z.object({
     verified: z.boolean().default(false),
     verification: z.string().default(""),
   }),
-  text: z.string().trim().min(1),
+  text: z.string().trim().default(""),
+  attachments: attachmentInput,
   callbackUrl: z.string().url().optional(),
   /** The bridge can show a message to this user alone, so credentials may be sent to them. */
   private: z.boolean().default(false),
@@ -71,7 +92,7 @@ export interface HookDeps {
 export function registerHooks(app: FastifyInstance, deps: HookDeps) {
   const { config, store, hub, log } = deps;
 
-  app.post("/hooks/email", async (req, reply) => {
+  app.post("/hooks/email", { bodyLimit: ATTACHMENT_BODY_LIMIT }, async (req, reply) => {
     const key = header(req, "x-haley-hook-secret") ?? (req.query as Record<string, string>)?.key;
     if (!secretMatches(config.emailHookSecret, key)) return reply.status(401).send({ error: "Unauthorized" });
     const parsed = emailSchema.safeParse(req.body);
@@ -95,6 +116,7 @@ export function registerHooks(app: FastifyInstance, deps: HookDeps) {
       ticketNumber: ticketNumberFromSubject(mail.subject),
       thread: root ? { key: "messageId", value: root } : null,
       ref: mail.messageId ? { messageId: mail.messageId } : {},
+      attachments: toFiles(mail.attachments),
     });
     return result;
   });
@@ -135,13 +157,14 @@ export function registerHooks(app: FastifyInstance, deps: HookDeps) {
     return reply.status(202).send();
   });
 
-  app.post("/hooks/chat", async (req, reply) => {
+  app.post("/hooks/chat", { bodyLimit: ATTACHMENT_BODY_LIMIT }, async (req, reply) => {
     if (!verifyChatSignature(config.chatWebhookSecret, header(req, "x-haley-signature"), rawBody(req))) {
       return reply.status(401).send({ error: "Bad signature" });
     }
     const parsed = chatSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(400).send({ error: z.prettifyError(parsed.error) });
     const msg = parsed.data;
+    if (!msg.text && !msg.attachments.length) return reply.status(400).send({ error: "Send text or at least one attachment." });
     const org = msg.orgId ? store.getOrg(msg.orgId) : store.findOrgByEmailDomain(msg.user.email);
     if (!org) return reply.status(422).send({ error: "No organization matches this user." });
     return hub.receive({
@@ -156,6 +179,7 @@ export function registerHooks(app: FastifyInstance, deps: HookDeps) {
       text: msg.text,
       thread: { key: "threadId", value: msg.threadId },
       ref: { threadId: msg.threadId, callbackUrl: msg.callbackUrl ?? "", private: msg.private ? "1" : "0" },
+      attachments: toFiles(msg.attachments),
     });
   });
 }

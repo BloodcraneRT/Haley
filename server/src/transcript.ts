@@ -18,6 +18,8 @@ export function buildTranscript(messages: ChatMessage[], actions: Action[]): Tra
         steps.push(message.role === "user" && index === 0 ? { type: "context", text: part.text } : { type: "text", text: part.text });
       } else if (part.type === "tool_call") {
         steps.push({ type: "tool_call", toolUseId: part.id, tool: part.name, input: part.input, action: byToolUse.get(part.id) ?? null });
+      } else if (part.type === "image") {
+        steps.push({ type: "context", text: `[Attached image: ${part.name}]` });
       } else {
         steps.push({ type: "tool_result", toolUseId: part.toolCallId, content: part.content, isError: part.isError });
       }
