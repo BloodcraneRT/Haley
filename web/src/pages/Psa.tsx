@@ -20,6 +20,8 @@ import {
   Timer,
   RotateCw,
   ScanSearch,
+  Paperclip,
+  UserCheck,
   Webhook,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
@@ -53,10 +55,20 @@ import { formatNumber, PSA_NAMES } from "../lib/format";
 
 const DEFAULT_OPTIONS: PsaOptions = { importTickets: true, exportTickets: true, mirrorNotes: true, requesterAssurance: "none" };
 
-const OPTION_ROWS: Array<{ key: "importTickets" | "exportTickets" | "mirrorNotes"; label: string; help: string; icon: typeof Download }> = [
+/** New connections import PSA attachments; older ones keep it off until it's turned on, so no backlog is downloaded. */
+const NEW_CONNECTION_OPTIONS: PsaOptions = { ...DEFAULT_OPTIONS, importAttachments: true };
+
+const OPTION_ROWS: Array<{ key: "importTickets" | "exportTickets" | "mirrorNotes" | "importAttachments" | "syncOwner"; label: string; help: string; icon: typeof Download }> = [
   { key: "importTickets", label: "Import tickets", help: "New tickets for mapped customers open in Haley and she works them.", icon: Download },
   { key: "exportTickets", label: "Export Haley tickets", help: "Tickets that start in email, Slack or Teams are created in the PSA too, so billing sees them.", icon: Upload },
   { key: "mirrorNotes", label: "Mirror notes", help: "Haley's notes and actions are copied as internal (hidden) comments.", icon: MessageSquareText },
+  { key: "importAttachments", label: "Import attachments", help: "Files on synced tickets come into Haley: customers' screenshots and PDFs she can read, technicians' files for the record.", icon: Paperclip },
+  {
+    key: "syncOwner",
+    label: "Send assignments back",
+    help: "Assigning a ticket in Haley sets its owner in the PSA, for technicians with a PSA id. Owners set in the PSA always come into Haley.",
+    icon: UserCheck,
+  },
 ];
 
 // ------------------------------------------------------------------ list page
@@ -292,7 +304,7 @@ function PsaCard({
               <div className="psa-option-label">{o.label}</div>
               <div className="psa-option-help">{o.help}</div>
             </div>
-            <Switch checked={options[o.key]} onChange={(v) => setOption({ [o.key]: v })} label={o.label} disabled={busy === "options"} />
+            <Switch checked={Boolean(options[o.key])} onChange={(v) => setOption({ [o.key]: v })} label={o.label} disabled={busy === "options"} />
           </div>
         ))}
         <div className="psa-option">
@@ -462,7 +474,7 @@ function TimeEntriesOption({ value, onChange, disabled }: { value: PsaOptions["t
 
 function SyncResultPanel({ result: r, at, connectionId, onDismiss }: { result: SyncResult; at: string; connectionId: string; onDismiss: () => void }) {
   const failed = r.errors.length > 0;
-  const nothing = !r.imported && !r.commentsImported && !r.exported && !r.pushed && !r.statusUpdates && !r.timeLogged;
+  const nothing = !r.imported && !r.commentsImported && !r.exported && !r.pushed && !r.statusUpdates && !r.timeLogged && !r.attachmentsImported;
   return (
     <section className={`sync-result ${failed ? "is-error" : ""}`} aria-label="Sync result">
       <header className="sync-result-head">
@@ -483,7 +495,16 @@ function SyncResultPanel({ result: r, at, connectionId, onDismiss }: { result: S
         <SyncStat label="Mirrored" value={r.pushed} icon={<ArrowLeftRight className="icon-xs" aria-hidden="true" />} />
         <SyncStat label="Status" value={r.statusUpdates} icon={<RefreshCw className="icon-xs" aria-hidden="true" />} />
         {r.timeLogged ? <SyncStat label="Time logged" value={r.timeLogged} icon={<Timer className="icon-xs" aria-hidden="true" />} /> : null}
+        {r.attachmentsImported ? <SyncStat label="Files" value={r.attachmentsImported} icon={<Paperclip className="icon-xs" aria-hidden="true" />} /> : null}
       </div>
+      {(r.ownersNotSent ?? []).length > 0 && (
+        <div className="sync-note tone-amber">
+          <UserCheck className="icon-xs" aria-hidden="true" />
+          <span>
+            Not sent to the PSA: {r.ownersNotSent!.join(", ")} {r.ownersNotSent!.length === 1 ? "has" : "have"} no PSA id. Add it on the <Link to="/technicians">Technicians</Link> page.
+          </span>
+        </div>
+      )}
       {r.unmappedCustomers.length > 0 && (
         <div className="sync-note tone-amber">
           <Users className="icon-xs" aria-hidden="true" />
@@ -558,7 +579,7 @@ function ConnectPsaModal({
   const [kind, setKind] = useState<PsaKind>(providers[0]?.id ?? "syncro");
   const [name, setName] = useState("");
   const [config, setConfig] = useState<Record<string, string>>({});
-  const [options, setOptions] = useState<PsaOptions>(DEFAULT_OPTIONS);
+  const [options, setOptions] = useState<PsaOptions>(NEW_CONNECTION_OPTIONS);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -567,7 +588,7 @@ function ConnectPsaModal({
     setKind(providers[0]?.id ?? "syncro");
     setName("");
     setConfig({});
-    setOptions(DEFAULT_OPTIONS);
+    setOptions(NEW_CONNECTION_OPTIONS);
     setError(null);
   }, [open, providers]);
 
@@ -666,7 +687,7 @@ function ConnectPsaModal({
                       <div className="psa-option-label">{o.label}</div>
                       <div className="psa-option-help">{o.help}</div>
                     </div>
-                    <Switch checked={options[o.key]} onChange={(v) => setOptions((x) => ({ ...x, [o.key]: v }))} label={o.label} />
+                    <Switch checked={Boolean(options[o.key])} onChange={(v) => setOptions((x) => ({ ...x, [o.key]: v }))} label={o.label} />
                   </div>
                 ))}
                 <div className="psa-option">

@@ -560,6 +560,8 @@ describe("New PSAs end to end", () => {
       [/\/api\/Tickets\?datesearch=/, () => ({ record_count: 1, tickets: [ticket()] })],
       [/\/api\/Tickets\/42\?/, () => ticket()],
       [/\/api\/Actions\?ticket_id=42/, () => ({ actions })],
+      // New connections import attachments; this ticket has none.
+      [/\/api\/Attachment\?ticket_id=42/, () => ({ attachments: [] })],
       [/\/api\/Actions$/, (c) => {
         const [a] = c.json();
         const id = actions.length + 1;

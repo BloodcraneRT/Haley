@@ -1,19 +1,20 @@
 import type { LlmClient } from "./ai/types.js";
 import { ticketContext } from "./agent/prompts.js";
+import { HALEY_TIME_MARK, type PsaAdapter, type PsaConnection } from "./psa/types.js";
 import type { Store } from "./store.js";
 import type { Ticket, TicketEvent } from "./types.js";
 
 /** A message from the requester (or someone else on their side) that arrived on a channel or from the PSA. */
 export const isCustomerMessage = (e: TicketEvent) => e.kind === "comment" && Boolean(e.meta.channel) && !e.meta.fromTechnician;
 /** A note a technician wrote: in the dashboard (no channel) or in the PSA. */
-export const isTechnicianNote = (e: TicketEvent) => e.kind === "comment" && (!e.meta.channel || Boolean(e.meta.fromTechnician));
+export const isTechnicianNote = (e: TicketEvent) => e.kind === "comment" && (!e.meta.channel || Boolean(e.meta.fromTechnician)) && !e.meta.technicianFiles;
 /** A reply someone wrote to the requester; automatic acknowledgements and notices don't count. */
 export const isRealReply = (e: TicketEvent) => e.kind === "reply" && !e.meta.auto;
 
 const PROMISE = /\b(i'?ll|i will|we'?ll|we will)\b[^.?!]{0,80}\b(today|tonight|tomorrow|this (morning|afternoon|evening|week)|next week|monday|tuesday|wednesday|thursday|friday|shortly|later|soon|by \d|in \d+ (minutes?|hours?|days?)|follow[- ]?up|get back to you|check back)\b/i;
 
 export interface QaIssue {
-  code: "no_reply" | "no_resolution_note" | "unkept_promise" | "model";
+  code: "no_reply" | "no_resolution_note" | "unkept_promise" | "no_psa_time" | "psa_time_unchecked" | "model";
   /** Warnings block closing in "require" mode; hints never do. */
   level: "warning" | "hint";
   text: string;
@@ -57,6 +58,41 @@ export function qaChecks(ticket: Ticket, events: TicketEvent[]): QaIssue[] {
     if (!laterWork) {
       const quote = lastReply.body.match(PROMISE)?.[0] ?? "";
       issues.push({ code: "unkept_promise", level: "hint", text: `The last reply promised “${quote.slice(0, 120)}”. Check it was done.` });
+    }
+  }
+  return issues;
+}
+
+/** How long the close check waits for a PSA before going on without it. */
+export const PSA_TIME_TIMEOUT_MS = 5000;
+
+/**
+ * For PSA-linked tickets on connections that log time: is any technician time recorded on the PSA ticket? Haley's
+ * own entries don't count (known by id, or by her note for older ones). One PSA call per link, with a timeout; a
+ * failure becomes a hint, so it never stands in the way of closing.
+ */
+export async function psaTimeIssues(store: Store, adapterFor: (c: PsaConnection) => PsaAdapter, ticket: Ticket, timeoutMs = PSA_TIME_TIMEOUT_MS): Promise<QaIssue[]> {
+  const issues: QaIssue[] = [];
+  for (const link of store.listTicketLinks({ ticketId: ticket.id })) {
+    const connection = store.getPsaConnection(link.connection_id);
+    if (!connection || !connection.options.timeEntries || connection.options.timeEntries === "off") continue;
+    const adapter = adapterFor(connection);
+    if (!adapter.listTimeEntries) continue;
+    const label = `${connection.name} ticket #${link.external_number || link.external_id}`;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const entries = await Promise.race([
+        adapter.listTimeEntries(link.external_id),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("the PSA didn't answer in time")), timeoutMs);
+        }),
+      ]);
+      const technicians = entries.filter((e) => e.minutes > 0 && !link.time_entry_ids.includes(e.id) && !e.notes.includes(HALEY_TIME_MARK));
+      if (!technicians.length) issues.push({ code: "no_psa_time", level: "warning", text: `No technician time is logged on ${label}.` });
+    } catch (err) {
+      issues.push({ code: "psa_time_unchecked", level: "hint", text: `Couldn't check the time on ${label}: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      clearTimeout(timer);
     }
   }
   return issues;

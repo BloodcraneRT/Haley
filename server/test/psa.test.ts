@@ -336,6 +336,8 @@ describe("Haley's time on PSA tickets", () => {
       expect(fake.timeEntries).toEqual([expect.objectContaining({ ticketId: "t1", minutes: 1, notes: expect.stringContaining("Fixed the profile.") })]);
       // PSAs that record time as a ticket action (HaloPSA) return its id; it's never imported back as a comment.
       expect(store.getTicketLink(ticket.id, connection.id)!.seen_comment_ids).toContain(fake.lastTimeEntryId);
+      // And its id is kept, so the close check doesn't count Haley's time as a technician's.
+      expect(store.getTicketLink(ticket.id, connection.id)!.time_entry_ids).toEqual([fake.lastTimeEntryId]);
       // Logged once.
       expect((await psa.sync(connection.id)).timeLogged).toBe(0);
       expect(fake.timeEntries).toHaveLength(1);

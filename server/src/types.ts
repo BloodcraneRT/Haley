@@ -214,6 +214,8 @@ export interface AssigneeSuggestion {
   name: string;
   reasons: string[];
   at: string;
+  /** Nobody suitable was working; this is the best technician anyway, and they're off now. */
+  offNow?: boolean;
 }
 
 export interface TicketFlags {
@@ -393,9 +395,24 @@ export interface Technician {
   teams_aad_id: string | null;
   /** PSA member or resource id per PSA connection. */
   psa_refs: Record<string, string>;
+  /** When they work; null means always available. */
+  working_hours: WorkingHours | null;
   active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+
+/**
+ * A technician's weekly hours in their own time zone, as "HH:MM" ranges per day (a range whose end is before its
+ * start runs past midnight), plus an optional last day away (inclusive, their local date).
+ */
+export interface WorkingHours {
+  tz: string;
+  days: Partial<Record<Weekday, Array<[string, string]>>>;
+  awayUntil: string | null;
 }
 
 /** A Teams channel or group chat the Haley bot was registered in (by a technician typing "approvals here"). */

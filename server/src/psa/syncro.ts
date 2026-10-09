@@ -1,7 +1,8 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { AppointmentInput, CannedResponse, Contract, ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, TimeEntry } from "./types.js";
+import { readCapped } from "../attachments.js";
+import type { AppointmentInput, CannedResponse, Contract, ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaAttachment, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -50,6 +51,14 @@ export interface SyncroConfig {
 }
 
 /** SyncroMSP REST API v1 (https://api-docs.syncromsp.com). 180 requests/minute per IP. */
+/** The Syncro user (technician) a ticket is assigned to: `user_id`, with `user` when it's included. */
+function syncroOwner(t: Json): PsaOwner | null {
+  const id = t.user_id ?? t.user?.id;
+  if (id == null) return null;
+  const name = String(t.user?.full_name ?? t.user?.name ?? t.user?.email ?? `User ${id}`);
+  return { id: String(id), name, email: t.user?.email ? String(t.user.email).toLowerCase() : null };
+}
+
 export class SyncroAdapter implements PsaAdapter {
   readonly kind = "syncro" as const;
   private readonly base: string;
@@ -147,6 +156,7 @@ export class SyncroAdapter implements PsaAdapter {
       externalStatus: String(t.status ?? ""),
       priority: fromSyncroPriority(t.priority),
       updatedAt: t.updated_at,
+      owner: syncroOwner(t),
       // The first comment is the ticket's description; it's always "seen".
       comments: first ? [{ id: String(first.id), body: String(first.body ?? ""), author: String(first.tech ?? ""), fromCustomer: false, public: !first.hidden, createdAt: first.created_at }, ...mapped] : mapped,
     };
@@ -200,6 +210,54 @@ export class SyncroAdapter implements PsaAdapter {
 
   async setStatus(ticketId: string, status: TicketStatus): Promise<void> {
     await this.call("PUT", `/tickets/${ticketId}`, { status: toSyncroStatus(status) });
+  }
+
+  /** The ticket's timers (`ticket_timers` on the ticket). */
+  async listTimeEntries(ticketId: string): Promise<LoggedTime[]> {
+    const { ticket: t } = await this.call<Json>("GET", `/tickets/${ticketId}`);
+    return ((t?.ticket_timers ?? []) as Json[]).map((x) => {
+      const start = Date.parse(String(x.start_time ?? x.start_at ?? ""));
+      const end = Date.parse(String(x.end_time ?? x.end_at ?? ""));
+      const minutes = Number(x.duration_minutes) || (Number.isFinite(start) && Number.isFinite(end) ? Math.round((end - start) / 60_000) : 0);
+      return { id: String(x.id), minutes, member: String(x.user?.full_name ?? x.user_id ?? ""), notes: String(x.notes ?? ""), createdAt: String(x.created_at ?? x.start_time ?? "") };
+    });
+  }
+
+  /** The ticket's `attachments`, each with a pre-signed link to Syncro's file storage. */
+  async listAttachments(ticketId: string): Promise<PsaAttachment[]> {
+    const { ticket: t } = await this.call<Json>("GET", `/tickets/${ticketId}`);
+    return ((t?.attachments ?? []) as Json[]).map((a) => ({
+      id: String(a.id),
+      filename: String(a.file_name ?? a.name ?? `attachment-${a.id}`),
+      contentType: a.content_type ? String(a.content_type) : null,
+      size: typeof a.file_size === "number" ? a.file_size : null,
+      createdAt: String(a.created_at ?? ""),
+      fromCustomer: true,
+      url: String(a.file?.url ?? a.url ?? ""),
+    }));
+  }
+
+  /** Downloads from the pre-signed link, only from Syncro's own hosts or its S3 storage, with no credentials sent. */
+  async getAttachment(_ticketId: string, attachment: PsaAttachment, maxBytes: number): Promise<Uint8Array | null> {
+    let url: URL;
+    try {
+      url = new URL(attachment.url ?? "");
+    } catch {
+      throw new ConnectorError("Syncro didn't give a download link for the file.");
+    }
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== "https:" || !(host.endsWith(".amazonaws.com") || host.endsWith(".syncromsp.com"))) {
+      throw new ConnectorError(`Not downloading a Syncro file from ${host}.`);
+    }
+    if (attachment.size && attachment.size > maxBytes) return null;
+    const res = await this.fetchImpl(url, { redirect: "follow" });
+    if (!res.ok) throw new ConnectorError(`Downloading a Syncro file failed (${res.status}).`, res.status);
+    return readCapped(res, maxBytes);
+  }
+
+  async setOwner(ticketId: string, ownerId: string): Promise<void> {
+    if (!/^\d+$/.test(ownerId)) throw new ConnectorError(`Not a Syncro user id: ${ownerId}`);
+    await this.call("PUT", `/tickets/${ticketId}`, { user_id: Number(ownerId) });
   }
 
   /** GET /canned_responses?query= (the token needs "Ticket Canned Responses - Manage", even to read). */

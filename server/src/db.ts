@@ -368,6 +368,10 @@ const MIGRATIONS: string[] = [
      created_at TEXT NOT NULL,
      finished_at TEXT
    );`,
+  // 19: PSA ticket owners, technicians' PSA time entries and PSA attachments on synced tickets
+  `ALTER TABLE ticket_links ADD COLUMN last_owner TEXT NOT NULL DEFAULT '';
+   ALTER TABLE ticket_links ADD COLUMN seen_attachment_ids TEXT NOT NULL DEFAULT '[]';
+   ALTER TABLE ticket_links ADD COLUMN time_entry_ids TEXT NOT NULL DEFAULT '[]';`,
 ];
 
 export function openDb(path: string): Db {

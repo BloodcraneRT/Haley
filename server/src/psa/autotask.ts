@@ -1,7 +1,8 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, TimeEntry } from "./types.js";
+import { decodeCapped } from "../attachments.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaAttachment, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 type Picklist = Array<{ value: string; label: string; isActive?: boolean; isDefaultValue?: boolean; isSystem?: boolean }>;
@@ -91,6 +92,8 @@ export class AutotaskAdapter implements PsaAdapter {
   private base: string | null = null;
   private readonly picklists = new Map<string, Picklist>();
   private readonly companies = new Map<string, Json>();
+  /** Resources by id, for owners' names and emails (looked up once per adapter). */
+  private readonly resources = new Map<string, PsaOwner>();
 
   constructor(
     private readonly config: AutotaskConfig,
@@ -210,14 +213,27 @@ export class AutotaskAdapter implements PsaAdapter {
     return data.item ?? null;
   }
 
+  /** The ticket's assigned resource, from /Resources (cached). */
+  private async owner(id: unknown): Promise<PsaOwner | null> {
+    if (id == null || id === "") return null;
+    const key = String(id);
+    if (!this.resources.has(key)) {
+      const r = ((await this.call<Json>("GET", `/Resources/${key}`).catch(() => ({ item: null }) as Json)).item ?? {}) as Json;
+      const name = `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || `Resource ${key}`;
+      this.resources.set(key, { id: key, name, email: r.email ? String(r.email).toLowerCase() : null });
+    }
+    return this.resources.get(key)!;
+  }
+
   private async toTicket(t: Json): Promise<ExternalTicket> {
-    const [notes, company, contact, statusLabel, priorityLabel, publish] = await Promise.all([
+    const [notes, company, contact, statusLabel, priorityLabel, publish, owner] = await Promise.all([
       this.query("TicketNotes", [{ op: "eq", field: "ticketID", value: Number(t.id) }]),
       this.company(t.companyID),
       this.contact(t.contactID),
       this.label("Tickets", "status", t.status),
       this.label("Tickets", "priority", t.priority),
       this.picklist("TicketNotes", "publish"),
+      this.owner(t.assignedResourceID),
     ]);
     const internalOnly = Number(publish.find((v) => /internal only/i.test(v.label))?.value ?? 2);
     const requesterName = contact ? `${contact.firstName ?? ""} ${contact.lastName ?? ""}`.trim() : "";
@@ -250,6 +266,7 @@ export class AutotaskAdapter implements PsaAdapter {
       priority: t.priority == null ? null : fromAutotaskPriority(priorityLabel, Number(t.priority)),
       updatedAt: iso(t.lastActivityDate ?? t.lastTrackedModificationDateTime ?? t.createDate),
       comments,
+      owner,
     };
   }
 
@@ -338,6 +355,56 @@ export class AutotaskAdapter implements PsaAdapter {
 
   async setStatus(ticketId: string, status: TicketStatus): Promise<void> {
     await this.call("PATCH", "/Tickets", { id: Number(ticketId), status: await this.statusId(status) });
+  }
+
+  async listTimeEntries(ticketId: string): Promise<LoggedTime[]> {
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not an Autotask ticket id: ${ticketId}`);
+    const rows = await this.query("TimeEntries", [{ op: "eq", field: "ticketID", value: Number(ticketId) }], 5);
+    return rows.map((r) => ({
+      id: String(r.id),
+      minutes: Math.round(Number(r.hoursWorked ?? 0) * 60),
+      member: String(r.resourceID ?? ""),
+      notes: String(r.summaryNotes ?? r.internalNotes ?? ""),
+      createdAt: iso(r.startDateTime ?? r.dateWorked ?? r.createDateTime),
+    }));
+  }
+
+  /** File attachments on the ticket; one attached by a contact is the customer's. */
+  async listAttachments(ticketId: string): Promise<PsaAttachment[]> {
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not an Autotask ticket id: ${ticketId}`);
+    const rows = await this.query("TicketAttachments", [{ op: "eq", field: "parentID", value: Number(ticketId) }], 2);
+    return rows
+      // URL and folder links have nothing to download.
+      .filter((a) => !a.attachmentType || /^file/i.test(String(a.attachmentType)) || String(a.attachmentType) === "FILE_ATTACHMENT")
+      .map((a) => ({
+        id: String(a.id),
+        filename: String(a.fullPath ?? a.title ?? `attachment-${a.id}`).split(/[\\/]/).pop()!,
+        contentType: a.contentType ? String(a.contentType) : null,
+        size: typeof a.fileSize === "number" ? a.fileSize : null,
+        createdAt: iso(a.attachDate),
+        fromCustomer: a.attachedByContactID != null,
+      }));
+  }
+
+  async getAttachment(ticketId: string, attachment: PsaAttachment, maxBytes: number): Promise<Uint8Array | null> {
+    if (!/^\d+$/.test(ticketId) || !/^\d+$/.test(attachment.id)) throw new ConnectorError(`Not an Autotask ticket or attachment id: ${ticketId}, ${attachment.id}`);
+    if (attachment.size && attachment.size > maxBytes) return null;
+    const data = await this.call<Json>("GET", `/Tickets/${ticketId}/Attachments/${attachment.id}`);
+    const item = (Array.isArray(data.items) ? data.items[0] : data.item) ?? data;
+    if (typeof item?.data !== "string") throw new ConnectorError("Autotask didn't return the file's content.");
+    return decodeCapped(item.data, maxBytes);
+  }
+
+  /** Assigning a resource needs a role too: their default active service desk role. */
+  async setOwner(ticketId: string, ownerId: string): Promise<void> {
+    if (!/^\d+$/.test(ticketId) || !/^\d+$/.test(ownerId)) throw new ConnectorError(`Not an Autotask ticket or resource id: ${ticketId}, ${ownerId}`);
+    const roles = await this.query("ResourceServiceDeskRoles", [
+      { op: "eq", field: "resourceID", value: Number(ownerId) },
+      { op: "eq", field: "isActive", value: true },
+    ]);
+    const role = roles.find((r) => r.isDefault) ?? roles[0];
+    if (!role) throw new ConnectorError(`Autotask resource ${ownerId} has no active service desk role, so tickets can't be assigned to them.`);
+    await this.call("PATCH", "/Tickets", { id: Number(ticketId), assignedResourceID: Number(ownerId), assignedResourceRoleID: Number(role.roleID) });
   }
 
   private async priorityId(priority: TicketPriority): Promise<number> {

@@ -44,11 +44,12 @@ import { registerHooks } from "./routes/hooks.js";
 import { registerM365Onboarding } from "./routes/m365Onboarding.js";
 import { registerMemoryRoutes } from "./routes/memories.js";
 import { registerTechnicianRoutes } from "./routes/technicians.js";
-import { qaChecks, qaReview } from "./qa.js";
+import { psaTimeIssues, qaChecks, qaReview } from "./qa.js";
 import { policyRuleInput } from "./policyRuleSchema.js";
 import { FrustrationDetector } from "./frustration.js";
 import { onEscalated, rankTechnicians } from "./dispatch.js";
 import { editRatio, LessonService } from "./lessons.js";
+import { nextOn } from "./workingHours.js";
 import { INLINE_TYPES } from "./attachments.js";
 import { registerApprovalRoutes } from "./routes/approvals.js";
 import { ApprovalNotifier } from "./approvals/notify.js";
@@ -833,9 +834,14 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   app.get<{ Params: { id: string } }>("/api/tickets/:id/assignee-suggestions", async (req) => {
     const ticket = store.getTicket(req.params.id);
     if (!ticket) throw notFound("Ticket");
+    // People who are working come first; the rest say when they're next on.
     return rankTechnicians(store, ticket)
+      .sort((a, b) => Number(b.working) - Number(a.working))
       .slice(0, 3)
-      .map((c) => ({ name: c.technician.name, score: c.score, reasons: c.reasons }));
+      .map((c) => {
+        const next = c.working ? null : nextOn(c.technician.working_hours);
+        return { name: c.technician.name, score: c.score, reasons: c.working ? c.reasons : [`off now${next ? `, next on ${next}` : ""}`, ...c.reasons], working: c.working };
+      });
   });
 
   /** A technician clears a needs-care flag (e.g. the requester is fine now). */
@@ -856,8 +862,11 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     if (settings.qaBeforeClose === "off") return { mode: "off", issues: [], modelChecked: false };
     const org = store.getOrg(ticket.org_id);
     const useModel = settings.qaModelCheck && !org?.settings.paused;
-    const result = await qaReview({ store, llm: useModel ? llmFor(ticket.org_id) : null }, ticket, useModel);
-    return { mode: settings.qaBeforeClose, ...result };
+    const [result, psaTime] = await Promise.all([
+      qaReview({ store, llm: useModel ? llmFor(ticket.org_id) : null }, ticket, useModel),
+      psaTimeIssues(store, (c) => psa.adapterFor(c), ticket),
+    ]);
+    return { mode: settings.qaBeforeClose, ...result, issues: [...result.issues, ...psaTime] };
   });
 
   app.post<{ Params: { id: string } }>("/api/tickets/:id/comments", async (req) => {
@@ -1085,6 +1094,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       mirrorNotes: z.boolean(),
       requesterAssurance: z.enum(["none", "email"]),
       timeEntries: z.enum(["off", "actual", "estimate"]),
+      syncOwner: z.boolean(),
+      importAttachments: z.boolean(),
     })
     .partial();
 
@@ -1119,7 +1130,9 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     const info = PSA_PROVIDERS.find((p) => p.id === input.kind)!;
     const missing = info.fields.filter((f) => !f.optional && !input.config[f.key]?.trim()).map((f) => f.label);
     if (missing.length) throw new HttpError(400, `Missing: ${missing.join(", ")}`);
-    const connection = store.createPsaConnection({ kind: input.kind as PsaConnection["kind"], name: input.name || info.name, config: input.config, options: withTimeEntriesSince(input.options) });
+    // Attachment import is on for new connections (older ones keep it off until turned on, so no backlog downloads).
+    const options = withTimeEntriesSince({ importAttachments: true, ...input.options });
+    const connection = store.createPsaConnection({ kind: input.kind as PsaConnection["kind"], name: input.name || info.name, config: input.config, options });
     store.audit({ actor: actor(req), action: "psa.connected", target: connection.id, detail: { kind: connection.kind } });
     return testPsa(connection.id);
   });

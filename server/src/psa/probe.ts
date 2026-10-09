@@ -93,6 +93,21 @@ export async function probePsa(adapter: PsaAdapter, nowMs = Date.now()): Promise
         return { detail: `1 ticket with ${ticket.comments.length} comments`, fields: fieldShapes([ticket as never], ["comments"]) };
       }),
     );
+    // Lists only: no file is downloaded and nothing is written.
+    if (adapter.listTimeEntries) {
+      const list = adapter.listTimeEntries.bind(adapter);
+      steps.push(await step("listTimeEntries", async () => {
+        const entries = await list(id);
+        return { detail: `${entries.length} time entries on that ticket`, fields: fieldShapes(entries as never) };
+      }));
+    }
+    if (adapter.listAttachments) {
+      const list = adapter.listAttachments.bind(adapter);
+      steps.push(await step("listAttachments", async () => {
+        const files = await list(id);
+        return { detail: `${files.length} files on that ticket (not downloaded)`, fields: fieldShapes(files as never) };
+      }));
+    }
   }
   return steps;
 }

@@ -7,7 +7,9 @@ import { Modal } from "./Modal";
 const METHOD_LABELS: Record<string, string> = {
   test: "Connection",
   listClosedTickets: "Closed tickets (reports)",
-  getTicket: "One ticket (sync)",
+  getTicket: "One ticket (sync, owner)",
+  listTimeEntries: "Time entries (close check)",
+  listAttachments: "Attachments (not downloaded)",
 };
 
 /**

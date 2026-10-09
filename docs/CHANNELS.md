@@ -116,6 +116,7 @@ Screenshots, PDFs and text files sent with a message are kept with the ticket. H
   - **Email and the chat bridge:** send base64 `attachments` (see above). A chat bridge message can be attachments only.
   - **Slack:** downloaded with the bot token, only from `files.slack.com`. Needs the `files:read` scope.
   - **Microsoft Teams:** pasted images are fetched with the bot's token and shared files from their pre-signed link, only from Microsoft hosts.
+  - **Your PSA** (the connection's **Import attachments** option, on for new connections): files on synced tickets, from all five PSAs. Only tickets that changed are checked, at most 5 new files per ticket and 50 per sync (the rest come next sync). The customer's files go to Haley like their messages: on a new ticket from the start, on an existing one with their latest message. Technicians' files, and files on a technician's comment, are kept on an internal note for the record and aren't sent to Haley. Syncro files are downloaded only from Syncro's own storage, with no credentials sent.
 - **How Haley reads them:**
   - Attachment content goes to the model inside untrusted `<attachment>` blocks, like the ticket text.
   - She sees the 4 most recent images per model call.

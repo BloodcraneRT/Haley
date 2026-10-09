@@ -1,7 +1,8 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, TimeEntry } from "./types.js";
+import { decodeCapped } from "../attachments.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaAttachment, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -104,6 +105,8 @@ export class HaloAdapter implements PsaAdapter {
   private readonly api: string;
   private token: { value: string; expiresAt: number } | null = null;
   private statuses: Json[] | null = null;
+  /** Agents by id, for owners' names and emails (looked up once per adapter). */
+  private readonly agents = new Map<string, PsaOwner>();
 
   constructor(
     private readonly config: HaloConfig,
@@ -244,10 +247,66 @@ export class HaloAdapter implements PsaAdapter {
     };
   }
 
+  /** The ticket's agent, with their email from /Agent (cached). Agent 0 or none means unassigned. */
+  private async owner(t: Json): Promise<PsaOwner | null> {
+    const id = Number(t.agent_id);
+    if (!(id > 0)) return null;
+    const key = String(id);
+    if (!this.agents.has(key)) {
+      const a = await this.call<Json>("GET", `/Agent/${key}`).catch(() => ({}) as Json);
+      this.agents.set(key, { id: key, name: String(a.name ?? t.agent_name ?? `Agent ${key}`), email: a.email ? String(a.email).toLowerCase() : null });
+    }
+    return this.agents.get(key)!;
+  }
+
   async getTicket(id: string): Promise<ExternalTicket> {
     if (!/^\d+$/.test(id)) throw new ConnectorError(`Not a HaloPSA ticket id: ${id}`);
     const [ticket, actions, statuses] = await Promise.all([this.call<Json>("GET", `/Tickets/${id}?includedetails=true`), this.actions(id), this.statusList()]);
-    return this.toTicket(ticket, actions, statuses);
+    return { ...this.toTicket(ticket, actions, statuses), owner: await this.owner(ticket) };
+  }
+
+  /** Halo keeps time on actions (timetaken, in hours). */
+  async listTimeEntries(ticketId: string): Promise<LoggedTime[]> {
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not a HaloPSA ticket id: ${ticketId}`);
+    return (await this.actions(ticketId))
+      .filter((a) => Number(a.timetaken) > 0)
+      .map((a) => ({
+        id: String(a.id),
+        minutes: Math.round(Number(a.timetaken) * 60),
+        member: String(a.who ?? ""),
+        notes: String(a.note ?? (a.note_html ? stripHtml(String(a.note_html)) : "")),
+        createdAt: iso(a.datetime ?? a.actiondatecreated),
+      }));
+  }
+
+  /** Attachments on the ticket; each names the action it came with, whose author says whose file it is. */
+  async listAttachments(ticketId: string): Promise<PsaAttachment[]> {
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not a HaloPSA ticket id: ${ticketId}`);
+    const data = await this.call<Json>("GET", `/Attachment?ticket_id=${ticketId}`);
+    const rows = (Array.isArray(data) ? data : (data.attachments ?? [])) as Json[];
+    return rows.map((a) => ({
+      id: String(a.id),
+      filename: String(a.filename ?? a.name ?? `attachment-${a.id}`),
+      contentType: a.type ? String(a.type) : null,
+      size: typeof a.filesize === "number" ? a.filesize : null,
+      createdAt: iso(a.datecreated),
+      fromCustomer: Number(a.who_type ?? 1) === 1,
+      commentId: a.action_id ? String(a.action_id) : null,
+    }));
+  }
+
+  async getAttachment(_ticketId: string, attachment: PsaAttachment, maxBytes: number): Promise<Uint8Array | null> {
+    if (!/^\d+$/.test(attachment.id)) throw new ConnectorError(`Not a HaloPSA attachment id: ${attachment.id}`);
+    if (attachment.size && attachment.size > maxBytes) return null;
+    const data = await this.call<Json>("GET", `/Attachment/${attachment.id}?includedetails=true`);
+    const base64 = data.data_base64 ?? data.base64 ?? data.data;
+    if (typeof base64 !== "string") throw new ConnectorError("HaloPSA didn't return the file's content.");
+    return decodeCapped(base64, maxBytes);
+  }
+
+  async setOwner(ticketId: string, ownerId: string): Promise<void> {
+    if (!/^\d+$/.test(ticketId) || !/^\d+$/.test(ownerId)) throw new ConnectorError(`Not a HaloPSA ticket or agent id: ${ticketId}, ${ownerId}`);
+    await this.call("POST", "/Tickets", [{ id: Number(ticketId), agent_id: Number(ownerId) }]);
   }
 
   async listUpdatedTickets(since: string | null): Promise<ExternalTicket[]> {

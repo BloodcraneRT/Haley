@@ -140,6 +140,7 @@ describe("PSA probe", () => {
       [/\/api\/Client\?/, () => ({ record_count: 1, clients: [{ id: 7, name: "Contoso" }] })],
       [/\/api\/Tickets\/42\?includedetails=true$/, () => ({ id: 42, summary: "VPN drops", details: "Every hour", client_id: 7, client_name: "Contoso", status_id: 9, dateoccurred: at(3), lastactiondate: at(2) })],
       [/\/api\/Actions\?ticket_id=42/, () => ({ record_count: 0, actions: [] })],
+      [/\/api\/Attachment\?ticket_id=42/, () => ({ attachments: [{ id: 5, filename: "shot.png", filesize: 10 }] })],
       [/\/api\/Status$/, () => [{ id: 9, name: "Closed" }]],
     ]);
     const { app, store } = await makeApp(new ScriptedLlm(), {}, net.impl);
@@ -150,7 +151,10 @@ describe("PSA probe", () => {
       ["test", true],
       ["listClosedTickets", true],
       ["getTicket", true],
+      ["listTimeEntries", true],
+      ["listAttachments", true],
     ]);
+    expect(JSON.stringify(probe)).not.toContain("shot.png");
     const closed = probe.steps[1];
     expect(closed.fields).toEqual(expect.arrayContaining([{ field: "minutesSpent", types: ["number"], filled: 1, total: 1 }]));
     expect(JSON.stringify(probe)).not.toContain("VPN drops");

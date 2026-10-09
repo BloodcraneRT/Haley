@@ -797,3 +797,15 @@ Each PSA's report is marked **Preview** in the dashboard until it's checked. Whe
 | Autotask | not yet | |
 | Dynamics 365 | not yet | |
 
+## Owners, time entries and attachments (added 2026-10-09)
+
+Built from the vendors' documentation; **not yet run against live tenants**. **Check fields** on the PSA page shows what each returns (owner fields on the ticket read, and the time-entry and attachment lists, without downloading files).
+
+| PSA | Owner (read / set) | Time entries | Attachments (list / download) |
+|---|---|---|---|
+| ConnectWise | ticket `owner {id}`; email from `GET /system/members/{id}?fields=…officeEmail` / `PATCH /service/tickets/{id}` with `[{op:"replace", path:"owner", value:{id}}]` | `GET /time/entries?conditions=chargeToType="ServiceTicket" and chargeToId={id}` (`actualHours`) | `GET /system/documents?recordType=Ticket&recordId={id}` / `GET /system/documents/{docId}/download` (binary) |
+| Autotask | `assignedResourceID`; `GET /Resources/{id}` / `PATCH /Tickets {id, assignedResourceID, assignedResourceRoleID}` (the resource's default `ResourceServiceDeskRoles` role) | `POST /TimeEntries/query` on `ticketID` (`hoursWorked`) | `POST /TicketAttachments/query` on `parentID` (file attachments only; `attachedByContactID` means the customer's) / `GET /Tickets/{id}/Attachments/{attachmentId}` (base64 `data`) |
+| HaloPSA | `agent_id` (0 is unassigned); `GET /Agent/{id}` / `POST /Tickets [{id, agent_id}]` | actions with `timetaken` (hours) | `GET /Attachment?ticket_id={id}` (with `action_id`) / `GET /Attachment/{id}?includedetails=true`, base64 in `data_base64`: **the field name is a guess to verify** |
+| Syncro | `user_id` and `user {full_name, email}` / `PUT /tickets/{id} {user_id}` | the ticket's `ticket_timers` | the ticket's `attachments[]` / its pre-signed `file.url` (S3), only from `*.amazonaws.com` or `*.syncromsp.com`, with no credentials |
+| Dynamics 365 | `_ownerid_value` (teams have no single owner); `GET /systemusers({id})?$select=fullname,internalemailaddress` / `PATCH incidents({id})` with `ownerid@odata.bind` | not supported (cases have no standard time entry) | note `annotations` with `isdocument eq true` (technicians') and `activitymimeattachments` on the case's incoming `emails` (the customer's) / `documentbody` and `body` (base64) |
+
