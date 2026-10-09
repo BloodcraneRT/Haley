@@ -146,6 +146,21 @@ export class SlackApprovals implements ApprovalChannel {
     await this.call("chat.update", { channel: ref.channel, ts: ref.ts, text: fallbackText(card), blocks: approvalBlocks(card) });
   }
 
+  /** The card in the technician's DM with the app (needs the im:write scope). */
+  async postDirect(card: ApprovalCard, technician: Technician): Promise<Record<string, string> | null> {
+    if (!technician.slack_user_id || !this.token()) return null;
+    const opened = await this.call("conversations.open", { users: technician.slack_user_id });
+    const channel = String(opened.channel?.id ?? "");
+    if (!channel) throw new SlackApiError("Slack conversations.open didn't return a channel");
+    const data = await this.call("chat.postMessage", { channel, text: fallbackText(card), blocks: approvalBlocks(card), unfurl_links: false });
+    return { channel: String(data.channel), ts: String(data.ts) };
+  }
+
+  async postReminder(ref: Record<string, string>, text: string): Promise<void> {
+    if (!ref.channel || !ref.ts) return;
+    await this.call("chat.postMessage", { channel: ref.channel, thread_ts: ref.ts, text, unfurl_links: false });
+  }
+
   async postEscalation(notice: EscalationNotice, org: Org): Promise<Record<string, string> | null> {
     const channel = this.destination(org);
     if (!channel) return null;

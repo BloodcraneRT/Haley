@@ -439,6 +439,10 @@ export interface ApprovalSettings {
   chatApprovalMaxRisk: "write" | "destructive";
   /** Also post a notice when Haley escalates a ticket to a person. */
   escalationNotices: boolean;
+  /** Also send the card to each named approver as a direct message (Slack or Teams). */
+  dmApprovers: boolean;
+  /** Remind once when a change has waited this many minutes; 0 is off. */
+  reminderMinutes: 0 | 15 | 30 | 60 | 120;
 }
 
 export const DEFAULT_APPROVAL_SETTINGS: ApprovalSettings = {
@@ -448,6 +452,8 @@ export const DEFAULT_APPROVAL_SETTINGS: ApprovalSettings = {
   mspTenantId: "",
   chatApprovalMaxRisk: "destructive",
   escalationNotices: true,
+  dmApprovers: true,
+  reminderMinutes: 0,
 };
 
 /** Workspace-wide help desk behaviour: checks before closing, frustration detection and dispatch. */

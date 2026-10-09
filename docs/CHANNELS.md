@@ -45,7 +45,7 @@ The `x-haley-hook-secret` header works instead of `?key=`. Map the provider's pa
 ## Slack
 
 1. Create one Slack app for your MSP.
-   - **Bot scopes:** `chat:write`, `im:history`, `app_mentions:read`, `users:read`, `users:read.email`, and `files:read` so Haley can read screenshots people share.
+   - **Bot scopes:** `chat:write`, `im:history`, `app_mentions:read`, `users:read`, `users:read.email`, `files:read` so Haley can read screenshots people share, and `im:write` so she can send approval cards to approvers directly.
    - **Event Subscriptions:** Request URL `{HALEY_PUBLIC_URL}/hooks/slack/events`; bot events `message.im` and `app_mention`.
    - **App Home:** enable the Messages tab.
 2. Set `HALEY_SLACK_SIGNING_SECRET` to the app's signing secret. Every request is checked against it, including a 5-minute replay window.
@@ -149,6 +149,12 @@ A technician's Slack account is linked the first time they click a card, by matc
    - It works only from your own Microsoft 365 tenant: the tenant set on the settings page, or `HALEY_TEAMS_TENANT_ID`.
    - It works only in a channel or group chat, and only for a technician in the directory. Teams reports the sender's email, which is matched to the directory, and the Entra object id is linked.
 3. Card buttons are Adaptive Card Universal Actions (`Action.Execute`). Teams delivers them to the bot's messages endpoint as signed `invoke` activities, and Haley answers with the refreshed card.
+
+**Direct messages to approvers** (on by default): when a client rule names who must approve a change, each of them also gets the card directly, in a Slack DM (needs the `im:write` scope) or a Teams chat with the Haley bot. It's the same card: they can decide from it, and it updates when the change is decided anywhere. Changes anyone can approve stay in the channel.
+- Teams only lets the bot message people who have the Haley app installed. A Teams admin can install it for every technician with an app setup policy (Teams admin center → Teams apps → Setup policies → Installed apps), with no extra Microsoft 365 permission for Haley. Until then, Haley falls back to the channel card and notes it in the audit log once a day.
+- The settings show approvers named in client rules who can't be messaged yet (not in the directory, or no linked Slack or Teams account).
+
+**Reminders** (off by default; 15, 30, 60 or 120 minutes): once per change, when it has waited that long, Haley replies under its channel card ("⏰ Still waiting for approval (45 min): …") and sends the card again to the named approvers, or, when anyone can approve, to the technician the ticket is assigned to. Only once, even across restarts.
 
 **What can be approved from chat:** everything by default. Choose *Routine changes only* to keep sensitive changes (password resets, sign-in blocks, wipes) in the dashboard; their cards then show only **Approve in Haley**. Client rules that name approvers apply in chat as well, and hard rails are never approvable.
 

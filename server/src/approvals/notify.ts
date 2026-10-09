@@ -1,6 +1,6 @@
 import type { ApprovalEvents } from "../agent/runner.js";
 import type { Store } from "../store.js";
-import type { Action, Assurance, Org, Run, Ticket, TicketStatus } from "../types.js";
+import type { Action, Assurance, Org, Run, Technician, Ticket, TicketStatus } from "../types.js";
 
 /** Everything an approval card shows. Built from the store; never includes action inputs or tool results. */
 export interface ApprovalCard {
@@ -35,7 +35,17 @@ export interface ApprovalChannel {
   postApproval(card: ApprovalCard, org: Org): Promise<Record<string, string> | null>;
   updateApproval(ref: Record<string, string>, card: ApprovalCard): Promise<void>;
   postEscalation(notice: EscalationNotice, org: Org): Promise<Record<string, string> | null>;
+  /**
+   * Sends the card straight to one technician; null when they have no account on this platform. Throws
+   * DirectMessageUnavailable when the platform won't let the bot message them.
+   */
+  postDirect?(card: ApprovalCard, technician: Technician): Promise<Record<string, string> | null>;
+  /** A short line under an earlier card (a thread reply). */
+  postReminder?(ref: Record<string, string>, text: string): Promise<void>;
 }
+
+/** The platform won't let the bot message this person directly (Teams: they don't have the app). */
+export class DirectMessageUnavailable extends Error {}
 
 const IDENTITY: Record<Assurance, string> = {
   none: "identity not verified",
@@ -66,6 +76,7 @@ const AUTOMATIC_ACTORS = new Set(["haley", "scheduler", "system"]);
  */
 export class ApprovalNotifier implements ApprovalEvents {
   private readonly inflight = new Set<Promise<void>>();
+  private readonly reportedUnreachable = new Set<string>();
 
   constructor(
     private readonly store: Store,
@@ -120,6 +131,7 @@ export class ApprovalNotifier implements ApprovalEvents {
     if (!org) return;
     const channels = this.channels.filter((c) => c.configured(org));
     if (!channels.length) return;
+    const dm = this.store.getApprovalSettings().dmApprovers;
     for (const action of actions) {
       const card = this.card(action, evidence);
       if (!card) continue;
@@ -134,11 +146,89 @@ export class ApprovalNotifier implements ApprovalEvents {
           }
         });
       }
+      // Named approvers also get it directly, so a change only they can approve doesn't wait on them noticing a channel.
+      if (dm && action.approvers.length) this.sendDirect(org, action, card, run.ticket_id, this.technicians(action.approvers), evidence);
+    }
+  }
+
+  /** Directory technicians for a list of names (people not in the directory can't be messaged). */
+  private technicians(names: string[]): Technician[] {
+    return names.map((name) => this.store.findTechnician({ name })).filter((t): t is Technician => t !== null);
+  }
+
+  /** Sends the card to each technician on every platform they're linked on, recording each so it's updated later. */
+  private sendDirect(org: Org, action: Action, card: ApprovalCard, ticketId: string | null, people: Technician[], evidence: string[]) {
+    for (const person of people) {
+      for (const channel of this.channels.filter((c) => c.postDirect && c.configured(org))) {
+        this.track(async () => {
+          try {
+            const ref = await channel.postDirect!(card, person);
+            if (ref) this.store.addApprovalPost({ actionId: action.id, ticketId, channel: channel.channel, ref: { ...ref, evidence: JSON.stringify(evidence) }, kind: "dm" });
+          } catch (err) {
+            if (err instanceof DirectMessageUnavailable) this.unreachable(org.id, person, channel.channel, err.message);
+            else this.failed(org.id, action.id, channel.channel, err);
+          }
+        });
+      }
+    }
+  }
+
+  /** Audited once a day per technician and platform, so a missing Teams app doesn't flood the log. */
+  private unreachable(orgId: string, person: Technician, channel: string, reason: string) {
+    const key = `${person.id}:${channel}:${new Date().toISOString().slice(0, 10)}`;
+    if (this.reportedUnreachable.has(key)) return;
+    this.reportedUnreachable.add(key);
+    this.store.audit({ orgId, actor: "system", action: "approvals.dm_unavailable", target: person.id, detail: { channel, technician: person.name, reason } });
+  }
+
+  /**
+   * One reminder for changes that have waited the workspace's reminder time: a line under each channel card, and
+   * the card again to the named approvers (or, when anyone can approve, the technician the ticket is assigned to).
+   * Called from the scheduler; does nothing when reminders are off.
+   */
+  remind(nowMs = Date.now()): void {
+    const minutes = this.store.getApprovalSettings().reminderMinutes;
+    if (!minutes) return;
+    for (const action of this.store.listActionsToRemind(new Date(nowMs - minutes * 60_000).toISOString())) {
+      // Claimed first, so overlapping ticks and restarts never send it twice.
+      if (!this.store.markActionReminded(action.id)) continue;
+      const org = this.store.getOrg(action.org_id);
+      const run = this.store.getRun(action.run_id);
+      if (!org || !run) continue;
+      const waited = Math.max(minutes, Math.round((nowMs - Date.parse(action.created_at)) / 60_000));
+      const ticket = run.ticket_id ? this.store.getTicket(run.ticket_id) : null;
+      const link = this.link(ticket ? `/tickets/${ticket.id}` : "/approvals");
+      const text = `⏰ Still waiting for approval (${waited} min): ${action.description.slice(0, 300)}${link ? ` · ${link}` : ""}`;
+      const posts = this.store.listApprovalPosts(action.id);
+      for (const post of posts.filter((p) => p.kind === "card")) {
+        const channel = this.channels.find((c) => c.channel === post.channel);
+        if (!channel?.postReminder) continue;
+        this.track(async () => {
+          try {
+            await channel.postReminder!(post.ref, text);
+            this.store.addApprovalPost({ actionId: action.id, ticketId: run.ticket_id, channel: channel.channel, ref: post.ref, kind: "reminder" });
+          } catch (err) {
+            this.failed(org.id, action.id, channel.channel, err);
+          }
+        });
+      }
+      const evidence = (() => {
+        try {
+          return JSON.parse(posts[0]?.ref.evidence ?? "[]") as string[];
+        } catch {
+          return [];
+        }
+      })();
+      const card = this.card(action, evidence);
+      const people = action.approvers.length ? this.technicians(action.approvers) : ticket?.assignee ? this.technicians([ticket.assignee]) : [];
+      if (card && people.length) this.sendDirect(org, action, card, run.ticket_id, people, evidence);
+      this.store.audit({ orgId: org.id, actor: "system", action: "approval.reminded", target: action.id, detail: { minutes: waited, to: people.map((p) => p.name) } });
     }
   }
 
   decided(action: Action): void {
-    for (const post of this.store.listApprovalPosts(action.id)) {
+    // Cards and direct messages are updated; reminder lines stay as they were.
+    for (const post of this.store.listApprovalPosts(action.id).filter((p) => p.kind !== "reminder")) {
       const channel = this.channels.find((c) => c.channel === post.channel);
       if (!channel) continue;
       this.track(async () => {

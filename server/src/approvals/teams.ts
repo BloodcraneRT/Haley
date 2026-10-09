@@ -1,7 +1,7 @@
 import type { TeamsChannel } from "../channels/teams.js";
 import type { Store } from "../store.js";
 import type { ApprovalDecision, Org, Technician } from "../types.js";
-import type { ApprovalCard, ApprovalChannel, EscalationNotice } from "./notify.js";
+import { DirectMessageUnavailable, type ApprovalCard, type ApprovalChannel, type EscalationNotice } from "./notify.js";
 import type { DecideFn } from "./slack.js";
 
 type Json = Record<string, any>;
@@ -122,6 +122,34 @@ export class TeamsApprovals implements ApprovalChannel {
       attachments: [{ contentType: CARD, content: approvalCard(card) }],
     });
     return { serviceUrl: to.serviceUrl, conversationId: to.conversationId, activityId: String(res.id ?? "") };
+  }
+
+  /**
+   * The card in the technician's 1:1 chat with the bot, on the same Teams service as the approvals channel.
+   * Teams refuses (403/404) unless they have the Haley app installed.
+   */
+  async postDirect(card: ApprovalCard, technician: Technician): Promise<Record<string, string> | null> {
+    const to = this.store.getApprovalSettings().teamsConversation;
+    if (!to || !technician.teams_aad_id) return null;
+    let conversationId: string;
+    try {
+      conversationId = await this.teams.personalConversation(to.serviceUrl, to.tenantId || this.mspTenant(), technician.teams_aad_id);
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      if (status === 403 || status === 404) throw new DirectMessageUnavailable(`${technician.name} doesn't have the Haley app in Teams`);
+      throw err;
+    }
+    const res = await this.teams.botRequest("POST", this.activityUrl(to.serviceUrl, conversationId), {
+      type: "message",
+      attachments: [{ contentType: CARD, content: approvalCard(card) }],
+    });
+    return { serviceUrl: to.serviceUrl, conversationId, activityId: String(res.id ?? "") };
+  }
+
+  async postReminder(ref: Record<string, string>, text: string): Promise<void> {
+    if (!ref.activityId) return;
+    // Posting to an activity's URL makes the message a reply to it.
+    await this.teams.botRequest("POST", this.activityUrl(ref.serviceUrl, ref.conversationId, ref.activityId), { type: "message", text });
   }
 
   async updateApproval(ref: Record<string, string>, card: ApprovalCard): Promise<void> {

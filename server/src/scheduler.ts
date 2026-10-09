@@ -37,6 +37,8 @@ export class Scheduler {
     private readonly agent: AgentService,
     private readonly psa: PsaSync | null = null,
     private readonly alerts: SyncroAlertTickets | null = null,
+    /** Sends the one reminder for approvals left waiting (when the workspace turns reminders on). */
+    private readonly reminders: { remind(nowMs: number): void } | null = null,
   ) {}
 
   start(intervalMs = 30_000): void {
@@ -56,6 +58,7 @@ export class Scheduler {
     try {
       for (const schedule of this.store.dueSchedules(new Date(nowMs).toISOString())) this.fire(schedule, nowMs, result);
       this.sweepSla(nowMs, result);
+      this.reminders?.remind(nowMs);
       this.closeUnconfirmed(nowMs, result);
       // Attachment retention (a cheap delete; 0 keeps them forever).
       const keepDays = this.store.getHelpdeskSettings().attachmentRetentionDays;

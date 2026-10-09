@@ -1,7 +1,7 @@
 import { Send, Unplug } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { api, errorMessage, type ApprovalSettingsInput, type ApprovalSettingsView } from "../api";
+import { api, errorMessage, type ApprovalSettingsInput, type ApprovalSettingsView, type ReminderMinutes } from "../api";
 import { usePoll } from "../hooks/usePoll";
 import { useApp } from "../lib/app-context";
 import { CopyButton } from "./CopyButton";
@@ -12,6 +12,13 @@ import { Pill } from "./Pill";
 import { Switch } from "./Switch";
 
 const CHANNEL_RE = /^[CG][A-Z0-9]{2,20}$/;
+const REMINDERS: Array<[ReminderMinutes, string]> = [
+  [0, "Off"],
+  [15, "After 15 minutes"],
+  [30, "After 30 minutes"],
+  [60, "After an hour"],
+  [120, "After 2 hours"],
+];
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** One line for the Approvals page header: where approval cards go today. */
@@ -33,6 +40,8 @@ export function ChatApprovalsModal({ open, onClose, onSaved }: { open: boolean; 
   const [channel, setChannel] = useState<string | null>(null);
   const [maxRisk, setMaxRisk] = useState<"write" | "destructive" | null>(null);
   const [notices, setNotices] = useState<boolean | null>(null);
+  const [dm, setDm] = useState<boolean | null>(null);
+  const [reminder, setReminder] = useState<ReminderMinutes | null>(null);
   const [tenant, setTenant] = useState<string | null>(null);
   const [busy, setBusy] = useState<"save" | "test" | "disconnect" | "teams" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +50,8 @@ export function ChatApprovalsModal({ open, onClose, onSaved }: { open: boolean; 
     channel: channel ?? s?.slackChannel ?? "",
     maxRisk: maxRisk ?? s?.chatApprovalMaxRisk ?? "destructive",
     notices: notices ?? s?.escalationNotices ?? true,
+    dm: dm ?? s?.dmApprovers ?? true,
+    reminder: reminder ?? s?.reminderMinutes ?? 0,
     tenant: tenant ?? s?.mspTenantId ?? "",
   };
   const close = () => {
@@ -49,6 +60,8 @@ export function ChatApprovalsModal({ open, onClose, onSaved }: { open: boolean; 
     setChannel(null);
     setMaxRisk(null);
     setNotices(null);
+    setDm(null);
+    setReminder(null);
     setTenant(null);
     setError(null);
     onClose();
@@ -78,6 +91,9 @@ export function ChatApprovalsModal({ open, onClose, onSaved }: { open: boolean; 
     const tid = value.tenant.trim();
     if (tid && !GUID_RE.test(tid)) return setError("The Microsoft 365 tenant id is a GUID like 00000000-0000-0000-0000-000000000000.");
     const input: ApprovalSettingsInput = { slackChannel: ch, chatApprovalMaxRisk: value.maxRisk, escalationNotices: value.notices };
+    // Sent only when changed, so saving other settings doesn't write them.
+    if (dm !== null) input.dmApprovers = dm;
+    if (reminder !== null) input.reminderMinutes = reminder;
     if (s?.teamsAvailable) input.mspTenantId = tid;
     if (token.trim()) input.slackBotToken = token.trim();
     if (await run("save", async () => (await api.updateApprovalSettings(input), "Chat approval settings saved."))) {
@@ -240,6 +256,32 @@ export function ChatApprovalsModal({ open, onClose, onSaved }: { open: boolean; 
             <div className="row" style={{ gap: 10 }}>
               <Switch id="ca-notices" checked={value.notices} onChange={setNotices} label="Post escalation notices" />
               <label htmlFor="ca-notices">Also post when Haley escalates a ticket to a person</label>
+            </div>
+            <div className="field">
+              <div className="row" style={{ gap: 10 }}>
+                <Switch id="ca-dm" checked={value.dm} onChange={setDm} label="Message named approvers directly" />
+                <label htmlFor="ca-dm">Also send the card to named approvers directly</label>
+              </div>
+              <span className="help">
+                When a client rule names who must approve, they get the card in a Slack DM or a Teams chat with the Haley bot. Teams needs the Haley app installed for
+                each technician (a Teams admin can do that for everyone with an app setup policy).
+              </span>
+              {value.dm && s.approversWithoutChat.length > 0 && (
+                <span className="help" style={{ color: "var(--tone-amber-fg)" }}>
+                  Can't message {s.approversWithoutChat.join(", ")}: not in the <Link to="/technicians">directory</Link> or no linked Slack or Teams account yet.
+                </span>
+              )}
+            </div>
+            <div className="field">
+              <label htmlFor="ca-reminder">Remind about waiting changes</label>
+              <select id="ca-reminder" className="select" value={value.reminder} onChange={(e) => setReminder(Number(e.target.value) as ReminderMinutes)}>
+                {REMINDERS.map(([m, label]) => (
+                  <option key={m} value={m}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <span className="help">Once per change: a reply under its card, and the card again to the approvers (or the ticket's technician).</span>
             </div>
           </section>
 

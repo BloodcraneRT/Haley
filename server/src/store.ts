@@ -51,6 +51,8 @@ import type { ModelProfile } from "./ai/providers.js";
 import { DEFAULT_PSA_OPTIONS, type PsaConnection, type PsaKind, type PsaOptions, type TicketLink } from "./psa/types.js";
 
 type Row = Record<string, unknown>;
+/** A card in a channel, the same card sent to someone directly, or a reminder posted under a card. */
+export type ApprovalPostKind = "card" | "dm" | "reminder";
 
 const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
 
@@ -1002,15 +1004,28 @@ export class Store {
   }
 
   /** Records an approval card or escalation notice posted to Slack or Teams, so it can be updated later. */
-  addApprovalPost(input: { actionId: string | null; ticketId: string | null; channel: "slack" | "teams"; ref: Record<string, string> }): void {
+  addApprovalPost(input: { actionId: string | null; ticketId: string | null; channel: "slack" | "teams"; ref: Record<string, string>; kind?: ApprovalPostKind }): void {
     this.db
-      .prepare("INSERT INTO approval_posts (id, action_id, ticket_id, channel, ref, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(newId("apost"), input.actionId, input.ticketId, input.channel, json(input.ref), now());
+      .prepare("INSERT INTO approval_posts (id, action_id, ticket_id, channel, ref, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(newId("apost"), input.actionId, input.ticketId, input.channel, json(input.ref), input.kind ?? "card", now());
   }
 
-  listApprovalPosts(actionId: string): Array<{ channel: "slack" | "teams"; ref: Record<string, string> }> {
-    const rows = this.db.prepare("SELECT channel, ref FROM approval_posts WHERE action_id = ? ORDER BY created_at").all(actionId) as Row[];
-    return rows.map((r) => ({ channel: r.channel as "slack" | "teams", ref: parse<Record<string, string>>(r.ref, {}) }));
+  listApprovalPosts(actionId: string): Array<{ channel: "slack" | "teams"; ref: Record<string, string>; kind: ApprovalPostKind }> {
+    const rows = this.db.prepare("SELECT channel, ref, kind FROM approval_posts WHERE action_id = ? ORDER BY created_at").all(actionId) as Row[];
+    return rows.map((r) => ({ channel: r.channel as "slack" | "teams", ref: parse<Record<string, string>>(r.ref, {}), kind: (r.kind as ApprovalPostKind) ?? "card" }));
+  }
+
+  /** Changes still waiting for approval since before a time that haven't had their one reminder. */
+  listActionsToRemind(before: string): Action[] {
+    const rows = this.db
+      .prepare("SELECT * FROM actions WHERE status = 'pending_approval' AND reminded_at IS NULL AND created_at <= ? ORDER BY created_at LIMIT 50")
+      .all(before) as Row[];
+    return rows.map((r) => this.toAction(r));
+  }
+
+  /** Marks an action reminded; false when it already was (so only one caller sends the reminder). */
+  markActionReminded(id: string): boolean {
+    return this.db.prepare("UPDATE actions SET reminded_at = ? WHERE id = ? AND reminded_at IS NULL").run(now(), id).changes > 0;
   }
 
   getHelpdeskSettings(): HelpdeskSettings {

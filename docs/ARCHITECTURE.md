@@ -203,6 +203,8 @@ Syncro implements all three.
   - `pending()` fires after a run parks actions, with the run's read steps as evidence.
   - `decided()` fires after `decideAction` (approve, reject or `changes`), and when a failed run rejects what was still pending.
 - **`approvals/notify.ts`:** turns those events into cards for each `ApprovalChannel`, and records each post in `approval_posts` (migration 14) so every card can be updated later. It also posts escalation notices from `Store.onTicketStatusChanged`, only when the actor is Haley, the scheduler or the system.
+  - **Direct messages:** with `dmApprovers`, named approvers also get the card through `postDirect` (Slack `conversations.open`; Teams `POST /v3/conversations`, which needs the app installed for them, so a 403 or 404 becomes `DirectMessageUnavailable`, audited once a day). Recorded with `kind: "dm"` and updated like channel cards.
+  - **Reminders:** `remind()` runs on each scheduler tick when `reminderMinutes` is set. It claims each overdue action with `actions.reminded_at` (migration 20), so a reminder is sent once. It replies under channel cards (`postReminder`, recorded as `kind: "reminder"` and never updated) and sends the card again to the approvers, or to the ticket's assigned technician.
 - **`approvals/slack.ts`:**
   - posts Block Kit cards with `chat.postMessage` and updates them with `chat.update`;
   - `/hooks/slack/interactivity` (`routes/approvals.ts`, with a scoped url-encoded parser that keeps the raw body for the signature) handles `block_actions` and the `views.open` modal for reject and changes.
