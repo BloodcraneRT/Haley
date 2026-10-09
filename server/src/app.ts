@@ -233,7 +233,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   agent.attachApprovalEvents(approvalNotifier);
   store.onTicketStatusChanged((ticket, from, who) => approvalNotifier.escalated(ticket, from, who));
   const alertTickets = new SyncroAlertTickets(store, agent, fetchImpl);
-  const scheduler = new Scheduler(store, agent, psa, alertTickets);
+  const scheduler = new Scheduler(store, agent, psa, alertTickets, approvalNotifier);
 
   const withSla = (ticket: Ticket, org: Org | null | undefined) => ({ ...ticket, sla: org ? slaFor(ticket, org.settings.sla) : null });
 

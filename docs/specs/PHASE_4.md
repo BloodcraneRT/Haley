@@ -1,6 +1,6 @@
 # Spec: phase 4, the deferred items
 
-Status: **4a and 4b built** (sections 5, 8, 2, 3 and 4), 2026-10-09. Changes from this spec while building:
+Status: **4a, 4b and 4c built** (sections 5, 8, 2, 3, 4 and 1), 2026-10-09. Changes from this spec while building:
 
 - **4a:** the probe also runs from the dashboard (**Check fields** on the PSA page), not only as a script. Autotask categories come from `issueType`.
 - **4b:**
@@ -11,6 +11,10 @@ Status: **4a and 4b built** (sections 5, 8, 2, 3 and 4), 2026-10-09. Changes fro
   - PSA attachments are capped at 5 per ticket per sync (the per-message limit), not 10.
   - A file attached to a comment belongs to whoever wrote that comment, when the PSA links them (HaloPSA, Dynamics emails).
   - ConnectWise and Syncro files are treated as the customer's, since neither says who added them. That's safe: Haley reads them as untrusted, like ticket text.
+- **4c:**
+  - The "can't be DMed" list on the settings page names approvers from client rules who aren't in the directory or have no linked chat account. It doesn't track Teams installs; those are audited when a DM fails.
+  - The reminder counts from when the change was proposed.
+  - The reminder DM is the full card again (so it can be decided from there), not a text line.
 
 Phases 1–3 of [NEO_FOLLOWUPS.md](NEO_FOLLOWUPS.md) are built. This spec covers what was left out of them, plus the two items that were always planned for phase 4 (phone and new integrations). Each section says what changes, where in the code, the data, the API and UI, safety rules, tests, and size. File references are to `main` after PR #14. The last migration today is 18; the numbers below follow the suggested order and are indicative.
 
@@ -19,14 +23,14 @@ Phases 1–3 of [NEO_FOLLOWUPS.md](NEO_FOLLOWUPS.md) are built. This spec covers
 
 ## Contents
 
-1. [Approver DMs and reminders](#1-approver-dms-and-reminders)
-2. [PSA ticket owners and working hours](#2-psa-ticket-owners-and-working-hours)
-3. [PSA time entries in the close check](#3-psa-time-entries-in-the-close-check)
-4. [Attachments from the PSA](#4-attachments-from-the-psa)
-5. [Reports from Autotask and Dynamics](#5-reports-from-autotask-and-dynamics)
+1. [Approver DMs and reminders](#1-approver-dms-and-reminders) (built)
+2. [PSA ticket owners and working hours](#2-psa-ticket-owners-and-working-hours) (built)
+3. [PSA time entries in the close check](#3-psa-time-entries-in-the-close-check) (built)
+4. [Attachments from the PSA](#4-attachments-from-the-psa) (built)
+5. [Reports from Autotask and Dynamics](#5-reports-from-autotask-and-dynamics) (built)
 6. [Phone through a partner](#6-phone-through-a-partner)
 7. [Alert sources and integrations by demand](#7-alert-sources-and-integrations-by-demand)
-8. [Live-tenant checks](#8-live-tenant-checks)
+8. [Live-tenant checks](#8-live-tenant-checks) (built)
 - [Suggested order](#suggested-order)
 - [Open questions](#open-questions)
 

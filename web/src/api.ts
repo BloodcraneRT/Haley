@@ -451,6 +451,12 @@ export interface ApprovalSettingsView {
   teamsConversation: { serviceUrl: string; conversationId: string; tenantId: string; registeredBy: string; registeredAt: string } | null;
   chatApprovalMaxRisk: "write" | "destructive";
   escalationNotices: boolean;
+  /** Also send the card to each named approver directly. */
+  dmApprovers: boolean;
+  /** One reminder after this many minutes; 0 is off. */
+  reminderMinutes: ReminderMinutes;
+  /** Approvers named in client rules who can't get direct messages (not in the directory, or no chat account). */
+  approversWithoutChat: string[];
   mspTenantId: string;
   /** HALEY_TEAMS_TENANT_ID, used when mspTenantId is empty. */
   teamsDefaultTenantId: string;
@@ -460,11 +466,15 @@ export interface ApprovalSettingsView {
   interactivityUrl: string;
 }
 
+export type ReminderMinutes = 0 | 15 | 30 | 60 | 120;
+
 export interface ApprovalSettingsInput {
   slackBotToken?: string | null;
   slackChannel?: string;
   chatApprovalMaxRisk?: "write" | "destructive";
   escalationNotices?: boolean;
+  dmApprovers?: boolean;
+  reminderMinutes?: ReminderMinutes;
   mspTenantId?: string;
   teamsConversation?: null;
 }

@@ -39,7 +39,8 @@ const action: Action = {
 };
 
 const settings: ApprovalSettingsView = {
-  slackChannel: "", slackTeamId: "", teamsConversation: null, chatApprovalMaxRisk: "destructive", escalationNotices: true, mspTenantId: "", teamsDefaultTenantId: "",
+  slackChannel: "", slackTeamId: "", teamsConversation: null, chatApprovalMaxRisk: "destructive", escalationNotices: true, dmApprovers: true, reminderMinutes: 0,
+  approversWithoutChat: [], mspTenantId: "", teamsDefaultTenantId: "",
   slackConnected: false, slackAvailable: true, teamsAvailable: false, interactivityUrl: "https://haley.msp.example/hooks/slack/interactivity",
 };
 
@@ -100,5 +101,17 @@ describe("chat approval settings", () => {
     const { node } = await renderView(() => <MemoryRouter><ChatApprovalsModal open onClose={() => undefined} /></MemoryRouter>);
     expect(node.textContent).toContain("HALEY_SLACK_SIGNING_SECRET");
     expect(node.querySelector("#ca-token")).toBeNull();
+  });
+
+  it("turns on reminders, sends only what changed, and names approvers who can't be messaged", async () => {
+    vi.spyOn(api, "approvalSettings").mockResolvedValue({ ...settings, approversWithoutChat: ["Priya Patel"] });
+    const save = vi.spyOn(api, "updateApprovalSettings").mockResolvedValue(settings);
+    const { node } = await renderView(() => <MemoryRouter><ChatApprovalsModal open onClose={() => undefined} /></MemoryRouter>);
+    expect(node.textContent).toContain("Can't message Priya Patel");
+    await change(node.querySelector<HTMLSelectElement>("#ca-reminder")!, "30");
+    await act(async () => { node.querySelector("#chat-approvals-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    expect(save).toHaveBeenCalledWith({ slackChannel: "", chatApprovalMaxRisk: "destructive", escalationNotices: true, reminderMinutes: 30 });
+    await click(node.querySelector('[role="switch"][aria-label="Message named approvers directly"]')!);
+    expect(node.textContent).not.toContain("Can't message Priya Patel");
   });
 });

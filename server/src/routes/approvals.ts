@@ -52,7 +52,20 @@ export function registerApprovalRoutes(
     teamsAvailable: deps.teamsEnabled,
     teamsDefaultTenantId: deps.teamsDefaultTenantId,
     interactivityUrl: base ? `${base}/hooks/slack/interactivity` : "/hooks/slack/interactivity",
+    /** Approvers named in client rules who can't get direct messages: not in the directory, or no linked chat account. */
+    approversWithoutChat: approversWithoutChat(),
   });
+
+  const approversWithoutChat = (): string[] => {
+    const names = new Map<string, string>();
+    for (const org of store.listOrgs()) for (const rule of org.settings.policyRules) for (const n of rule.approvers) names.set(n.toLowerCase(), n);
+    return [...names.values()]
+      .filter((n) => {
+        const t = store.findTechnician({ name: n });
+        return !t || (!t.slack_user_id && !t.teams_aad_id);
+      })
+      .sort((a, b) => a.localeCompare(b));
+  };
 
   app.get("/api/approvals/settings", async () => view());
 
@@ -63,6 +76,8 @@ export function registerApprovalRoutes(
         slackChannel: channelId.optional(),
         chatApprovalMaxRisk: z.enum(["write", "destructive"]).optional(),
         escalationNotices: z.boolean().optional(),
+        dmApprovers: z.boolean().optional(),
+        reminderMinutes: z.union([z.literal(0), z.literal(15), z.literal(30), z.literal(60), z.literal(120)]).optional(),
         mspTenantId: z.union([z.literal(""), z.string().trim().toLowerCase().uuid("The tenant id is a GUID")]).optional(),
         /** Only clearing is allowed here; a Teams conversation is registered from Teams. */
         teamsConversation: z.null().optional(),
@@ -93,8 +108,8 @@ export function registerApprovalRoutes(
       detail: {
         fields: Object.keys(parsed.data),
         slackToken: slackBotToken ? "set" : slackBotToken === null ? "removed" : "unchanged",
-        from: { slackChannel: before.slackChannel, chatApprovalMaxRisk: before.chatApprovalMaxRisk, escalationNotices: before.escalationNotices },
-        to: { slackChannel: saved.slackChannel, chatApprovalMaxRisk: saved.chatApprovalMaxRisk, escalationNotices: saved.escalationNotices },
+        from: { slackChannel: before.slackChannel, chatApprovalMaxRisk: before.chatApprovalMaxRisk, escalationNotices: before.escalationNotices, dmApprovers: before.dmApprovers, reminderMinutes: before.reminderMinutes },
+        to: { slackChannel: saved.slackChannel, chatApprovalMaxRisk: saved.chatApprovalMaxRisk, escalationNotices: saved.escalationNotices, dmApprovers: saved.dmApprovers, reminderMinutes: saved.reminderMinutes },
       },
     });
     return view(saved);

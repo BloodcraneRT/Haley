@@ -181,6 +181,22 @@ export class TeamsChannel implements ChannelAdapter {
     return this.botToken.value;
   }
 
+  /**
+   * Opens (or finds) the bot's 1:1 chat with a user, by their Entra object id. Teams only allows it when the user
+   * has the app installed, and answers 403 or 404 otherwise.
+   */
+  async personalConversation(serviceUrl: string, tenantId: string, aadObjectId: string): Promise<string> {
+    const res = await this.botRequest("POST", `${serviceUrl.replace(/\/$/, "")}/v3/conversations`, {
+      bot: { id: `28:${this.config.appId}` },
+      members: [{ id: aadObjectId }],
+      tenantId,
+      isGroup: false,
+      channelData: { tenant: { id: tenantId } },
+    });
+    if (!res.id) throw new Error("Teams didn't return a conversation id");
+    return String(res.id);
+  }
+
   /** Calls the Bot Framework connector (serviceUrl) as the bot. Returns the parsed body ({} when empty). */
   async botRequest(method: "GET" | "POST" | "PUT", url: string, body?: unknown): Promise<Json> {
     const res = await this.fetchImpl(url, {
@@ -189,7 +205,7 @@ export class TeamsChannel implements ChannelAdapter {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     const raw = await res.text();
-    if (!res.ok) throw new Error(`Teams returned ${res.status}`);
+    if (!res.ok) throw Object.assign(new Error(`Teams returned ${res.status}`), { status: res.status });
     try {
       return raw ? (JSON.parse(raw) as Json) : {};
     } catch {

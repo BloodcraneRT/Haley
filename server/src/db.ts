@@ -372,6 +372,9 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE ticket_links ADD COLUMN last_owner TEXT NOT NULL DEFAULT '';
    ALTER TABLE ticket_links ADD COLUMN seen_attachment_ids TEXT NOT NULL DEFAULT '[]';
    ALTER TABLE ticket_links ADD COLUMN time_entry_ids TEXT NOT NULL DEFAULT '[]';`,
+  // 20: approval cards sent to approvers directly, and one reminder per waiting change
+  `ALTER TABLE actions ADD COLUMN reminded_at TEXT;
+   ALTER TABLE approval_posts ADD COLUMN kind TEXT NOT NULL DEFAULT 'card';`,
 ];
 
 export function openDb(path: string): Db {
