@@ -34,6 +34,8 @@ const COVERAGE: Record<InsightCoverage, { tone: Tone; label: string; help: strin
 };
 const DAYS = [30, 60, 90] as const;
 const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+/** Report queries not yet checked against a live tenant of this PSA. */
+const isPreview = (p: PsaProviderInfo | undefined) => Boolean(p?.preview?.includes("insights"));
 const STATUS_TONE: Record<InsightReportSummary["status"], Tone> = { running: "blue", done: "green", failed: "red" };
 
 export function InsightsPage() {
@@ -238,6 +240,7 @@ function NewReportModal({ open, onClose, onStarted }: { open: boolean; onClose: 
                 {usable.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
+                    {isPreview(supported.find((p) => p.id === c.kind)) ? " (preview)" : ""}
                   </option>
                 ))}
               </select>
@@ -257,6 +260,7 @@ function NewReportModal({ open, onClose, onStarted }: { open: boolean; onClose: 
                     {supported.map((p) => (
                       <option key={p.id} value={p.id}>
                         {p.name}
+                        {isPreview(p) ? " (preview)" : ""}
                       </option>
                     ))}
                   </select>
@@ -336,6 +340,7 @@ export function InsightReportPage() {
   const { id = "" } = useParams();
   const { user, toast } = useApp();
   const report = usePoll(() => api.insight(id), [id], (data) => (data?.status === "running" ? 2500 : null));
+  const providers = usePoll(() => api.psaProviders(), []);
   const [samples, setSamples] = useState(false);
 
   if (report.error instanceof ApiError && report.error.status === 404) {
@@ -407,13 +412,13 @@ export function InsightReportPage() {
       ) : r.status === "failed" || !res ? (
         <ErrorBanner error={r.error || "The report failed."} />
       ) : (
-        <InsightBody report={r} samples={samples} />
+        <InsightBody report={r} samples={samples} provider={providers.data?.find((p) => p.id === r.params.source.kind)} />
       )}
     </div>
   );
 }
 
-function InsightBody({ report, samples }: { report: InsightReport; samples: boolean }) {
+function InsightBody({ report, samples, provider }: { report: InsightReport; samples: boolean; provider?: PsaProviderInfo }) {
   const res = report.result!;
   const t = res.totals;
   const share = t.ticketsPerMonth ? Math.round((t.coveredTicketsPerMonth / t.ticketsPerMonth) * 100) : 0;
@@ -435,6 +440,15 @@ function InsightBody({ report, samples }: { report: InsightReport; samples: bool
         <Kpi icon={<Hourglass className="icon-sm" />} label="Hours freed" value={`${formatNumber(t.coveredHoursPerMonth)}/mo`} hint={anyEstimate ? "PSA time where recorded, else your estimate" : "from time recorded in the PSA"} />
         <Kpi icon={<Lightbulb className="icon-sm" />} label="Grouped" value={formatNumber(t.groupedTickets)} hint={`${formatNumber(res.other.tickets)} one-offs not grouped`} />
       </div>
+
+      {isPreview(provider) && (
+        <div className="banner banner-info no-print" role="note">
+          <span>
+            Reports from {provider!.name} are in preview: the query hasn't been checked against a live {provider!.name} yet. Compare a few groups with your PSA, and use{" "}
+            <strong>Check fields</strong> on the PSA sync page if hours or names look empty.
+          </span>
+        </div>
+      )}
 
       {res.truncated && (
         <div className="banner banner-warn" role="status">

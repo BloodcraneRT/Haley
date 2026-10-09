@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -149,6 +149,42 @@ export class DynamicsAdapter implements PsaAdapter {
   async test() {
     const { data } = await this.call<Json>("GET", "/WhoAmI");
     return `Connected to ${new URL(this.orgUrl).hostname} as application user ${data.UserId}.`;
+  }
+
+  /**
+   * Cases resolved in [from, to), newest first, for the automation report. The resolution activity gives the
+   * close time (actualend) and the time spent in minutes (timespent); a case resolved before `from` can't have
+   * been modified after it, so modifiedon narrows the query and actualend decides.
+   */
+  async listClosedTickets(from: string, to: string, opts: { max: number }): Promise<HistoricTicket[]> {
+    const select = "incidentid,title,description,createdon,modifiedon,_customerid_value,casetypecode";
+    const expand = "customerid_account($select=name),Incident_IncidentResolutions($select=actualend,timespent)";
+    const rows: Json[] = [];
+    let next: string | undefined = `/incidents?$select=${select}&$filter=statecode eq 1 and modifiedon ge ${from}&$orderby=modifiedon desc&$expand=${expand}`;
+    while (next && rows.length < opts.max) {
+      const { data }: { data: Json } = await this.call<Json>("GET", next);
+      rows.push(...((data.value ?? []) as Json[]));
+      next = data["@odata.nextLink"];
+    }
+    const out: HistoricTicket[] = [];
+    for (const i of rows) {
+      const resolutions = ((i.Incident_IncidentResolutions ?? []) as Json[]).filter((r) => r.actualend).sort((a, b) => String(b.actualend).localeCompare(String(a.actualend)));
+      const closedAt = new Date(resolutions[0]?.actualend ?? i.modifiedon).toISOString();
+      if (closedAt < from || closedAt >= to) continue;
+      const spent = resolutions.reduce((n, r) => n + (typeof r.timespent === "number" ? r.timespent : 0), 0);
+      out.push({
+        id: String(i.incidentid),
+        subject: String(i.title ?? ""),
+        description: stripHtml(i.description ?? "").slice(0, 2000),
+        customerId: String(i._customerid_value ?? ""),
+        customerName: i.customerid_account?.name ?? i["_customerid_value@OData.Community.Display.V1.FormattedValue"] ?? "",
+        createdAt: String(i.createdon ?? ""),
+        closedAt,
+        minutesSpent: spent > 0 ? spent : null,
+        category: i["casetypecode@OData.Community.Display.V1.FormattedValue"] ?? null,
+      });
+    }
+    return out.sort((a, b) => b.closedAt.localeCompare(a.closedAt)).slice(0, opts.max);
   }
 
   async listCustomers(): Promise<ExternalCustomer[]> {

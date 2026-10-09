@@ -691,6 +691,23 @@ export interface PsaProviderInfo {
   timeEntries?: boolean;
   /** Closed tickets can be read for a "What would Haley handle?" report. */
   insights?: boolean;
+  /** Features built from the vendor's docs and not yet checked against a live tenant. */
+  preview?: Array<"insights">;
+}
+
+/** One field the probe saw: its types and how many items had it filled in. Never values. */
+export interface PsaProbeField {
+  field: string;
+  types: string[];
+  filled: number;
+  total: number;
+}
+
+export interface PsaProbe {
+  connectionId: string;
+  kind: PsaKind;
+  at: string;
+  steps: Array<{ method: string; ok: boolean; ms: number; detail: string; fields: PsaProbeField[] }>;
 }
 
 export type InsightCoverage = "unattended" | "with approval" | "assist only" | "not covered";
@@ -1348,6 +1365,7 @@ export const api = {
   updatePsa: (id: string, input: PsaPatch) => patch<PsaConnection>(`/api/psa/${enc(id)}`, input),
   deletePsa: (id: string) => del<{ ok: true }>(`/api/psa/${enc(id)}`),
   testPsa: (id: string) => post<PsaConnection>(`/api/psa/${enc(id)}/test`),
+  probePsa: (id: string) => post<PsaProbe>(`/api/psa/${enc(id)}/probe`),
   psaCustomers: (id: string) => get<PsaCustomer[]>(`/api/psa/${enc(id)}/customers`),
   setPsaMapping: (id: string, map: Record<string, string>) => put<PsaConnection>(`/api/psa/${enc(id)}/mapping`, map),
   syncPsa: (id: string) => post<SyncResult>(`/api/psa/${enc(id)}/sync`),

@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter, TimeEntry } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 type Picklist = Array<{ value: string; label: string; isActive?: boolean; isDefaultValue?: boolean; isSystem?: boolean }>;
@@ -270,6 +270,45 @@ export class AutotaskAdapter implements PsaAdapter {
     const tickets: ExternalTicket[] = [];
     for (const t of changed) tickets.push(await this.toTicket(t));
     return tickets;
+  }
+
+  /**
+   * Tickets completed in [from, to), newest first, for the automation report. The Complete status is read from
+   * the picklist (5 by default). Autotask tickets have no actual-hours field, so minutes are left unknown.
+   */
+  async listClosedTickets(from: string, to: string, opts: { max: number }): Promise<HistoricTicket[]> {
+    const statuses = await this.picklist("Tickets", "status");
+    const complete = Number(statuses.find((v) => /^complete/i.test(v.label))?.value ?? DEFAULT_STATUS.resolved);
+    const filter = [
+      { op: "eq", field: "status", value: complete },
+      { op: "gte", field: "completedDate", value: from },
+      { op: "lt", field: "completedDate", value: to },
+    ];
+    const rows: Json[] = [];
+    let data = await this.call<Json>("POST", "/Tickets/query", { filter });
+    for (;;) {
+      rows.push(...((data.items ?? []) as Json[]));
+      const next = data.pageDetails?.nextPageUrl;
+      if (!next || rows.length >= opts.max) break;
+      data = await this.call<Json>("GET", next);
+    }
+    const out: HistoricTicket[] = [];
+    for (const t of rows) {
+      const closedAt = iso(t.completedDate);
+      if (!closedAt || closedAt < from || closedAt >= to) continue;
+      out.push({
+        id: String(t.id),
+        subject: String(t.title ?? ""),
+        description: String(t.description ?? "").slice(0, 2000),
+        customerId: String(t.companyID ?? ""),
+        customerName: String((await this.company(t.companyID))?.companyName ?? ""),
+        createdAt: iso(t.createDate),
+        closedAt,
+        minutesSpent: null,
+        category: (await this.label("Tickets", "issueType", t.issueType)) || null,
+      });
+    }
+    return out.sort((a, b) => b.closedAt.localeCompare(a.closedAt)).slice(0, opts.max);
   }
 
   async addComment(ticketId: string, comment: { body: string; public: boolean }): Promise<string> {

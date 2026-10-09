@@ -6013,3 +6013,31 @@ a.psa-source-chip:hover {
 .attachment-note {
   font-size: var(--text-xs);
 }
+
+/* PSA field check (read-only probe). */
+.probe-ok {
+  color: var(--tone-green-fg);
+}
+
+.probe-fail {
+  color: var(--tone-red-fg);
+}
+
+.probe-step.is-error header strong {
+  color: var(--tone-red-fg);
+}
+
+.probe-step header {
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.probe-table td,
+.probe-table th {
+  font-size: var(--text-sm);
+}
+
+.probe-table tr.is-empty td {
+  color: var(--tone-amber-fg);
+}
+

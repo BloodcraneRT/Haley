@@ -19,10 +19,12 @@ import {
   X,
   Timer,
   RotateCw,
+  ScanSearch,
   Webhook,
 } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { PsaProbeModal } from "../components/PsaProbe";
 import {
   api,
   ApiError,
@@ -176,6 +178,7 @@ function PsaCard({
   const [busy, setBusy] = useState<"test" | "sync" | "enabled" | "options" | "remove" | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [probeOpen, setProbeOpen] = useState(false);
   const [options, setOptions] = useState<PsaOptions>({ ...DEFAULT_OPTIONS, ...c.options });
   useEffect(() => setOptions({ ...DEFAULT_OPTIONS, ...c.options }), [c.options]);
   const mapped = Object.keys(c.customer_map).length;
@@ -324,12 +327,16 @@ function PsaCard({
         <button className="btn btn-sm" onClick={() => setEditOpen(true)}>
           <KeyRound className="icon-sm" aria-hidden="true" /> Edit credentials
         </button>
+        <button className="btn btn-sm" onClick={() => setProbeOpen(true)} title="Read-only: which fields this PSA returns">
+          <ScanSearch className="icon-sm" aria-hidden="true" /> Check fields
+        </button>
         <span className="spacer" />
         <button className="btn btn-sm btn-ghost btn-icon" onClick={() => setConfirmRemove(true)} aria-label={`Remove ${c.name}`} title="Remove">
           <Trash className="icon-sm" aria-hidden="true" />
         </button>
       </div>
 
+      <PsaProbeModal connection={c} open={probeOpen} onClose={() => setProbeOpen(false)} />
       {provider && <EditPsaModal open={editOpen} connection={c} provider={provider} onClose={() => setEditOpen(false)} onSaved={() => { setEditOpen(false); onChanged(); }} />}
       <ConfirmModal
         open={confirmRemove}

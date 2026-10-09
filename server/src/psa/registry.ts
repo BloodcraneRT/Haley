@@ -10,12 +10,18 @@ export interface PsaProviderInfo {
   timeEntries?: boolean;
   /** Closed tickets can be read for a "What would Haley handle?" report. */
   insights?: boolean;
+  /**
+   * Features built from the vendor's documentation that haven't been checked against a live tenant yet. The
+   * dashboard marks them "Preview". Remove an entry once `npm run probe:psa` confirms it (INTEGRATION_API_NOTES).
+   */
+  preview?: Array<"insights">;
 }
 
 export const PSA_PROVIDERS: PsaProviderInfo[] = [
   {
     id: "syncro",
     insights: true,
+    preview: ["insights"],
     name: "SyncroMSP",
     description: "Two-way ticket sync with SyncroMSP: import customer tickets for Haley to work, post her replies as public comments, mirror notes as hidden comments, and keep status in step.",
     fields: [
@@ -35,6 +41,8 @@ export const PSA_PROVIDERS: PsaProviderInfo[] = [
   },
   {
     id: "dynamics",
+    insights: true,
+    preview: ["insights"],
     name: "Dynamics 365 Customer Service",
     description: "Two-way case sync with Dynamics 365 (Dataverse): import cases for Haley to work, add her replies and notes to the case timeline, and resolve or reopen cases as she does.",
     fields: [
@@ -52,6 +60,7 @@ export const PSA_PROVIDERS: PsaProviderInfo[] = [
   {
     id: "connectwise",
     insights: true,
+    preview: ["insights"],
     name: "ConnectWise PSA",
     description: "Two-way ticket sync with ConnectWise PSA (Manage): import service tickets for Haley to work, post her replies as Discussion notes and her notes as Internal notes, and move tickets between board statuses as she does.",
     fields: [
@@ -82,6 +91,8 @@ export const PSA_PROVIDERS: PsaProviderInfo[] = [
   },
   {
     id: "autotask",
+    insights: true,
+    preview: ["insights"],
     name: "Autotask PSA",
     description: "Two-way ticket sync with Autotask PSA: import tickets for Haley to work, add her replies and internal notes as ticket notes, and keep ticket status in step.",
     fields: [
@@ -109,6 +120,7 @@ export const PSA_PROVIDERS: PsaProviderInfo[] = [
   {
     id: "halopsa",
     insights: true,
+    preview: ["insights"],
     name: "HaloPSA",
     description: "Two-way ticket sync with HaloPSA: import tickets for Haley to work, post her replies as actions emailed to the end user and her notes as private actions, and keep status in step.",
     fields: [

@@ -780,6 +780,20 @@ Time is recorded on actions: `POST /api/Actions`, sent as an array.
 | ConnectWise | `GET /service/tickets?conditions=closedFlag=true and closedDate>=[from] and closedDate<[to]&fields=id,summary,initialDescription,company,dateEntered,closedDate,actualHours,type,subType&orderBy=closedDate desc&pageSize=100&page=N` | `actualHours` × 60 | Whether `initialDescription` is returned through `fields` on every version. |
 | HaloPSA | `GET /Tickets?closed_only=true&datesearch=dateclosed&startdate=&enddate=&order=dateclosed&orderdesc=true&pageinate=true&page_size=100&page_no=N` | `timetaken` (hours) × 60 | The date filter's time zone. Haley also filters `dateclosed` to the range itself. |
 | Syncro | `GET /tickets?status=Resolved&since_updated_at=from&page=N` | not available (null) | Tickets resolved and later updated are included by `since_updated_at`, so Haley filters on `resolved_at` (falling back to `updated_at`). |
+| Autotask | `POST /Tickets/query` with `status eq <Complete>` (from the status picklist, 5 by default), `completedDate gte from` and `completedDate lt to`, following `pageDetails.nextPageUrl` | not available (null): tickets have no actual-hours field, and summing `TimeEntries` per ticket is too many calls | Whether `completedDate` is set on every completed ticket (workflow rules can complete tickets without it). Category is the `issueType` label. |
+| Dynamics 365 | `GET /incidents?$filter=statecode eq 1 and modifiedon ge from&$orderby=modifiedon desc&$expand=customerid_account($select=name),Incident_IncidentResolutions($select=actualend,timespent)`, following `@odata.nextLink` | the resolutions' `timespent` (minutes) | The navigation property name `Incident_IncidentResolutions` on every version, and whether `timespent` is filled when the resolution dialog's billable time is left empty. Close time is the latest `actualend`, or `modifiedon` when there is no resolution. |
 
-Autotask (`POST /Tickets/query` on `completedDate`) and Dynamics (`incidents` with `statecode eq 1`) are not built yet.
+### Checking them on a live tenant
+
+The **Check fields** button on the PSA sync page (or `npm run probe:psa -- <connection id or name>` on the server) runs the connection test, this query for the last 30 days (at most 5 tickets) and one ticket read. It reports each field's type and how many tickets had it filled in, never the values, and makes no changes. Empty fields that should have values (`minutesSpent`, `customerName`, `category`) mean the query needs adjusting for that PSA.
+
+Each PSA's report is marked **Preview** in the dashboard until it's checked. When a check passes, record it here and remove `"insights"` from the provider's `preview` list in `server/src/psa/registry.ts`.
+
+| PSA | Reports query checked | By, on |
+|---|---|---|
+| ConnectWise | not yet | |
+| HaloPSA | not yet | |
+| Syncro | not yet | |
+| Autotask | not yet | |
+| Dynamics 365 | not yet | |
 
