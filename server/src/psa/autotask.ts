@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 type Picklist = Array<{ value: string; label: string; isActive?: boolean; isDefaultValue?: boolean; isSystem?: boolean }>;
@@ -354,6 +354,18 @@ export class AutotaskAdapter implements PsaAdapter {
 
   async setStatus(ticketId: string, status: TicketStatus): Promise<void> {
     await this.call("PATCH", "/Tickets", { id: Number(ticketId), status: await this.statusId(status) });
+  }
+
+  async listTimeEntries(ticketId: string): Promise<LoggedTime[]> {
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not an Autotask ticket id: ${ticketId}`);
+    const rows = await this.query("TimeEntries", [{ op: "eq", field: "ticketID", value: Number(ticketId) }], 5);
+    return rows.map((r) => ({
+      id: String(r.id),
+      minutes: Math.round(Number(r.hoursWorked ?? 0) * 60),
+      member: String(r.resourceID ?? ""),
+      notes: String(r.summaryNotes ?? r.internalNotes ?? ""),
+      createdAt: iso(r.startDateTime ?? r.dateWorked ?? r.createDateTime),
+    }));
   }
 
   /** Assigning a resource needs a role too: their default active service desk role. */

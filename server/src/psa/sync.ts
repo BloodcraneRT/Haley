@@ -370,7 +370,8 @@ export class PsaSync {
         // Some PSAs record time as a ticket note/action (HaloPSA): it mustn't come back as a technician comment.
         const current = this.store.getTicketLink(ticket.id, connection.id);
         const seen = entryId && current && !current.seen_comment_ids.includes(entryId) ? [...current.seen_comment_ids, entryId] : undefined;
-        this.store.updateTicketLink(ticket.id, connection.id, { loggedTime: logged, ...(seen ? { seenCommentIds: seen } : {}) });
+        const entries = entryId && current ? [...current.time_entry_ids, entryId] : undefined;
+        this.store.updateTicketLink(ticket.id, connection.id, { loggedTime: logged, ...(seen ? { seenCommentIds: seen } : {}), ...(entries ? { timeEntryIds: entries } : {}) });
         result.timeLogged++;
       } catch (err) {
         // Retried on the next sync; a missing permission shows on the connection's status.

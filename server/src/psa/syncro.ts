@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { AppointmentInput, CannedResponse, Contract, ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
+import type { AppointmentInput, CannedResponse, Contract, ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -209,6 +209,17 @@ export class SyncroAdapter implements PsaAdapter {
 
   async setStatus(ticketId: string, status: TicketStatus): Promise<void> {
     await this.call("PUT", `/tickets/${ticketId}`, { status: toSyncroStatus(status) });
+  }
+
+  /** The ticket's timers (`ticket_timers` on the ticket). */
+  async listTimeEntries(ticketId: string): Promise<LoggedTime[]> {
+    const { ticket: t } = await this.call<Json>("GET", `/tickets/${ticketId}`);
+    return ((t?.ticket_timers ?? []) as Json[]).map((x) => {
+      const start = Date.parse(String(x.start_time ?? x.start_at ?? ""));
+      const end = Date.parse(String(x.end_time ?? x.end_at ?? ""));
+      const minutes = Number(x.duration_minutes) || (Number.isFinite(start) && Number.isFinite(end) ? Math.round((end - start) / 60_000) : 0);
+      return { id: String(x.id), minutes, member: String(x.user?.full_name ?? x.user_id ?? ""), notes: String(x.notes ?? ""), createdAt: String(x.created_at ?? x.start_time ?? "") };
+    });
   }
 
   async setOwner(ticketId: string, ownerId: string): Promise<void> {

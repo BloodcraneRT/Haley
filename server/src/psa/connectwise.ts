@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -224,6 +224,19 @@ export class ConnectWiseAdapter implements PsaAdapter {
     if (!/^\d+$/.test(id)) throw new ConnectorError(`Not a ConnectWise ticket id: ${id}`);
     const [ticket, notes] = await Promise.all([this.call<Json>("GET", `/service/tickets/${id}`), this.notes(id)]);
     return { ...this.toTicket(ticket, notes), owner: await this.owner(ticket) };
+  }
+
+  async listTimeEntries(ticketId: string): Promise<LoggedTime[]> {
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not a ConnectWise ticket id: ${ticketId}`);
+    const conditions = `chargeToType="ServiceTicket" and chargeToId=${ticketId}`;
+    const rows = await this.pages<Json>(`/time/entries?conditions=${encodeURIComponent(conditions)}&fields=id,actualHours,member,notes,timeStart,dateEntered`, 5);
+    return rows.map((r) => ({
+      id: String(r.id),
+      minutes: Math.round(Number(r.actualHours ?? 0) * 60),
+      member: String(r.member?.name ?? r.member?.identifier ?? ""),
+      notes: String(r.notes ?? ""),
+      createdAt: iso(r.timeStart ?? r.dateEntered),
+    }));
   }
 
   async setOwner(ticketId: string, ownerId: string): Promise<void> {

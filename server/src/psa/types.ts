@@ -83,6 +83,8 @@ export interface PsaAdapter {
   }): Promise<{ id: string; number: string }>;
   /** Adds a time entry for Haley's work to the PSA ticket and returns its id. PSAs without it don't log time. */
   logTime?(ticketId: string, entry: TimeEntry): Promise<string>;
+  /** Time recorded on the PSA ticket, by anyone (Haley's entries included; callers tell them apart). */
+  listTimeEntries?(ticketId: string): Promise<LoggedTime[]>;
   /** The MSP's saved replies matching a search. */
   findCannedResponses?(query: string): Promise<CannedResponse[]>;
   /** A customer's contracts (agreements), for checking what work is covered. */
@@ -133,6 +135,19 @@ export interface TimeEntry {
   minutes: number;
   notes: string;
 }
+
+/** A time entry already on a PSA ticket. */
+export interface LoggedTime {
+  id: string;
+  minutes: number;
+  /** Who logged it, as the PSA names them. */
+  member: string;
+  notes: string;
+  createdAt: string;
+}
+
+/** Every note Haley writes on her own time entries says this, which tells them apart even without their ids. */
+export const HALEY_TIME_MARK = "Haley (AI technician)";
 
 export interface PsaOptions {
   /** Import new PSA tickets for mapped customers and let Haley work them. */

@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -262,6 +262,20 @@ export class HaloAdapter implements PsaAdapter {
     if (!/^\d+$/.test(id)) throw new ConnectorError(`Not a HaloPSA ticket id: ${id}`);
     const [ticket, actions, statuses] = await Promise.all([this.call<Json>("GET", `/Tickets/${id}?includedetails=true`), this.actions(id), this.statusList()]);
     return { ...this.toTicket(ticket, actions, statuses), owner: await this.owner(ticket) };
+  }
+
+  /** Halo keeps time on actions (timetaken, in hours). */
+  async listTimeEntries(ticketId: string): Promise<LoggedTime[]> {
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not a HaloPSA ticket id: ${ticketId}`);
+    return (await this.actions(ticketId))
+      .filter((a) => Number(a.timetaken) > 0)
+      .map((a) => ({
+        id: String(a.id),
+        minutes: Math.round(Number(a.timetaken) * 60),
+        member: String(a.who ?? ""),
+        notes: String(a.note ?? (a.note_html ? stripHtml(String(a.note_html)) : "")),
+        createdAt: iso(a.datetime ?? a.actiondatecreated),
+      }));
   }
 
   async setOwner(ticketId: string, ownerId: string): Promise<void> {

@@ -1254,7 +1254,7 @@ export interface TicketPatch {
 
 /** server/src/qa.ts */
 export interface QaIssue {
-  code: "no_reply" | "no_resolution_note" | "unkept_promise" | "model";
+  code: "no_reply" | "no_resolution_note" | "unkept_promise" | "no_psa_time" | "psa_time_unchecked" | "model";
   level: "warning" | "hint";
   text: string;
 }

@@ -44,7 +44,7 @@ import { registerHooks } from "./routes/hooks.js";
 import { registerM365Onboarding } from "./routes/m365Onboarding.js";
 import { registerMemoryRoutes } from "./routes/memories.js";
 import { registerTechnicianRoutes } from "./routes/technicians.js";
-import { qaChecks, qaReview } from "./qa.js";
+import { psaTimeIssues, qaChecks, qaReview } from "./qa.js";
 import { policyRuleInput } from "./policyRuleSchema.js";
 import { FrustrationDetector } from "./frustration.js";
 import { onEscalated, rankTechnicians } from "./dispatch.js";
@@ -862,8 +862,11 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     if (settings.qaBeforeClose === "off") return { mode: "off", issues: [], modelChecked: false };
     const org = store.getOrg(ticket.org_id);
     const useModel = settings.qaModelCheck && !org?.settings.paused;
-    const result = await qaReview({ store, llm: useModel ? llmFor(ticket.org_id) : null }, ticket, useModel);
-    return { mode: settings.qaBeforeClose, ...result };
+    const [result, psaTime] = await Promise.all([
+      qaReview({ store, llm: useModel ? llmFor(ticket.org_id) : null }, ticket, useModel),
+      psaTimeIssues(store, (c) => psa.adapterFor(c), ticket),
+    ]);
+    return { mode: settings.qaBeforeClose, ...result, issues: [...result.issues, ...psaTime] };
   });
 
   app.post<{ Params: { id: string } }>("/api/tickets/:id/comments", async (req) => {
