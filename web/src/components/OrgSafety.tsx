@@ -85,7 +85,7 @@ export function PausedBanner({ orgName, onResume, busy }: { orgName: string; onR
 
 // ------------------------------------------------------------------ list editor
 
-export type ListKind = "email" | "domain" | "account" | "tool" | "text";
+export type ListKind = "email" | "domain" | "account" | "tool" | "text" | "phone";
 
 /** How each kind of list splits pasted text, normalizes and validates entries. */
 const LIST_KINDS: Record<ListKind, { split: RegExp; normalize: (v: string) => string; valid?: RegExp; noun: string }> = {
@@ -99,6 +99,7 @@ const LIST_KINDS: Record<ListKind, { split: RegExp; normalize: (v: string) => st
     noun: "an address, *@domain or @domain",
   },
   tool: { split: /[\s,;]+/, normalize: (v) => v.toLowerCase(), valid: /^[a-z0-9_*-]+$/, noun: "a tool name (letters, digits, _ and *)" },
+  phone: { split: /[,;\n]+/, normalize: (v) => v.replace(/\s+/g, " "), valid: /^\+?[\d\s().-]{7,20}$/, noun: "a phone number like +1 425 555 0100" },
   // Free text such as departments or people's names: only commas and semicolons separate.
   text: { split: /[,;\n]+/, normalize: (v) => v.replace(/\s+/g, " "), noun: "valid" },
 };
@@ -240,6 +241,7 @@ const toDraft = (s: OrgSettings): Draft => ({
   authorizedRequesters: s.authorizedRequesters,
   protectedAccounts: s.protectedAccounts,
   vipRequesters: s.vipRequesters ?? [],
+  phoneNumbers: s.phoneNumbers ?? [],
   maxAutoChangesPerHour: s.maxAutoChangesPerHour,
   maxSelfServicePerUserPerDay: s.maxSelfServicePerUserPerDay,
   sla: s.sla,
@@ -368,6 +370,15 @@ export function SafetySettingsForm({ org, onSaved, pause }: { org: OrgDetail; on
             onChange={(v) => set("emailDomains", v)}
             placeholder="client-subsidiary.com"
             help={`Besides ${org.domain || "the primary domain"}. Email, chat and API requests from these domains are routed to ${org.name}.`}
+          />
+          <ListEditor
+            id="st-phones"
+            label="Phone numbers callers dial"
+            kind="phone"
+            values={draft.phoneNumbers ?? []}
+            onChange={(v) => set("phoneNumbers", v)}
+            placeholder="+1 800 555 0100"
+            help={`If you have a line just for ${org.name}, calls to it come here. Otherwise calls are matched by the caller's number in the client's directory.`}
           />
           <div className="field">
             <label htmlFor="st-tenant">Teams tenant ID</label>

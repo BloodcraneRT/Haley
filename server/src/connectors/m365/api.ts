@@ -11,6 +11,8 @@ export interface M365User {
   usageLocation: string | null;
   /** skuIds */
   licenses: string[];
+  /** Mobile and business phone numbers on the directory profile, as entered. */
+  phones?: string[];
 }
 
 export interface M365Sku {

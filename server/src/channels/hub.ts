@@ -59,7 +59,8 @@ export class ChannelHub implements ReplyDelivery {
     const direct = this.adapters.get(ticket.channel);
     if (direct) return direct;
     // Tickets opened in the dashboard or through the API can still be answered by email.
-    if ((ticket.channel === "portal" || ticket.channel === "api") && ticket.requester_email) return this.adapters.get("email") ?? null;
+    // So can calls, at the email of the directory person the caller's number matched (never back to the caller's number).
+    if ((ticket.channel === "portal" || ticket.channel === "api" || ticket.channel === "phone") && ticket.requester_email) return this.adapters.get("email") ?? null;
     return null;
   }
 
@@ -198,7 +199,9 @@ export class ChannelHub implements ReplyDelivery {
   /** Opens a ticket for a new conversation or appends to the existing one, then puts Haley on it. */
   async receive(msg: InboundMessage): Promise<InboundResult> {
     if (!this.runs) throw new Error("ChannelHub is not attached to the agent");
-    const { org, sender } = msg;
+    const { org } = msg;
+    // Caller ID can be spoofed: a phone caller is never more than unverified, whatever the integration says.
+    const sender = msg.channel === "phone" ? { ...msg.sender, assurance: "none" as const } : msg.sender;
     const author = sender.name || sender.email || "Requester";
 
     let ticket: Ticket | null = null;

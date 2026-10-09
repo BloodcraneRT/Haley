@@ -41,6 +41,8 @@ export interface ChannelConfig {
   teamsTenantId: string;
   /** HMAC secret for the generic chat webhook (Google Chat, SMS or custom bridges). */
   chatWebhookSecret: string;
+  /** HMAC secret for the phone webhook (a call-answering service posting transcripts). */
+  voiceWebhookSecret: string;
 }
 
 function parseKey(raw: string | undefined, production: boolean, dbPath: string): Buffer {
@@ -97,6 +99,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): HaleyConfig {
       teamsAppPassword: env.HALEY_TEAMS_APP_PASSWORD ?? "",
       teamsTenantId: env.HALEY_TEAMS_TENANT_ID ?? "",
       chatWebhookSecret: env.HALEY_CHAT_WEBHOOK_SECRET ?? "",
+      voiceWebhookSecret: env.HALEY_VOICE_WEBHOOK_SECRET ?? "",
     },
   };
 }

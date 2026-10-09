@@ -486,6 +486,14 @@ export class Store {
     return row ? this.toTicket(row) : null;
   }
 
+  /** Any ticket (any client, any status) whose channel reference has this value, e.g. a call's id. */
+  findTicketByChannelRef(channel: TicketChannel, key: string, value: string): Ticket | null {
+    const row = this.db
+      .prepare("SELECT * FROM tickets WHERE channel = ? AND json_extract(channel_ref, '$.' || ?) = ? ORDER BY created_at LIMIT 1")
+      .get(channel, key, value) as Row | undefined;
+    return row ? this.toTicket(row) : null;
+  }
+
   setTicketChannelRef(id: string, ref: Record<string, string>): void {
     this.db.prepare("UPDATE tickets SET channel_ref = ? WHERE id = ?").run(json(ref), id);
   }

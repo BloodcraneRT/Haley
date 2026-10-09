@@ -572,6 +572,14 @@ function TicketProps({ detail, onPatch }: { detail: TicketDetail; onPatch: (p: T
                 <span title={CHANNEL_META[t.channel]?.help}>
                   <ChannelBadge channel={t.channel} externalNumber={psaRef(t) ? t.channel_ref.externalNumber : undefined} />
                 </span>
+                {t.channel === "phone" && t.channel_ref.recordingUrl?.startsWith("https://") && (
+                  <>
+                    {" "}
+                    <a href={t.channel_ref.recordingUrl} target="_blank" rel="noreferrer noopener">
+                      Recording
+                    </a>
+                  </>
+                )}
               </dd>
             </>
           )}

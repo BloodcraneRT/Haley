@@ -24,7 +24,7 @@ export function effectiveAssurance(ticket: Pick<Ticket, "assurance" | "mfa_verif
 }
 
 /** Where a ticket came from; replies go back the same way. */
-export type TicketChannel = "portal" | "api" | "monitoring" | "email" | "slack" | "teams" | "chat" | "syncro" | "dynamics" | "connectwise" | "autotask" | "halopsa";
+export type TicketChannel = "portal" | "api" | "monitoring" | "email" | "slack" | "teams" | "chat" | "phone" | "syncro" | "dynamics" | "connectwise" | "autotask" | "halopsa";
 export type IntegrationMode = "live" | "sandbox";
 
 export type TicketStatus =
@@ -101,6 +101,8 @@ export interface OrgSettings {
   approvalSlackChannel: string;
   /** Requesters (emails) whose tickets get a priority bump and extra care. */
   vipRequesters: string[];
+  /** Numbers callers dial for this client (when the MSP has a line per client); a call to one is this client's. */
+  phoneNumbers: string[];
 }
 
 export type PolicyEffect = "allow" | "approve" | "deny";
@@ -148,6 +150,7 @@ export const DEFAULT_ORG_SETTINGS: OrgSettings = {
   policyRules: [],
   approvalSlackChannel: "",
   vipRequesters: [],
+  phoneNumbers: [],
   sla: {
     urgent: { responseMinutes: 15, resolutionMinutes: 240 },
     high: { responseMinutes: 60, resolutionMinutes: 480 },

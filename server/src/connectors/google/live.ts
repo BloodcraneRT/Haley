@@ -113,6 +113,7 @@ export class LiveGoogleApi implements GoogleApi {
       lastLoginTime: u.lastLoginTime && !u.lastLoginTime.startsWith("1970") ? u.lastLoginTime : null,
       aliases: u.aliases ?? [],
       recoveryPhone: u.recoveryPhone ?? null,
+      phones: ((u.phones ?? []) as Json[]).map((p) => String(p.value ?? "")).filter(Boolean),
     };
   }
 

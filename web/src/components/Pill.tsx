@@ -1,4 +1,4 @@
-import { ClipboardList, Code, Hash, Headset, Mail, MessageCircle, Monitor, RefreshCw, Siren, Users } from "lucide-react";
+import { ClipboardList, Code, Hash, Headset, Mail, MessageCircle, Monitor, Phone, RefreshCw, Siren, Users } from "lucide-react";
 import type { ReactNode } from "react";
 import { useNow } from "../hooks/useNow";
 import type {
@@ -143,6 +143,7 @@ const CHANNEL_ICONS: Record<TicketChannel, typeof Mail> = {
   slack: Hash,
   teams: Users,
   chat: MessageCircle,
+  phone: Phone,
   syncro: RefreshCw,
   dynamics: Headset,
   connectwise: RefreshCw,
