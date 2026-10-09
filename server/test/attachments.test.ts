@@ -201,3 +201,62 @@ describe("attachments in runs", () => {
     expect(store.listAttachments(ticket.id).map((a) => a.kind)).toEqual(["image"]);
   });
 });
+
+describe("attachments from Slack and Teams", () => {
+  it("downloads Slack file shares with the bot token, only from Slack's file host", async () => {
+    const { createHmac } = await import("node:crypto");
+    const { fakeFetch } = await import("./helpers.js");
+    const net = fakeFetch([
+      [/users\.info/, () => ({ ok: true, user: { real_name: "Sam Chen", profile: { email: "sam@acme.example" } } })],
+      [/chat\.postMessage/, () => ({ ok: true, ts: "1.1" })],
+      [/files\.slack\.com/, () => new Response(PNG, { headers: { "content-type": "image/png" } })],
+      [/evil\.example/, () => new Response(PNG)],
+    ]);
+    const base = testConfig();
+    const llm = new ScriptedLlm(turn(text("Got the screenshot.")));
+    const { app, store, agent } = await makeApp(llm, { channels: { ...base.channels, slackSigningSecret: "slack-signing" } }, net.impl);
+    const org = store.createOrg({ name: "Acme", domain: "acme.example" });
+    const slackInt = store.createIntegration({ orgId: org.id, provider: "slack", label: "Acme Slack", mode: "live", config: { botToken: "xoxb-1" } });
+    store.setIntegrationState(slackInt.id, { teamId: "T1", team: "Acme" });
+    const body = JSON.stringify({
+      type: "event_callback",
+      team_id: "T1",
+      event_id: "EvFiles",
+      event: {
+        type: "message",
+        subtype: "file_share",
+        channel_type: "im",
+        channel: "D1",
+        user: "U1",
+        text: "",
+        ts: "1700.1",
+        files: [
+          { name: "error.png", mimetype: "image/png", size: PNG.length, url_private_download: "https://files.slack.com/files-pri/T1-F1/error.png" },
+          { name: "elsewhere.png", mimetype: "image/png", size: 10, url_private_download: "https://evil.example/x.png" },
+        ],
+      },
+    });
+    const ts = String(Math.floor(Date.now() / 1000));
+    await app.inject({
+      method: "POST",
+      url: "/hooks/slack/events",
+      payload: body,
+      headers: { "content-type": "application/json", "x-slack-request-timestamp": ts, "x-slack-signature": `v0=${createHmac("sha256", "slack-signing").update(`v0:${ts}:${body}`).digest("hex")}` },
+    });
+    const ticket = await (async () => {
+      for (let i = 0; i < 200; i++) {
+        const t = store.listTickets()[0];
+        if (t && store.listRuns({ ticketId: t.id })[0]) return t;
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      throw new Error("no ticket");
+    })();
+    await agent.settled(store.listRuns({ ticketId: ticket.id })[0].id);
+    const files = store.listAttachments(ticket.id);
+    expect(files.map((a) => [a.filename, a.kind])).toEqual([["error.png", "image"], ["elsewhere.png", "other"]]);
+    expect(files[1].note).toContain("chat platform's own servers");
+    expect(net.calls.find((c) => c.url.includes("files.slack.com"))!.headers.authorization).toBe("Bearer xoxb-1");
+    expect(net.calls.some((c) => c.url.includes("evil.example"))).toBe(false);
+    expect(llm.requests[0].messages[0].parts.some((p) => p.type === "image")).toBe(true);
+  });
+});

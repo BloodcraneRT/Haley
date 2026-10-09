@@ -27,6 +27,9 @@ async function setup(llm: ScriptedLlm, members: Record<string, { email: string; 
     [/login\.microsoftonline\.com/, () => ({ access_token: "bot-token", expires_in: 3600 })],
     [/smba\.example\/teams\/v3\/conversations\/[^/]+\/members\//, (c) => members[decodeURIComponent(c.url.split("/members/")[1])] ?? { email: "someone@else.example", objectId: "22222222-2222-2222-2222-222222222222" }],
     [/smba\.example\/teams\/v3\/conversations\/[^/]+\/activities/, (c) => (c.method === "PUT" ? {} : { id: `activity-${++n}` })],
+    [/asm\.skype\.com/, () => new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))],
+    [/sharepoint\.com/, () => new Response(new TextEncoder().encode("Event ID 1000: OUTLOOK.EXE crashed"))],
+    [/evil\.example/, () => new Response("x")],
   ]);
   const base = testConfig();
   const haley = await makeApp(
@@ -150,5 +153,39 @@ describe("approval cards in Teams", () => {
     await agent.settled(run.id);
     expect(store.getAction(pending.id)).toMatchObject({ status: "executed", decided_by: "Dana Reyes" });
     expect(store.getRun(run.id)!.status).toBe("completed");
+  });
+});
+
+describe("attachments from Teams", () => {
+  it("downloads pasted images with the bot token and shared files from SharePoint, and nothing from elsewhere", async () => {
+    const { store, agent, post, net } = await setup(new ScriptedLlm(turn(text("Looking."))));
+    store.createOrg({ name: "Fabrikam", domain: "fabrikam.example", settings: { teamsTenantId: CLIENT_TENANT } });
+    const res = await post({
+      type: "message",
+      id: "m9",
+      text: "",
+      from: { id: "29:joe", name: "Joe", aadObjectId: "44444444-4444-4444-4444-444444444444" },
+      conversation: { id: "a:joe", conversationType: "personal", tenantId: CLIENT_TENANT },
+      attachments: [
+        { contentType: "text/html", content: "<div>ignored</div>" },
+        { contentType: "image/png", contentUrl: "https://us-api.asm.skype.com/v1/objects/0-abc/views/imgo", name: "pasted.png" },
+        { contentType: "application/vnd.microsoft.teams.file.download.info", name: "crash.log", content: { downloadUrl: "https://fabrikam.sharepoint.com/x?tempauth=1", fileType: "log" } },
+        { contentType: "image/png", contentUrl: "https://evil.example/steal.png", name: "evil.png" },
+      ],
+    });
+    expect(res.statusCode).toBe(202);
+    const ticket = await (async () => {
+      for (let i = 0; i < 200; i++) {
+        const t = store.listTickets().find((x) => x.channel === "teams");
+        if (t && store.listRuns({ ticketId: t.id })[0]) return t;
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      throw new Error("no ticket");
+    })();
+    await agent.settled(store.listRuns({ ticketId: ticket.id })[0].id);
+    expect(store.listAttachments(ticket.id).map((a) => [a.filename, a.kind])).toEqual([["pasted.png", "image"], ["crash.log", "text"], ["evil.png", "other"]]);
+    expect(net.calls.find((c) => c.url.includes("asm.skype.com"))!.headers.authorization).toBe("Bearer bot-token");
+    expect(net.calls.find((c) => c.url.includes("sharepoint.com"))!.headers.authorization).toBeUndefined();
+    expect(net.calls.some((c) => c.url.includes("evil.example"))).toBe(false);
   });
 });

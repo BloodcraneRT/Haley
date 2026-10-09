@@ -8,12 +8,66 @@ export interface IncomingFile {
   filename: string;
   contentType: string;
   data: Uint8Array;
+  /** Set when the channel didn't download it (too large, too many, download failed): listed by name with this. */
+  skipped?: string;
+}
+
+
+/**
+ * Downloads a file a chat platform hosts, refusing anything past the size limit (by header and while
+ * reading) and any host the caller doesn't allow. Returns a skipped file rather than throwing.
+ */
+export async function downloadFile(
+  fetchImpl: typeof fetch,
+  file: { url: string; filename: string; contentType: string; size?: number },
+  opts: { allowHost: (host: string) => boolean; headers?: Record<string, string> },
+): Promise<IncomingFile> {
+  const skip = (why: string): IncomingFile => ({ filename: file.filename, contentType: file.contentType, data: new Uint8Array(), skipped: why });
+  let url: URL;
+  try {
+    url = new URL(file.url);
+  } catch {
+    return skip("Not downloaded: bad link.");
+  }
+  if (url.protocol !== "https:" || !opts.allowHost(url.hostname.toLowerCase())) return skip("Not downloaded: the file isn't on the chat platform's own servers.");
+  if (file.size && file.size > MAX_DOWNLOAD_BYTES) return skip(`Not downloaded: over ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB.`);
+  try {
+    const res = await fetchImpl(url, { headers: opts.headers ?? {}, redirect: "follow" });
+    if (!res.ok) return skip(`Not downloaded (${res.status}).`);
+    const declared = Number(res.headers.get("content-length") ?? 0);
+    if (declared > MAX_DOWNLOAD_BYTES) return skip(`Not downloaded: over ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB.`);
+    const reader = res.body?.getReader();
+    if (!reader) return { filename: file.filename, contentType: file.contentType, data: new Uint8Array(await res.arrayBuffer()) };
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > MAX_DOWNLOAD_BYTES) {
+        await reader.cancel();
+        return skip(`Not downloaded: over ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB.`);
+      }
+      chunks.push(value);
+    }
+    const data = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) {
+      data.set(c, offset);
+      offset += c.length;
+    }
+    return { filename: file.filename, contentType: file.contentType, data };
+  } catch {
+    return skip("Not downloaded: the download failed.");
+  }
 }
 
 export const MAX_FILES_PER_MESSAGE = 5;
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_PDF_BYTES = 10 * 1024 * 1024;
 export const MAX_TEXT_BYTES = 1024 * 1024;
+/** The largest file any channel downloads (the PDF limit; images and text are checked again when stored). */
+export const MAX_DOWNLOAD_BYTES = MAX_PDF_BYTES;
 /** Characters of a PDF's or text file's content given to the model, per file. */
 export const MAX_ATTACHMENT_TEXT = 15_000;
 /** Images sent to the model per call (the most recent ones). */
@@ -90,6 +144,10 @@ export async function storeAttachments(store: Store, input: { ticketId: string; 
       sha256: createHash("sha256").update(file.data).digest("hex"),
     };
     const listOnly = (note: string) => store.addAttachment({ ...base, mediaType: file.contentType.slice(0, 100) || "application/octet-stream", kind: "other", note });
+    if (file.skipped) {
+      saved.push(listOnly(file.skipped));
+      continue;
+    }
     if (index >= MAX_FILES_PER_MESSAGE) {
       saved.push(listOnly(`Not kept: only ${MAX_FILES_PER_MESSAGE} files per message are read.`));
       continue;

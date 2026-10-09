@@ -87,7 +87,7 @@ export const PROVIDERS: ProviderInfo[] = [
     description: "Lets this client's employees DM or @mention Haley in their Slack workspace. Haley answers in the thread and can send self-service credentials by DM.",
     fields: [{ key: "botToken", label: "Bot user OAuth token", secret: true, placeholder: "xoxb-…" }],
     setupSteps: [
-      "Create (once, for your MSP) a Slack app at api.slack.com/apps. Under OAuth & Permissions add bot scopes: chat:write, im:history, app_mentions:read, users:read, users:read.email.",
+      "Create (once, for your MSP) a Slack app at api.slack.com/apps. Under OAuth & Permissions add bot scopes: chat:write, im:history, app_mentions:read, users:read, users:read.email, files:read (to read screenshots people send).",
       "Under Event Subscriptions, enable events with the Request URL shown on Haley's Channels page (…/hooks/slack/events) and subscribe to bot events message.im and app_mention. Under App Home, enable the Messages tab.",
       "Set HALEY_SLACK_SIGNING_SECRET on the Haley server to the app's signing secret.",
       "Install the app to the client's workspace and paste its bot token here. Haley detects the workspace automatically.",

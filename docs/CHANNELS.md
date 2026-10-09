@@ -34,6 +34,8 @@ The `x-haley-hook-secret` header works instead of `?key=`. Map the provider's pa
 
 `dmarc`, `dkim` and `spf` are also accepted as separate fields.
 
+**Attachments.** Add `"attachments": [{ "filename": "error.png", "contentType": "image/png", "content": "<base64>" }]`. Every relay listed above gives you the file content, as base64 or multipart; convert it to base64. The email route accepts bodies up to 25 MB. See [Attachments](#attachments) for what Haley reads.
+
 - **Routing:** the sender's domain is matched to a client's primary domain or its extra email domains.
 - **Identity:** the email gets `email` assurance only with DMARC pass, or a DKIM signature aligned with the From domain. Without `authenticationResults`, every email is treated as unverified.
 - **Threading:** replies are matched by the `[#1234]` tag in the subject or by the first message ID in `References` / `In-Reply-To`. Quoted history is stripped.
@@ -43,7 +45,7 @@ The `x-haley-hook-secret` header works instead of `?key=`. Map the provider's pa
 ## Slack
 
 1. Create one Slack app for your MSP.
-   - **Bot scopes:** `chat:write`, `im:history`, `app_mentions:read`, `users:read`, `users:read.email`.
+   - **Bot scopes:** `chat:write`, `im:history`, `app_mentions:read`, `users:read`, `users:read.email`, and `files:read` so Haley can read screenshots people share.
    - **Event Subscriptions:** Request URL `{HALEY_PUBLIC_URL}/hooks/slack/events`; bot events `message.im` and `app_mention`.
    - **App Home:** enable the Messages tab.
 2. Set `HALEY_SLACK_SIGNING_SECRET` to the app's signing secret. Every request is checked against it, including a 5-minute replay window.
@@ -98,6 +100,27 @@ PSA tickets are a channel too. Connect a PSA on the dashboard's **PSA sync** pag
 - **Closing a ticket** in the PSA resolves it in Haley.
 
 Imported requesters get `none` identity by default, because the PSA doesn't tell Haley how they were authenticated. Step-up verification covers that gap. The API details are in [research/INTEGRATION_API_NOTES.md](research/INTEGRATION_API_NOTES.md).
+
+## Attachments
+
+Screenshots, PDFs and text files sent with a message are kept with the ticket. Haley reads them; technicians see them on the timeline.
+
+| What | Kept and read | Limit |
+|---|---|---|
+| Images (PNG, JPEG, GIF, WebP, recognised by their bytes, not their name) | Shown to the model when it reads images (the model's **Screenshots** setting) | 5 MB |
+| PDFs | Text extracted; scanned PDFs with no text are kept but can't be read | 10 MB |
+| Text, log, CSV and `.eml` files | Read as text | 1 MB |
+| Anything else, oversized files, and files past the fifth in a message | Listed by name only, with why | |
+
+- **Where they come from:**
+  - **Email and the chat bridge:** send base64 `attachments` (see above). A chat bridge message can be attachments only.
+  - **Slack:** downloaded with the bot token, only from `files.slack.com`. Needs the `files:read` scope.
+  - **Microsoft Teams:** pasted images are fetched with the bot's token and shared files from their pre-signed link, only from Microsoft hosts.
+- **How Haley reads them:**
+  - Attachment content goes to the model inside untrusted `<attachment>` blocks, like the ticket text.
+  - She sees the 4 most recent images per model call.
+  - Files from someone who can't continue the ticket are left out, the same as their message.
+- **Retention:** files are deleted 180 days after they arrive. Change this with `attachmentRetentionDays` in the help desk settings, where 0 keeps them.
 
 ## Approvals in your own Slack and Teams
 

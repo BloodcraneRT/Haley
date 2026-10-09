@@ -156,6 +156,16 @@ Syncro implements all three.
 - **`copilot.ts`:** makes one tool-less model call, and `model_usage` rows can now have no run (migration 12, `purpose = 'assist'`).
 - **`routes/statusPage.ts`:** serves `/t/<ticket>.<expiry>.<hmac>` as a server-rendered page with a strict CSP. The forms post url-encoded bodies to a scoped parser.
 
+## Attachments
+
+- **`attachments.ts`:**
+  - `storeAttachments()` sniffs each file's bytes, applies the limits, extracts PDF text (`unpdf`, pure JS) or text and `.eml` bodies, and stores everything in the `attachments` table (migration 17, bytes in SQLite).
+  - `attachmentParts()` builds a run's attachment text and image parts.
+  - `withImageData()` loads the 4 most recent images just before each model call. Stored conversations keep only `attachmentId`.
+  - `downloadFile()` is the size-capped, host-allow-listed downloader the Slack and Teams adapters use.
+- **AI layer:** a neutral `image` part. Anthropic gets base64 image blocks and OpenAI-compatible models get content arrays. `ModelOptions.vision` (`supportsVision()`) turns images into text placeholders for text-only models.
+- **Intake:** `InboundMessage.attachments`. `ChannelHub` stores files before starting Haley, and for follow-ups links them to the message, so untrusted continuations stay out of runs.
+
 ## Help desk quality: checks before close, needs-care flags, dispatch, lessons
 
 - **`qa.ts`:** deterministic checks before close (no reply since the requester's last message, no resolution note, an unkept promise) plus an optional model check (purpose `qa`). `PATCH /api/tickets/:id` enforces `require` mode with `qaOverride` (audited). The setting is `HelpdeskSettings` in workspace settings.
