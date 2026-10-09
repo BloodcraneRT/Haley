@@ -30,6 +30,21 @@ export interface ExternalTicket {
   comments: ExternalComment[];
 }
 
+/** A closed ticket, summarised for the "What would Haley handle?" report (no comments, to keep it cheap). */
+export interface HistoricTicket {
+  id: string;
+  subject: string;
+  /** The first 2,000 characters. */
+  description: string;
+  customerId: string;
+  customerName: string;
+  createdAt: string;
+  closedAt: string;
+  /** Technician time recorded on the ticket, when the PSA keeps it on the ticket itself. */
+  minutesSpent: number | null;
+  category: string | null;
+}
+
 export interface ExternalCustomer {
   id: string;
   name: string;
@@ -65,6 +80,8 @@ export interface PsaAdapter {
   listContracts?(customerId: string): Promise<Contract[]>;
   /** Books an appointment (e.g. an on-site visit) on the PSA calendar, linked to a ticket when given. */
   createAppointment?(input: AppointmentInput): Promise<{ id: string }>;
+  /** Tickets closed in [from, to), newest first, at most `max` (for the automation report). */
+  listClosedTickets?(from: string, to: string, opts: { max: number }): Promise<HistoricTicket[]>;
 }
 
 export interface CannedResponse {

@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter, TimeEntry } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -223,6 +223,35 @@ export class ConnectWiseAdapter implements PsaAdapter {
     const tickets: ExternalTicket[] = [];
     for (const summary of changed) tickets.push(this.toTicket(summary, await this.notes(String(summary.id))));
     return tickets;
+  }
+
+  async listClosedTickets(from: string, to: string, opts: { max: number }): Promise<HistoricTicket[]> {
+    const day = (s: string) => s.replace(/\.\d+Z$/, "Z");
+    const conditions = `closedFlag=true and closedDate>=[${day(from)}] and closedDate<[${day(to)}]`;
+    const fields = "id,summary,initialDescription,company,dateEntered,closedDate,actualHours,type,subType";
+    const out: HistoricTicket[] = [];
+    for (let page = 1; out.length < opts.max; page++) {
+      const rows = await this.call<Json[]>(
+        "GET",
+        `/service/tickets?conditions=${encodeURIComponent(conditions)}&fields=${fields}&orderBy=${encodeURIComponent("closedDate desc")}&pageSize=${PAGE_SIZE}&page=${page}`,
+      );
+      const list = Array.isArray(rows) ? rows : [];
+      for (const t of list) {
+        out.push({
+          id: String(t.id),
+          subject: String(t.summary ?? ""),
+          description: String(t.initialDescription ?? "").slice(0, 2000),
+          customerId: String(t.company?.id ?? ""),
+          customerName: String(t.company?.name ?? ""),
+          createdAt: iso(t.dateEntered),
+          closedAt: iso(t.closedDate),
+          minutesSpent: typeof t.actualHours === "number" ? Math.round(t.actualHours * 60) : null,
+          category: [t.type?.name, t.subType?.name].filter(Boolean).join(" / ") || null,
+        });
+      }
+      if (list.length < PAGE_SIZE) break;
+    }
+    return out.slice(0, opts.max);
   }
 
   async addComment(ticketId: string, comment: { body: string; public: boolean }): Promise<string> {

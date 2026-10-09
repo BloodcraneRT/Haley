@@ -689,7 +689,58 @@ export interface PsaProviderInfo {
   setupSteps: string[];
   /** Haley can log her work as time entries on this PSA's tickets. */
   timeEntries?: boolean;
+  /** Closed tickets can be read for a "What would Haley handle?" report. */
+  insights?: boolean;
 }
+
+export type InsightCoverage = "unattended" | "with approval" | "assist only" | "not covered";
+
+export interface InsightCluster {
+  id: string;
+  label: string;
+  terms: string[];
+  tickets: number;
+  ticketsPerMonth: number;
+  minutesPerTicket: number;
+  /** "psa": the median time recorded on the PSA; "estimate": the minutes-per-ticket setting. */
+  minutesSource: "psa" | "estimate";
+  hoursPerMonth: number;
+  coverage: InsightCoverage;
+  capability: string | null;
+  recipes: Array<{ id: string; name: string }>;
+  /** Any one provider in each group is enough; `connected` is null for a prospect's report. */
+  integrations: Array<{ providers: string[]; names: string[]; connected: boolean | null }>;
+  samples: string[];
+}
+
+export interface InsightResult {
+  period: { from: string; to: string; days: number };
+  source: { kind: string; label: string };
+  totals: { tickets: number; ticketsPerMonth: number; coveredTicketsPerMonth: number; coveredHoursPerMonth: number; groupedTickets: number };
+  clusters: InsightCluster[];
+  other: { tickets: number };
+  model: { used: boolean; inputTokens: number; outputTokens: number };
+  truncated: boolean;
+}
+
+export interface InsightReportSummary {
+  id: string;
+  created_by: string;
+  params: { source: { kind: PsaKind; label: string; connectionId: string | null }; days: number; minutesPerTicket: number; from: string; to: string };
+  status: "running" | "done" | "failed";
+  error: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface InsightReport extends InsightReportSummary {
+  result: InsightResult | null;
+}
+
+export type InsightInput = { days: number; minutesPerTicket?: number } & (
+  | { connectionId: string }
+  | { prospect: { kind: PsaKind; name?: string; config: Record<string, string> } }
+);
 
 export interface PsaOptions {
   /** Import new PSA tickets for mapped customers and let Haley work them. */
@@ -1284,6 +1335,12 @@ export const api = {
   updateModel: (id: string, input: ModelPatch) => patch<ModelProfile>(`/api/models/${enc(id)}`, input),
   deleteModel: (id: string) => del<{ ok: true }>(`/api/models/${enc(id)}`),
   testModel: (id: string) => post<ModelTestResult>(`/api/models/${enc(id)}/test`),
+
+  insights: () => get<InsightReportSummary[]>("/api/insights"),
+  insight: (id: string) => get<InsightReport>(`/api/insights/${enc(id)}`),
+  startInsight: (input: InsightInput) => post<InsightReport>("/api/insights", input),
+  deleteInsight: (id: string) => del<{ ok: true }>(`/api/insights/${enc(id)}`),
+  downloadInsightCsv: (id: string, samples: boolean) => download(withQuery(`/api/insights/${enc(id)}/csv`, { samples: samples ? 1 : 0 }), `haley-insights-${id}.csv`),
 
   psaProviders: () => get<PsaProviderInfo[]>("/api/psa/providers"),
   psaConnections: () => get<PsaConnectionListItem[]>("/api/psa"),

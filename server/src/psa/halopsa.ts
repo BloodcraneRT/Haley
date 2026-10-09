@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter, TimeEntry } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -260,6 +260,34 @@ export class HaloAdapter implements PsaAdapter {
     const tickets: ExternalTicket[] = [];
     for (const { t } of changed) tickets.push(await this.getTicket(String(t.id)));
     return tickets;
+  }
+
+  async listClosedTickets(from: string, to: string, opts: { max: number }): Promise<HistoricTicket[]> {
+    const out: HistoricTicket[] = [];
+    const range = `closed_only=true&datesearch=dateclosed&startdate=${encodeURIComponent(from)}&enddate=${encodeURIComponent(to)}&order=dateclosed&orderdesc=true`;
+    for (let page = 1; out.length < opts.max; page++) {
+      const data = await this.call<Json>("GET", `/Tickets?${range}&pageinate=true&page_size=${PAGE_SIZE}&page_no=${page}`);
+      const rows = (Array.isArray(data) ? data : (data.tickets ?? [])) as Json[];
+      for (const t of rows) {
+        const closedAt = latest(t.dateclosed);
+        // Defensive: keep only tickets actually closed in the range.
+        if (!closedAt || closedAt < from || closedAt >= to) continue;
+        out.push({
+          id: String(t.id),
+          subject: String(t.summary ?? ""),
+          description: stripHtml(String(t.details ?? "")).slice(0, 2000),
+          customerId: String(t.client_id ?? ""),
+          customerName: String(t.client_name ?? ""),
+          createdAt: latest(t.dateoccurred),
+          closedAt,
+          minutesSpent: typeof t.timetaken === "number" ? Math.round(t.timetaken * 60) : null,
+          category: t.category_1 ? String(t.category_1) : null,
+        });
+      }
+      const total = Number((data as Json).record_count ?? NaN);
+      if (rows.length < PAGE_SIZE || (!Number.isNaN(total) && page * PAGE_SIZE >= total)) break;
+    }
+    return out.slice(0, opts.max);
   }
 
   async addComment(ticketId: string, comment: { body: string; public: boolean }): Promise<string> {

@@ -771,3 +771,15 @@ Time is recorded on actions: `POST /api/Actions`, sent as an array.
 
 **Unverified:** how `nonbilltime` relates to `timetaken`. Haley doesn't send `nonbilltime`.
 
+## Closed tickets for "What would Haley handle?" (added 2026-10-08)
+
+`PsaAdapter.listClosedTickets(from, to, { max })` reads one page at a time until `max` (5,000 plus one, to detect the cap). These queries follow the vendors' documented filters but **haven't been run against live tenants yet**.
+
+| PSA | Query | Time | Unverified |
+|---|---|---|---|
+| ConnectWise | `GET /service/tickets?conditions=closedFlag=true and closedDate>=[from] and closedDate<[to]&fields=id,summary,initialDescription,company,dateEntered,closedDate,actualHours,type,subType&orderBy=closedDate desc&pageSize=100&page=N` | `actualHours` × 60 | Whether `initialDescription` is returned through `fields` on every version. |
+| HaloPSA | `GET /Tickets?closed_only=true&datesearch=dateclosed&startdate=&enddate=&order=dateclosed&orderdesc=true&pageinate=true&page_size=100&page_no=N` | `timetaken` (hours) × 60 | The date filter's time zone. Haley also filters `dateclosed` to the range itself. |
+| Syncro | `GET /tickets?status=Resolved&since_updated_at=from&page=N` | not available (null) | Tickets resolved and later updated are included by `since_updated_at`, so Haley filters on `resolved_at` (falling back to `updated_at`). |
+
+Autotask (`POST /Tickets/query` on `completedDate`) and Dynamics (`incidents` with `statecode eq 1`) are not built yet.
+

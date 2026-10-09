@@ -1181,6 +1181,40 @@ export class Store {
     return Number(this.db.prepare("DELETE FROM attachments WHERE created_at < ?").run(before).changes);
   }
 
+  // ------------------------------------------------------------- insight reports
+
+  createInsightReport(input: { createdBy: string; params: Record<string, unknown> }): string {
+    const id = newId("ins");
+    this.db.prepare("INSERT INTO insight_reports (id, created_by, params, status, created_at) VALUES (?, ?, ?, 'running', ?)").run(id, input.createdBy, json(input.params), now());
+    return id;
+  }
+
+  finishInsightReport(id: string, outcome: { result: unknown } | { error: string }): void {
+    if ("result" in outcome) this.db.prepare("UPDATE insight_reports SET status = 'done', result = ?, finished_at = ? WHERE id = ?").run(json(outcome.result), now(), id);
+    else this.db.prepare("UPDATE insight_reports SET status = 'failed', error = ?, finished_at = ? WHERE id = ?").run(outcome.error, now(), id);
+  }
+
+  getInsightReport(id: string): { id: string; created_by: string; params: Record<string, unknown>; status: string; result: unknown; error: string | null; created_at: string; finished_at: string | null } | null {
+    const row = this.db.prepare("SELECT * FROM insight_reports WHERE id = ?").get(id) as Row | undefined;
+    if (!row) return null;
+    return { ...(row as Record<string, unknown>), params: parse(row.params, {}), result: parse(row.result, null) } as never;
+  }
+
+  /** Newest first, without results. */
+  listInsightReports(): Array<{ id: string; created_by: string; params: Record<string, unknown>; status: string; error: string | null; created_at: string; finished_at: string | null }> {
+    const rows = this.db.prepare("SELECT id, created_by, params, status, error, created_at, finished_at FROM insight_reports ORDER BY created_at DESC LIMIT 100").all() as Row[];
+    return rows.map((r) => ({ ...(r as Record<string, unknown>), params: parse(r.params, {}) }) as never);
+  }
+
+  /** Reports still "running" when the server starts were cut off by the restart. */
+  failInterruptedInsightReports(): number {
+    return Number(this.db.prepare("UPDATE insight_reports SET status = 'failed', error = 'Interrupted by a server restart; run it again.', finished_at = ? WHERE status = 'running'").run(now()).changes);
+  }
+
+  deleteInsightReport(id: string): boolean {
+    return this.db.prepare("DELETE FROM insight_reports WHERE id = ?").run(id).changes > 0;
+  }
+
   // ------------------------------------------------------------- lessons
 
   /** Keeps a copilot draft for 30 days so the reply sent from it can be compared. */

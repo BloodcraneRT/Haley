@@ -1,6 +1,9 @@
 # Spec: features from the Neo Agent comparison
 
-Status: **phase 1 built** (items 0, 1 and 9), 2026-10-08. Changes from this spec while building:
+Status: **phases 1–3 built** (items 0, 1, 9; 6, 4, 2; 5, 3), 2026-10-08. Changes from this spec while building:
+
+- **Item 3:** a prospect's PSA details are used for one report and never stored (no `purpose:"insights"` connection to clean up). Reports work on ConnectWise, HaloPSA and Syncro; Autotask and Dynamics don't list closed tickets yet. Groups join at a third of a ticket's words in common rather than 0.4, because subjects are short. Each capability names its own recipes, so the free fallback doesn't attach loosely related recipes. Reports still running when the server restarts are marked failed.
+- **Item 5:** attachments are stored in SQLite rather than as files, and the chat bridge takes base64 only.
 
 - Slack and Teams accounts are linked by the email on the chat profile on a technician's first click. Slack uses `users.info` and Teams uses the Bot Framework members API, so no access to the MSP's own Microsoft 365 is needed.
 - The MSP's tenant for Teams is a setting, defaulting to `HALEY_TEAMS_TENANT_ID`.

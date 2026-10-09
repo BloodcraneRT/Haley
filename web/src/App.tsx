@@ -15,6 +15,8 @@ const ClientDetailPage = lazy(() => import("./pages/ClientDetail").then((m) => (
 const ClientReportPage = lazy(() => import("./pages/ClientReport").then((m) => ({ default: m.ClientReportPage })));
 const ClientsPage = lazy(() => import("./pages/Clients").then((m) => ({ default: m.ClientsPage })));
 const DashboardPage = lazy(() => import("./pages/Dashboard").then((m) => ({ default: m.DashboardPage })));
+const InsightReportPage = lazy(() => import("./pages/Insights").then((m) => ({ default: m.InsightReportPage })));
+const InsightsPage = lazy(() => import("./pages/Insights").then((m) => ({ default: m.InsightsPage })));
 const KbArticlePage = lazy(() => import("./pages/KbArticle").then((m) => ({ default: m.KbArticlePage })));
 const KbNewPage = lazy(() => import("./pages/KbArticle").then((m) => ({ default: m.KbNewPage })));
 const KbPage = lazy(() => import("./pages/Kb").then((m) => ({ default: m.KbPage })));
@@ -137,6 +139,8 @@ export function App() {
             <Route path="kb/:id" element={<Keyed><KbArticlePage /></Keyed>} />
             <Route path="audit" element={<AuditPage />} />
             <Route path="usage" element={<UsagePage />} />
+            <Route path="insights" element={<InsightsPage />} />
+            <Route path="insights/:id" element={<Keyed><InsightReportPage /></Keyed>} />
             <Route path="incidents/:id" element={<Keyed><IncidentDetailPage /></Keyed>} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<NotFoundPage />} />

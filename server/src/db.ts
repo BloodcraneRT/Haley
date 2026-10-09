@@ -357,6 +357,17 @@ const MIGRATIONS: string[] = [
      created_at TEXT NOT NULL
    );
    CREATE INDEX IF NOT EXISTS idx_attachments_ticket ON attachments(ticket_id, created_at);`,
+  // 18: "What would Haley handle?" reports from PSA ticket history (aggregates only; raw tickets aren't kept)
+  `CREATE TABLE IF NOT EXISTS insight_reports (
+     id TEXT PRIMARY KEY,
+     created_by TEXT NOT NULL,
+     params TEXT NOT NULL,
+     status TEXT NOT NULL,
+     result TEXT,
+     error TEXT,
+     created_at TEXT NOT NULL,
+     finished_at TEXT
+   );`,
 ];
 
 export function openDb(path: string): Db {

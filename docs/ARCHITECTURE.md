@@ -166,6 +166,16 @@ Syncro implements all three.
 - **AI layer:** a neutral `image` part. Anthropic gets base64 image blocks and OpenAI-compatible models get content arrays. `ModelOptions.vision` (`supportsVision()`) turns images into text placeholders for text-only models.
 - **Intake:** `InboundMessage.attachments`. `ChannelHub` stores files before starting Haley, and for follow-ups links them to the message, so untrusted continuations stay out of runs.
 
+## "What would Haley handle?" reports
+
+- **`PsaAdapter.listClosedTickets(from, to, { max })`** (optional): ConnectWise, HaloPSA and Syncro return closed tickets with subject, the start of the description, recorded time and category. No comments are read.
+- **`insights.ts`:**
+  - `clusterTickets()` is leader clustering over subject and description words (`similar.ts`). Groups need three tickets; the rest are "Other".
+  - `buildInsights()` names the 30 biggest groups with one model call (the workspace's default model, if any) and matches them to `CAPABILITIES` and recipes. The answer is validated, and coverage is capped at what the matched capability allows. Without a model, or when its answer doesn't parse, `matchCluster()` matches by words.
+  - Hours use the median recorded time where at least half a group has it, else the minutes-per-ticket setting, scaled to a 30-day month.
+  - `InsightService` runs reports in the background (at most 5,000 tickets) and stores only aggregates and three example subjects per group (`insight_reports`, migration 18).
+- **Prospects:** `POST /api/insights { prospect: { kind, config } }` builds a throwaway adapter. Credentials are never stored or audited.
+
 ## Help desk quality: checks before close, needs-care flags, dispatch, lessons
 
 - **`qa.ts`:** deterministic checks before close (no reply since the requester's last message, no resolution note, an unkept promise) plus an optional model check (purpose `qa`). `PATCH /api/tickets/:id` enforces `require` mode with `qaOverride` (audited). The setting is `HelpdeskSettings` in workspace settings.
@@ -224,6 +234,8 @@ Connectors that call an MSP-configured host or tenant (NinjaOne, SyncroMSP RMM, 
 | `psa_connections`, `ticket_links` | PSA credentials (encrypted), customer→client map, sync cursor and options; ticket ↔ PSA ticket links with seen comments and mirrored events. |
 | `assist_drafts`, `rule_suggestions` | Copilot reply drafts (30 days, to see how they were edited) and policy rules Haley suggested from technicians' feedback. |
 | `technicians`, `approval_posts` | The MSP's technicians with their Slack and Teams ids; approval cards and escalation notices posted to chat, so they can be updated. |
+| `attachments` | Files that came with messages (bytes, sniffed type, extracted text), purged after the retention period. |
+| `insight_reports` | "What would Haley handle?" reports: parameters, status, and the aggregated result. |
 | `audit_log` | Append-only record of security-relevant events. |
 
 Schema changes are forward-only migrations in `db.ts`, tracked with `PRAGMA user_version`. SQLite (built into Node 22) keeps deployment to a single process and a single file. The `Store` class is the only thing that touches SQL, so moving to Postgres later is contained.

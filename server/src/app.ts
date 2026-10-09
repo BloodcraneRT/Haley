@@ -38,7 +38,7 @@ import "./psa/connectwise.js";
 import "./psa/autotask.js";
 import "./psa/halopsa.js";
 import { PsaSync } from "./psa/sync.js";
-import type { PsaAdapter, PsaConnection } from "./psa/types.js";
+import { DEFAULT_PSA_OPTIONS, type PsaAdapter, type PsaConnection } from "./psa/types.js";
 import { registerHooks } from "./routes/hooks.js";
 import { registerM365Onboarding } from "./routes/m365Onboarding.js";
 import { registerMemoryRoutes } from "./routes/memories.js";
@@ -54,6 +54,7 @@ import { ApprovalNotifier } from "./approvals/notify.js";
 import { SlackApprovals } from "./approvals/slack.js";
 import { TeamsApprovals } from "./approvals/teams.js";
 import { Debouncer, registerSyncroWebhook } from "./routes/syncroWebhook.js";
+import { InsightService, insightsCsv, type InsightResult } from "./insights.js";
 import { registerSecretLinks } from "./routes/secretLinks.js";
 import { nextOccurrence, Scheduler } from "./scheduler.js";
 import { slaFor } from "./sla.js";
@@ -114,6 +115,8 @@ export interface HaleyApp {
   frustration: FrustrationDetector;
   /** Suggests lessons from technicians' corrections (exposed for tests to await). */
   lessons: LessonService;
+  /** Builds "What would Haley handle?" reports in the background (exposed for tests to await). */
+  insights: InsightService;
 }
 
 export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, psaFactory }: AppDeps): Promise<HaleyApp> {
@@ -170,7 +173,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
 
   const models = new ModelRegistry(store, fetchImpl);
   models.ensureDefault({ model: config.model, effort: config.effort, fallbacks: config.fallbacks });
-  const psa = new PsaSync(store, hub, psaFactory ?? ((connection, cfg) => buildPsaAdapter(connection, cfg, fetchImpl)));
+  const buildPsa = psaFactory ?? ((connection: PsaConnection, cfg: Record<string, string>) => buildPsaAdapter(connection, cfg, fetchImpl));
+  const psa = new PsaSync(store, hub, buildPsa);
   hub.register(psa.channelAdapter("syncro"));
   hub.register(psa.channelAdapter("dynamics"));
   hub.register(psa.channelAdapter("connectwise"));
@@ -206,6 +210,16 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     (orgId) => connectorsFor(orgId).flatMap((c) => c.tools.filter((t) => t.risk !== "read").map((t) => t.name)),
   );
   agent.attachApprovalEvents(lessons);
+
+  // "What would Haley handle?": closed PSA tickets grouped and matched to what Haley can do.
+  store.failInterruptedInsightReports();
+  const insights = new InsightService(store, () => {
+    try {
+      return llm ?? models.clientFor(null);
+    } catch {
+      return null;
+    }
+  });
 
   // Suggest (or assign) a technician whenever Haley escalates; registered before the notices so they can name them.
   store.onTicketStatusChanged((ticket, from, who) => onEscalated(store, ticket, from, who));
@@ -1257,6 +1271,89 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     return clientReport(store, org, q);
   });
 
+  // ------------------------------------------------------ insight reports
+
+  app.post("/api/insights", async (req) => {
+    const input = body(
+      z.object({
+        // A saved PSA connection, or a prospect's credentials (used for this report only, never stored).
+        connectionId: z.string().optional(),
+        prospect: z
+          .object({
+            kind: z.enum(PSA_PROVIDERS.map((p) => p.id) as [string, ...string[]]),
+            name: z.string().trim().max(120).optional(),
+            config: z.record(z.string(), z.string()),
+          })
+          .optional(),
+        days: z.number().int().min(30).max(90).default(90),
+        minutesPerTicket: z.number().min(1).max(600).optional(),
+      }),
+      req,
+    );
+    if (Boolean(input.connectionId) === Boolean(input.prospect)) throw new HttpError(400, "Pick a saved PSA connection or enter a prospect's PSA details.");
+    let adapter: PsaAdapter;
+    let source: { kind: string; label: string; connectionId: string | null };
+    if (input.connectionId) {
+      const connection = store.getPsaConnection(input.connectionId);
+      if (!connection) throw notFound("PSA connection");
+      adapter = psa.adapterFor(connection);
+      source = { kind: connection.kind, label: connection.name, connectionId: connection.id };
+    } else {
+      const prospect = input.prospect!;
+      const info = PSA_PROVIDERS.find((p) => p.id === prospect.kind)!;
+      const missing = info.fields.filter((f) => !f.optional && !prospect.config[f.key]?.trim()).map((f) => f.label);
+      if (missing.length) throw new HttpError(400, `Missing: ${missing.join(", ")}`);
+      const label = prospect.name || `Prospect (${info.name})`;
+      const connection: PsaConnection = {
+        id: "insights-prospect",
+        kind: info.id,
+        name: label,
+        customer_map: {},
+        options: DEFAULT_PSA_OPTIONS,
+        cursor: null,
+        enabled: true,
+        status: "unknown",
+        status_detail: "",
+        last_sync_at: null,
+        created_at: new Date().toISOString(),
+      };
+      adapter = buildPsa(connection, prospect.config);
+      source = { kind: info.id, label, connectionId: null };
+    }
+    if (!adapter.listClosedTickets) throw new HttpError(400, `Reports from ${PSA_PROVIDERS.find((p) => p.id === source.kind)?.name ?? source.kind} aren't supported yet.`);
+    const minutesPerTicket = input.minutesPerTicket ?? (store.getBillingSettings().minutesPerTicket || 15);
+    const id = insights.start({ adapter, source, days: input.days, minutesPerTicket, createdBy: actor(req) });
+    // The prospect's credentials stay out of the audit log and the report.
+    store.audit({ actor: actor(req), action: "insights.started", target: id, detail: { kind: source.kind, prospect: !source.connectionId, days: input.days } });
+    return store.getInsightReport(id);
+  });
+
+  app.get("/api/insights", async () => store.listInsightReports());
+
+  app.get<{ Params: { id: string } }>("/api/insights/:id", async (req) => {
+    const report = store.getInsightReport(req.params.id);
+    if (!report) throw notFound("Report");
+    return report;
+  });
+
+  app.get<{ Params: { id: string } }>("/api/insights/:id/csv", async (req, reply) => {
+    const report = store.getInsightReport(req.params.id);
+    if (!report) throw notFound("Report");
+    if (report.status !== "done") throw new HttpError(409, "This report isn't finished.");
+    const q = query(z.object({ samples: z.enum(["0", "1"]).default("0") }), req);
+    const name = `haley-insights-${report.created_at.slice(0, 10)}.csv`;
+    return reply
+      .header("content-type", "text/csv; charset=utf-8")
+      .header("content-disposition", `attachment; filename="${name}"`)
+      .send(insightsCsv(report.result as InsightResult, q.samples === "1"));
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/insights/:id", async (req) => {
+    if (!store.deleteInsightReport(req.params.id)) throw notFound("Report");
+    store.audit({ actor: actor(req), action: "insights.deleted", target: req.params.id });
+    return { ok: true };
+  });
+
   // ------------------------------------------------------ usage & billing
 
   const billingSettings = z.object({
@@ -1450,7 +1547,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   app.addHook("onClose", async () => approvalNotifier.idle());
   app.addHook("onClose", async () => frustration.idle());
   app.addHook("onClose", async () => lessons.idle());
+  app.addHook("onClose", async () => insights.idle());
   app.addHook("onClose", async () => db.close());
   app.addHook("onClose", async () => scheduler.stop());
-  return { app, store, agent, scheduler, psa, syncroWebhook, approvalNotifier, frustration, lessons };
+  return { app, store, agent, scheduler, psa, syncroWebhook, approvalNotifier, frustration, lessons, insights };
 }
