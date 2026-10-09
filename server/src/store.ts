@@ -30,6 +30,7 @@ import type {
   TicketPriority,
   TicketChannel,
   TicketStatus,
+  TicketFlags,
   Technician,
 } from "./types.js";
 import {
@@ -75,6 +76,8 @@ export interface TicketFilter {
   orgId?: string;
   status?: string;
   search?: string;
+  /** Only tickets with this flag set ("Needs care"). */
+  flag?: "frustrated" | "vip";
   limit?: number;
 }
 
@@ -267,6 +270,8 @@ export class Store {
         mfa_method: "",
         resolution_confirmed_at: null,
         incident_id: null,
+        flags: {},
+        suggested_assignee: null,
         created_at: ts,
         updated_at: ts,
       };
@@ -315,6 +320,9 @@ export class Store {
       where.push("status = ?");
       args.push(filter.status);
     }
+    if (filter.flag) {
+      where.push(`json_extract(flags, '$.${filter.flag === "vip" ? "vip" : "frustrated"}') IS NOT NULL`);
+    }
     if (filter.search) {
       where.push("(title LIKE ? OR description LIKE ? OR requester_name LIKE ? OR CAST(number AS TEXT) = ?)");
       const like = `%${filter.search}%`;
@@ -329,13 +337,19 @@ export class Store {
 
   // ------------------------------------------------------------ incidents
 
-  /** Called after every new ticket (incident detection). Listener errors never fail ticket creation. */
   private readonly statusListeners: Array<(ticket: Ticket, from: TicketStatus, actor: string) => void> = [];
   /** Called after any ticket status change, with the updated ticket. Listeners must not throw into the caller. */
   onTicketStatusChanged(listener: (ticket: Ticket, from: TicketStatus, actor: string) => void): void {
     this.statusListeners.push(listener);
   }
 
+  private readonly eventListeners: Array<(event: TicketEvent) => void> = [];
+  /** Called after every ticket event is recorded (frustration detection). Listener errors are ignored. */
+  onTicketEvent(listener: (event: TicketEvent) => void): void {
+    this.eventListeners.push(listener);
+  }
+
+  /** Called after every new ticket (incident detection). Listener errors never fail ticket creation. */
   private readonly ticketCreatedListeners: Array<(ticket: Ticket) => void> = [];
   onTicketCreated(listener: (ticket: Ticket) => void): void {
     this.ticketCreatedListeners.push(listener);
@@ -478,6 +492,7 @@ export class Store {
     return {
       ...(row as unknown as Ticket),
       channel_ref: parse(row.channel_ref, {}),
+      flags: parse<TicketFlags>(row.flags, {}),
       needs_followup: Boolean(row.needs_followup),
       sla_escalated: Boolean(row.sla_escalated),
     };
@@ -498,6 +513,23 @@ export class Store {
         .prepare("SELECT * FROM tickets WHERE status = 'resolved' AND assignee = 'haley' AND resolved_at IS NOT NULL AND resolved_at < ? ORDER BY resolved_at LIMIT 1000")
         .all(before) as Row[]
     ).map((r) => this.toTicket(r));
+  }
+
+  /** Sets or clears ticket flags (null clears one). Doesn't touch updated_at: flags aren't ticket activity. */
+  setTicketFlags(id: string, patch: { [K in keyof TicketFlags]?: TicketFlags[K] | null }): Ticket | null {
+    const ticket = this.getTicket(id);
+    if (!ticket) return null;
+    const next: Record<string, unknown> = { ...ticket.flags };
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null || value === undefined || value === false) delete next[key];
+      else next[key] = value;
+    }
+    this.db.prepare("UPDATE tickets SET flags = ? WHERE id = ?").run(json(next), id);
+    return this.getTicket(id);
+  }
+
+  setSuggestedAssignee(id: string, name: string | null): void {
+    this.db.prepare("UPDATE tickets SET suggested_assignee = ? WHERE id = ?").run(name, id);
   }
 
   markMfaVerified(id: string, method: string, at: string): void {
@@ -628,6 +660,13 @@ export class Store {
     this.db.prepare("UPDATE tickets SET updated_at = ? WHERE id = ?").run(event.created_at, ticketId);
     if (kind === "reply" && !meta.auto) {
       this.db.prepare("UPDATE tickets SET first_response_at = ? WHERE id = ? AND first_response_at IS NULL").run(event.created_at, ticketId);
+    }
+    for (const listener of this.eventListeners) {
+      try {
+        listener(event);
+      } catch {
+        // Detection is best effort.
+      }
     }
     return event;
   }

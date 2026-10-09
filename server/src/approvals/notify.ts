@@ -21,6 +21,8 @@ export interface EscalationNotice {
   orgName: string;
   reason: string;
   url: string | null;
+  /** Needs-care lines: "VIP requester", "Seems frustrated: …". */
+  care: string[];
 }
 
 /** Slack or Teams, as seen by the notifier. Each returns the ref needed to update the post later, or null if it isn't set up. */
@@ -43,6 +45,14 @@ const IDENTITY: Record<Assurance, string> = {
 };
 
 const RISK_ORDER = ["read", "internal", "write", "destructive"] as const;
+
+/** Short needs-care lines for notices. */
+export function careLines(ticket: Ticket): string[] {
+  const lines: string[] = [];
+  if (ticket.flags.vip) lines.push("VIP requester");
+  if (ticket.flags.frustrated) lines.push(`Seems frustrated: ${ticket.flags.frustrated.reason}`);
+  return lines;
+}
 
 /** Who raised the escalation automatically; a technician setting a ticket to escalated doesn't notify. */
 const AUTOMATIC_ACTORS = new Set(["haley", "scheduler", "system"]);
@@ -166,6 +176,7 @@ export class ApprovalNotifier implements ApprovalEvents {
         orgName: org.name,
         reason: latest?.body.slice(0, 600) || (actor === "scheduler" ? "The SLA target was missed." : "Haley handed this to a person."),
         url: this.link(`/tickets/${ticket.id}`),
+        care: careLines(this.store.getTicket(ticket.id) ?? ticket),
       };
       for (const channel of channels) {
         try {

@@ -150,7 +150,8 @@ export class SlackApprovals implements ApprovalChannel {
     const channel = this.destination(org);
     if (!channel) return null;
     const title = `#${notice.ticket.number} ${esc(clip(notice.ticket.title, 120))}`;
-    const text = `:rotating_light: *Escalated to a technician* · ${esc(notice.orgName)}\n${notice.url ? `<${notice.url}|${title}>` : title} · ${esc(notice.ticket.requester)}\n>${esc(clip(notice.reason, 600)).replace(/\n/g, "\n>")}`;
+    const care = notice.care.length ? `\n:warning: ${esc(notice.care.join(" · "))}` : "";
+    const text = `:rotating_light: *Escalated to a technician* · ${esc(notice.orgName)}\n${notice.url ? `<${notice.url}|${title}>` : title} · ${esc(notice.ticket.requester)}${care}\n>${esc(clip(notice.reason, 600)).replace(/\n/g, "\n>")}`;
     const data = await this.call("chat.postMessage", {
       channel,
       text: `Escalated: ${notice.orgName} #${notice.ticket.number} ${notice.ticket.title}`,

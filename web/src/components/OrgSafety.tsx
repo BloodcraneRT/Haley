@@ -239,6 +239,7 @@ const toDraft = (s: OrgSettings): Draft => ({
   approvalSlackChannel: s.approvalSlackChannel ?? "",
   authorizedRequesters: s.authorizedRequesters,
   protectedAccounts: s.protectedAccounts,
+  vipRequesters: s.vipRequesters ?? [],
   maxAutoChangesPerHour: s.maxAutoChangesPerHour,
   maxSelfServicePerUserPerDay: s.maxSelfServicePerUserPerDay,
   sla: s.sla,
@@ -345,6 +346,15 @@ export function SafetySettingsForm({ org, onSaved, pause }: { org: OrgDetail; on
             onChange={(v) => set("protectedAccounts", v)}
             placeholder="ceo@client.com"
             help="Admins, executives, service accounts. Haley never changes these without a technician, in any mode."
+          />
+          <ListEditor
+            id="st-vip"
+            label="VIP requesters"
+            kind="email"
+            values={draft.vipRequesters}
+            onChange={(v) => set("vipRequesters", v)}
+            placeholder="ceo@client.com"
+            help="Their tickets get priority raised one step and a VIP badge, and Haley is told to keep them informed and hand over sooner."
           />
         </div>
 

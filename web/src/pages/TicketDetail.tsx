@@ -23,6 +23,7 @@ import {
   TriangleAlert,
   Undo2,
   X,
+  HeartPulse,
 } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -162,6 +163,11 @@ export function TicketDetailPage() {
         subtitle={
           <span className="row row-wrap" style={{ gap: 8 }}>
             <TicketStatusPill status={ticket.status} />
+            {ticket.flags?.vip && (
+              <Pill tone="violet" title="VIP requester for this client">
+                VIP
+              </Pill>
+            )}
             {ticket.resolution_confirmed_at && (
               <Pill tone="green" title={`The requester confirmed the fix ${new Date(ticket.resolution_confirmed_at).toLocaleString()}`}>
                 Confirmed fixed
@@ -210,6 +216,28 @@ export function TicketDetailPage() {
       <div className="layout-main-side">
         <div className="stack" style={{ gap: 20 }}>
           {ticket.incident_id && <TicketIncidentBanner incidentId={ticket.incident_id} />}
+          {ticket.flags?.frustrated && (
+            <div className="banner banner-warn care-banner" role="status">
+              <HeartPulse className="icon-sm" aria-hidden="true" />
+              <span style={{ flex: 1 }}>
+                <strong>{ticket.requester_name || "The requester"} seems frustrated:</strong> {ticket.flags.frustrated.reason}.
+                {ticket.flags.frustrated.confirmed ? " Confirmed by the AI check." : ""}
+              </span>
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={async () => {
+                  try {
+                    await api.clearTicketFlag(ticket.id, "frustrated");
+                    void detail.reload();
+                  } catch (err) {
+                    toast(errorMessage(err), "error");
+                  }
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          )}
           {latest && <RunBanner run={latest} pendingCount={pending.length} onRunLive={() => void runHaley("live")} starting={starting === "live"} />}
           {ticket.needs_followup && (
             <div className="banner banner-info" role="status">

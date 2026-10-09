@@ -270,3 +270,23 @@ export function RunModeBadge({ mode }: { mode: RunMode }) {
     </span>
   );
 }
+
+/** Needs-care markers on a ticket: VIP requester, and a requester who seems frustrated (with why, on hover). */
+export function CareBadges({ ticket }: { ticket: { flags?: { frustrated?: { reason: string; confirmed: boolean }; vip?: boolean } } }) {
+  const f = ticket.flags;
+  if (!f?.vip && !f?.frustrated) return null;
+  return (
+    <>
+      {f.vip && (
+        <Pill tone="violet" title="VIP requester for this client">
+          VIP
+        </Pill>
+      )}
+      {f.frustrated && (
+        <Pill tone="amber" title={`Seems frustrated: ${f.frustrated.reason}${f.frustrated.confirmed ? " (confirmed by the AI check)" : ""}`}>
+          Frustrated
+        </Pill>
+      )}
+    </>
+  );
+}

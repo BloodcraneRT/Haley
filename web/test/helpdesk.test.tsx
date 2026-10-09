@@ -69,3 +69,14 @@ describe("team settings", () => {
     expect(save).toHaveBeenCalledWith({ sentimentModelCheck: true });
   });
 });
+
+describe("needs-care badges", () => {
+  it("shows VIP and frustrated, with why on hover", async () => {
+    const { CareBadges } = await import("../src/components/Pill");
+    const { node } = await renderView(() => <CareBadges ticket={{ flags: { vip: true, frustrated: { reason: "strong language", confirmed: true } } }} />);
+    expect(node.textContent).toBe("VIPFrustrated");
+    expect(node.querySelector('[title^="Seems frustrated"]')!.getAttribute("title")).toBe("Seems frustrated: strong language (confirmed by the AI check)");
+    const none = await renderView(() => <CareBadges ticket={{ flags: {} }} />);
+    expect(none.node.textContent).toBe("");
+  });
+});

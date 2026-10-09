@@ -44,6 +44,7 @@ import { registerM365Onboarding } from "./routes/m365Onboarding.js";
 import { registerMemoryRoutes } from "./routes/memories.js";
 import { registerTechnicianRoutes } from "./routes/technicians.js";
 import { qaChecks, qaReview } from "./qa.js";
+import { FrustrationDetector } from "./frustration.js";
 import { registerApprovalRoutes } from "./routes/approvals.js";
 import { ApprovalNotifier } from "./approvals/notify.js";
 import { SlackApprovals } from "./approvals/slack.js";
@@ -105,6 +106,8 @@ export interface HaleyApp {
   syncroWebhook: Debouncer;
   /** Posts and updates approval cards in Slack and Teams (exposed for tests to await). */
   approvalNotifier: ApprovalNotifier;
+  /** Flags VIP and frustrated requesters (exposed for tests to await the optional model check). */
+  frustration: FrustrationDetector;
 }
 
 export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, psaFactory }: AppDeps): Promise<HaleyApp> {
@@ -172,6 +175,17 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   const agent = new AgentService(store, llmFor, config, connectorsFor, hub);
   hub.attach(agent);
   agent.recoverInterrupted();
+  // Needs-care flags: VIP requesters and frustrated ones (free signals, optionally confirmed by the model).
+  const frustration = new FrustrationDetector(store, (orgId) => {
+    try {
+      return llmFor(orgId);
+    } catch {
+      return null;
+    }
+  });
+  store.onTicketCreated((ticket) => frustration.onTicketCreated(ticket));
+  store.onTicketEvent((event) => frustration.onEvent(event));
+
   // Approval cards and escalation notices in the MSP's own Slack (and Teams).
   const slackApprovals = new SlackApprovals(store, fetchImpl);
   const teamsApprovals = teams ? new TeamsApprovals(store, teams, ch.teamsTenantId) : null;
@@ -338,6 +352,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
         z.object({ responseMinutes: z.number().int().min(1).max(100_000), resolutionMinutes: z.number().int().min(1).max(100_000) }),
       ),
       policyRules: z.array(policyRuleInput).max(100),
+      vipRequesters: emails.max(200),
       approvalSlackChannel: z.union([z.literal(""), z.string().trim().regex(/^[CG][A-Z0-9]{2,20}$/, "Slack channel ids look like C0123ABCD")]),
     })
     .partial();
@@ -500,7 +515,10 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   // ------------------------------------------------------------ tickets
 
   app.get("/api/tickets", async (req) => {
-    const q = query(z.object({ orgId: z.string().optional(), status: z.string().optional(), search: z.string().optional() }), req);
+    const q = query(
+      z.object({ orgId: z.string().optional(), status: z.string().optional(), search: z.string().optional(), flag: z.enum(["frustrated", "vip"]).optional() }),
+      req,
+    );
     const orgs = new Map(store.listOrgs().map((o) => [o.id, o]));
     return store.listTickets(q).map((t) => ({ ...withSla(t, orgs.get(t.org_id)), org_name: orgs.get(t.org_id)?.name ?? "" }));
   });
@@ -727,6 +745,16 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       store.audit({ orgId: current.org_id, actor: actor(req), action: "ticket.assigned", target: current.id, detail: { from: current.assignee, to: changes.assignee } });
     }
     return ticket;
+  });
+
+  /** A technician clears a needs-care flag (e.g. the requester is fine now). */
+  app.delete<{ Params: { id: string; flag: string } }>("/api/tickets/:id/flags/:flag", async (req) => {
+    const ticket = store.getTicket(req.params.id);
+    if (!ticket) throw notFound("Ticket");
+    if (req.params.flag !== "frustrated" && req.params.flag !== "vip") throw new HttpError(400, "Unknown flag");
+    const updated = store.setTicketFlags(ticket.id, { [req.params.flag]: null })!;
+    store.audit({ orgId: ticket.org_id, actor: actor(req), action: "ticket.flag_cleared", target: ticket.id, detail: { flag: req.params.flag } });
+    return updated;
   });
 
   /** Checks before a technician closes a ticket: is the requester answered, is the fix written down, was a promise kept. */
@@ -1338,7 +1366,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
 
   // Let approval posts already in flight finish before the database closes.
   app.addHook("onClose", async () => approvalNotifier.idle());
+  app.addHook("onClose", async () => frustration.idle());
   app.addHook("onClose", async () => db.close());
   app.addHook("onClose", async () => scheduler.stop());
-  return { app, store, agent, scheduler, psa, syncroWebhook, approvalNotifier };
+  return { app, store, agent, scheduler, psa, syncroWebhook, approvalNotifier, frustration };
 }

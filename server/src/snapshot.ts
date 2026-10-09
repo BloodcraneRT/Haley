@@ -90,6 +90,9 @@ export async function requesterSnapshot(store: Store, ticket: Ticket, tools: Map
     .filter((t) => t.id !== ticket.id && email && t.requester_email.toLowerCase() === email)
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
   snapshot.recentTickets = recent.slice(0, 8).map((t) => ({ id: t.id, number: t.number, title: t.title, status: t.status, created_at: t.created_at }));
+  if (ticket.flags.vip || store.getOrg(ticket.org_id)?.settings.vipRequesters?.some((v) => v.toLowerCase() === email)) {
+    snapshot.flags.push({ level: "info", text: "VIP for this client" });
+  }
   const lastMonth = recent.filter((t) => (days(t.created_at, nowMs) ?? 99) <= 30).length;
   if (lastMonth >= 3) snapshot.flags.push({ level: "info", text: `${lastMonth} other tickets in the last 30 days` });
 

@@ -79,6 +79,8 @@ export interface OrgSettings {
   policyRules: PolicyRule[];
   /** Slack channel id for this client's approval cards; empty uses the workspace default. */
   approvalSlackChannel: string;
+  /** Requesters (emails) whose tickets get a priority bump and extra care. */
+  vipRequesters: string[];
 }
 
 /** deny: blocked; approve: goes to the approval queue; allow: runs without a sign-off the autonomy level would have asked for. */
@@ -139,6 +141,11 @@ export interface OrgDetail extends Org {
   integrations: Integration[];
 }
 
+export interface TicketFlags {
+  frustrated?: { reason: string; at: string; confirmed: boolean };
+  vip?: boolean;
+}
+
 export interface Ticket {
   id: string;
   number: number;
@@ -166,6 +173,10 @@ export interface Ticket {
   resolution_confirmed_at: string | null;
   /** The incident (shared problem) this ticket is part of. */
   incident_id?: string | null;
+  /** Needs-care markers. */
+  flags?: TicketFlags;
+  /** The technician suggested when Haley last escalated. */
+  suggested_assignee?: string | null;
   sla_escalated: boolean;
   /** Last approved step-up verification (MFA push or SMS code) and the method used. */
   mfa_verified_at: string | null;
@@ -1151,7 +1162,8 @@ export const api = {
     patch<Technician>(`/api/technicians/${enc(id)}`, input),
   deleteTechnician: (id: string) => del<Technician>(`/api/technicians/${enc(id)}`),
 
-  tickets: (q: { orgId?: string; status?: string; search?: string } = {}) => get<TicketWithOrg[]>("/api/tickets", q),
+  tickets: (q: { orgId?: string; status?: string; search?: string; flag?: "frustrated" | "vip" } = {}) => get<TicketWithOrg[]>("/api/tickets", q),
+  clearTicketFlag: (id: string, flag: "frustrated" | "vip") => del<Ticket>(`/api/tickets/${enc(id)}/flags/${flag}`),
   ticket: (id: string) => get<TicketDetail>(`/api/tickets/${enc(id)}`),
   createTicket: (input: NewTicketInput) => post<Ticket & { runId: string | null }>("/api/tickets", input),
   updateTicket: (id: string, input: TicketPatch) => patch<Ticket>(`/api/tickets/${enc(id)}`, input),

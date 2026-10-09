@@ -316,6 +316,9 @@ const MIGRATIONS: string[] = [
      created_at TEXT NOT NULL
    );
    CREATE INDEX IF NOT EXISTS idx_approval_posts_action ON approval_posts(action_id);`,
+  // 15: ticket flags (a frustrated requester, a VIP) and the technician suggested when Haley escalates
+  `ALTER TABLE tickets ADD COLUMN flags TEXT NOT NULL DEFAULT '{}';
+   ALTER TABLE tickets ADD COLUMN suggested_assignee TEXT;`,
 ];
 
 export function openDb(path: string): Db {

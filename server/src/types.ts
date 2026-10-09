@@ -99,6 +99,8 @@ export interface OrgSettings {
   policyRules: PolicyRule[];
   /** Slack channel id (in the MSP's own workspace) for this client's approval cards; empty uses the workspace default. */
   approvalSlackChannel: string;
+  /** Requesters (emails) whose tickets get a priority bump and extra care. */
+  vipRequesters: string[];
 }
 
 export type PolicyEffect = "allow" | "approve" | "deny";
@@ -145,6 +147,7 @@ export const DEFAULT_ORG_SETTINGS: OrgSettings = {
   modelProfileId: "",
   policyRules: [],
   approvalSlackChannel: "",
+  vipRequesters: [],
   sla: {
     urgent: { responseMinutes: 15, resolutionMinutes: 240 },
     high: { responseMinutes: 60, resolutionMinutes: 480 },
@@ -172,6 +175,11 @@ export interface Integration {
   status: "unknown" | "connected" | "error";
   status_detail: string;
   created_at: string;
+}
+
+export interface TicketFlags {
+  frustrated?: { reason: string; at: string; confirmed: boolean };
+  vip?: boolean;
 }
 
 export interface Ticket {
@@ -207,6 +215,10 @@ export interface Ticket {
   resolution_confirmed_at: string | null;
   /** The incident (shared problem) this ticket is part of. */
   incident_id: string | null;
+  /** Needs-care markers: a frustrated requester (why, and whether an AI check confirmed it) and VIP requesters. */
+  flags: TicketFlags;
+  /** The technician suggested when Haley last escalated, with why. */
+  suggested_assignee: string | null;
   created_at: string;
   updated_at: string;
 }
