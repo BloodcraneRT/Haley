@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { AppointmentInput, CannedResponse, Contract, ExternalComment, ExternalCustomer, ExternalTicket, PsaAdapter, TimeEntry } from "./types.js";
+import type { AppointmentInput, CannedResponse, Contract, ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -159,6 +159,31 @@ export class SyncroAdapter implements PsaAdapter {
     const tickets: ExternalTicket[] = [];
     for (const summary of changed) tickets.push(await this.getTicket(String(summary.id)));
     return tickets;
+  }
+
+  async listClosedTickets(from: string, to: string, opts: { max: number }): Promise<HistoricTicket[]> {
+    const out: HistoricTicket[] = [];
+    for (let page = 1; page <= MAX_PAGES && out.length < opts.max; page++) {
+      const data = await this.call<Json>("GET", `/tickets?status=Resolved&since_updated_at=${encodeURIComponent(from)}&page=${page}`);
+      for (const t of (data.tickets ?? []) as Json[]) {
+        // Resolved tickets updated since `from`; keep the ones resolved in the range (updated_at as the fallback).
+        const closedAt = String(t.resolved_at ?? t.updated_at ?? "");
+        if (!closedAt || Date.parse(closedAt) < Date.parse(from) || Date.parse(closedAt) >= Date.parse(to)) continue;
+        out.push({
+          id: String(t.id),
+          subject: String(t.subject ?? ""),
+          description: String(t.comments?.[0]?.body ?? t.problem_description ?? "").slice(0, 2000),
+          customerId: String(t.customer_id ?? ""),
+          customerName: String(t.customer_business_then_name ?? ""),
+          createdAt: String(t.created_at ?? ""),
+          closedAt: new Date(closedAt).toISOString(),
+          minutesSpent: null,
+          category: t.problem_type ? String(t.problem_type) : null,
+        });
+      }
+      if (page >= Number(data.meta?.total_pages ?? 1)) break;
+    }
+    return out.sort((a, b) => b.closedAt.localeCompare(a.closedAt)).slice(0, opts.max);
   }
 
   async addComment(ticketId: string, comment: { body: string; public: boolean }): Promise<string> {

@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Store } from "../store.js";
 import type { Org, Ticket } from "../types.js";
 import type { ChannelAdapter, DeliveryResult, InboundMessage } from "./types.js";
+import { downloadFile, MAX_FILES_PER_MESSAGE, type IncomingFile } from "../attachments.js";
 
 type Json = Record<string, any>;
 
@@ -85,7 +86,9 @@ export class SlackChannel implements ChannelAdapter {
   async toInbound(payload: Json): Promise<InboundMessage | null> {
     const event = payload.event as Json | undefined;
     if (payload.type !== "event_callback" || !event || !this.firstSighting(payload.event_id)) return null;
-    if (event.bot_id || event.subtype || !event.user || !event.text) return null;
+    // Files arrive as "file_share" messages, possibly with no text; other subtypes (edits, joins) are ignored.
+    const files = event.subtype === "file_share" && Array.isArray(event.files) ? (event.files as Json[]) : [];
+    if (event.bot_id || (event.subtype && event.subtype !== "file_share") || !event.user || (!event.text && !files.length)) return null;
     const isDm = event.type === "message" && event.channel_type === "im";
     if (!isDm && event.type !== "app_mention") return null;
 
@@ -112,11 +115,33 @@ export class SlackChannel implements ChannelAdapter {
             ? "Slack guest or bot account"
             : "Slack user whose email isn't on the organization's domains",
       },
-      text: String(event.text).replace(/<@[A-Z0-9]+>\s*/g, "").trim(),
+      text: String(event.text ?? "").replace(/<@[A-Z0-9]+>\s*/g, "").trim(),
+      attachments: await this.download(files, token),
       // In a DM, a new top-level message continues the person's open ticket; in channels, threads are tickets.
       thread: isDm && !event.thread_ts ? { key: "channel", value: event.channel } : { key: "threadTs", value: threadTs },
       ref: { channel: event.channel, threadTs, user: event.user, private: isDm ? "1" : "0", teamId: payload.team_id ?? "" },
     };
+  }
+
+  /** Downloads shared files with the bot token (needs the files:read scope), only from Slack's file host. */
+  private async download(files: Json[], token: string): Promise<IncomingFile[]> {
+    const out: IncomingFile[] = [];
+    for (const [i, f] of files.entries()) {
+      const filename = String(f.name ?? f.title ?? "file");
+      const contentType = String(f.mimetype ?? "application/octet-stream");
+      if (i >= MAX_FILES_PER_MESSAGE) {
+        out.push({ filename, contentType, data: new Uint8Array(), skipped: `Not kept: only ${MAX_FILES_PER_MESSAGE} files per message are read.` });
+        continue;
+      }
+      out.push(
+        await downloadFile(
+          this.fetchImpl,
+          { url: String(f.url_private_download ?? f.url_private ?? ""), filename, contentType, size: Number(f.size ?? 0) },
+          { allowHost: (host) => host === "files.slack.com", headers: { authorization: `Bearer ${token}` } },
+        ),
+      );
+    }
+    return out;
   }
 
   async send(ticket: Ticket, text: string): Promise<DeliveryResult> {

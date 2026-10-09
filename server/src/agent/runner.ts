@@ -1,5 +1,6 @@
 import { incidentContext } from "../incidents.js";
 import { careContext } from "../frustration.js";
+import { attachmentParts, withImageData } from "../attachments.js";
 import { z } from "zod";
 import type { HaleyConfig } from "../config.js";
 import { SensitiveResult, type Connector, type HaleyTool, type ToolContext } from "../connectors/types.js";
@@ -93,11 +94,13 @@ export class AgentService {
             : "Work this ticket.",
       createdBy,
     });
-    const history = this.store.listTicketEvents(ticketId).filter((event) => !event.meta.untrustedContinuation);
+    const events = this.store.listTicketEvents(ticketId);
+    const history = events.filter((event) => !event.meta.untrustedContinuation);
+    const files = attachmentParts(this.store, ticketId, new Set(events.filter((e) => e.meta.untrustedContinuation).map((e) => e.id)));
     const current = this.store.getTicket(ticketId) ?? ticket;
     const incident = incidentContext(this.store, current);
     const care = careContext(current);
-    const intro = `${this.header(org)}\n\n${ticketContext(ticket, history)}\n\n${incident ? `${incident}\n\n` : ""}${care ? `${care}\n\n` : ""}${
+    const intro = `${this.header(org)}\n\n${ticketContext(ticket, history)}\n\n${files.text ? `${files.text}\n\n` : ""}${incident ? `${incident}\n\n` : ""}${care ? `${care}\n\n` : ""}${
       followUp
         ? `This is a follow-up you scheduled earlier on this ticket. Do this now: ${followUp}${mode === "plan" ? `\n\n${PLAN_MODE_TEXT}` : ""}`
         : mode === "plan"
@@ -106,7 +109,8 @@ export class AgentService {
           ? "You have worked this ticket before; the history above shows what happened since. Continue from where things stand."
           : "Work this ticket."
     }`;
-    this.store.saveRunProgress(run.id, { messages: [userText(intro)] });
+    const first: ChatMessage = files.images.length ? { role: "user", parts: [{ type: "text", text: intro }, ...files.images] } : userText(intro);
+    this.store.saveRunProgress(run.id, { messages: [first] });
     this.store.audit({ orgId: org.id, actor: createdBy, action: "run.started", target: run.id, detail: { ticketId } });
     this.kick(run.id, () => this.loop(run.id));
     return this.store.getRun(run.id)!;
@@ -312,7 +316,8 @@ export class AgentService {
         return this.fail(runId, `Stopped after ${run.iterations} model turns without finishing. A technician should review.`);
       }
 
-      const response: ModelResponse = await llm.create({ system: SYSTEM_PROMPT, messages, tools: toolSpecs });
+      // Screenshots are stored by reference; the most recent few are loaded for this call only.
+      const response: ModelResponse = await llm.create({ system: SYSTEM_PROMPT, messages: withImageData(this.store, messages), tools: toolSpecs });
       messages.push({ role: "assistant", parts: response.parts, ...(response.native ? { native: response.native } : {}) });
       this.store.saveRunProgress(runId, {
         messages,

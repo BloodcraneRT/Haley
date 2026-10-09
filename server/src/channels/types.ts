@@ -1,3 +1,4 @@
+import type { IncomingFile } from "../attachments.js";
 import type { Assurance, Org, Ticket, TicketChannel } from "../types.js";
 
 export interface DeliveryResult {
@@ -39,6 +40,8 @@ export interface InboundMessage {
   ticketNumber?: number;
   /** Routing info stored on a new ticket so replies can find their way back. */
   ref: Record<string, string>;
+  /** Files that came with the message (screenshots, PDFs, ...), already downloaded by the channel. */
+  attachments?: IncomingFile[];
 }
 
 export interface InboundResult {

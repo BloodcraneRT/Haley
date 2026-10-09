@@ -1,0 +1,71 @@
+/* "What would Haley handle?" reports. */
+
+.insight-headline p {
+  margin: 0;
+  font-size: var(--text-lg, 1.125rem);
+  line-height: 1.5;
+}
+
+.insight-headline p + p {
+  margin-top: 6px;
+  font-size: var(--text-sm);
+}
+
+.insight-headline {
+  padding: 18px 20px;
+}
+
+/* .col-num elsewhere is a narrow, muted id column; here it holds the figures. */
+.insight-table td.col-num,
+.insight-table th.col-num {
+  width: auto;
+  text-align: right;
+  white-space: nowrap;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.insight-table td.col-num {
+  color: var(--text);
+}
+
+.insight-samples,
+.insight-needs {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  color: var(--text-2);
+}
+
+.insight-samples li {
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.insight-needs {
+  margin: 0;
+}
+
+.insight-needs li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.insight-needs li.is-connected {
+  color: var(--tone-green-fg);
+}
+
+.insight-samples-toggle {
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.insight-error {
+  color: var(--tone-red-fg);
+  max-width: 40ch;
+}

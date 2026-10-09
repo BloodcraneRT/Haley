@@ -8,11 +8,14 @@ export interface PsaProviderInfo {
   setupSteps: string[];
   /** Haley can log her work as time entries on the PSA's tickets. */
   timeEntries?: boolean;
+  /** Closed tickets can be read for a "What would Haley handle?" report. */
+  insights?: boolean;
 }
 
 export const PSA_PROVIDERS: PsaProviderInfo[] = [
   {
     id: "syncro",
+    insights: true,
     name: "SyncroMSP",
     description: "Two-way ticket sync with SyncroMSP: import customer tickets for Haley to work, post her replies as public comments, mirror notes as hidden comments, and keep status in step.",
     fields: [
@@ -48,6 +51,7 @@ export const PSA_PROVIDERS: PsaProviderInfo[] = [
   },
   {
     id: "connectwise",
+    insights: true,
     name: "ConnectWise PSA",
     description: "Two-way ticket sync with ConnectWise PSA (Manage): import service tickets for Haley to work, post her replies as Discussion notes and her notes as Internal notes, and move tickets between board statuses as she does.",
     fields: [
@@ -104,6 +108,7 @@ export const PSA_PROVIDERS: PsaProviderInfo[] = [
   },
   {
     id: "halopsa",
+    insights: true,
     name: "HaloPSA",
     description: "Two-way ticket sync with HaloPSA: import tickets for Haley to work, post her replies as actions emailed to the end user and her notes as private actions, and keep status in step.",
     fields: [

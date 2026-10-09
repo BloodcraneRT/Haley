@@ -1,5 +1,6 @@
 import type { Store } from "../store.js";
 import { fixDidNotHold } from "../frustration.js";
+import { storeAttachments } from "../attachments.js";
 import { ASSURANCE_RANK, effectiveAssurance, type Assurance, type Run, type Ticket, type TicketChannel } from "../types.js";
 
 /** One-time credential links expire after this long. */
@@ -137,19 +138,22 @@ export class ChannelHub implements ReplyDelivery {
    */
   appendToTicket(
     ticket: Ticket,
-    msg: { channel: TicketChannel; author: string; email: string | null; assurance: Assurance; text: string },
+    msg: { channel: TicketChannel; author: string; email: string | null; assurance: Assurance; text: string; attachmentIds?: string[] },
   ): InboundResult {
     if (!this.runs) throw new Error("ChannelHub is not attached to the agent");
     const org = this.store.getOrg(ticket.org_id);
     const fromRequester = Boolean(msg.email) && msg.email!.toLowerCase() === ticket.requester_email.toLowerCase();
     const trusted = this.canContinue(ticket, msg.email, msg.assurance);
-    this.store.addTicketEvent(ticket.id, "comment", msg.author, msg.text, {
+    const comment = this.store.addTicketEvent(ticket.id, "comment", msg.author, msg.text, {
       channel: msg.channel,
       fromRequester,
       senderEmail: msg.email,
       assurance: msg.assurance,
+      ...(msg.attachmentIds?.length ? { attachments: msg.attachmentIds.length } : {}),
       ...(!trusted ? { untrustedContinuation: true } : {}),
     });
+    // Linked to the message, so files from an untrusted sender stay out of Haley's runs like their text does.
+    if (msg.attachmentIds?.length) this.store.linkAttachments(msg.attachmentIds, comment.id);
     // PSA comments still belong on the technician timeline, but must not enter owner-authorized runs.
     if (!trusted) return { ticketId: ticket.id, ticketNumber: ticket.number, created: false, runId: null };
     // A frustrated requester saying Haley's fix didn't hold goes to a person rather than a second attempt.
@@ -207,8 +211,13 @@ export class ChannelHub implements ReplyDelivery {
       ticket = this.store.findOpenTicketByChannelRef(org.id, msg.channel, msg.thread.key, msg.thread.value, confirmSince);
     }
 
+    const files = msg.attachments ?? [];
+    const text = msg.text.trim() || (files.length ? `(Sent ${files.length} attachment${files.length === 1 ? "" : "s"}: ${files.map((f) => f.filename).join(", ")})` : "");
+
     if (ticket && this.canContinue(ticket, sender.email, sender.assurance)) {
-      return this.appendToTicket(ticket, { channel: msg.channel, author, email: sender.email, assurance: sender.assurance, text: msg.text });
+      // Stored first (PDF text takes a moment), then tied to the message once it's recorded.
+      const stored = files.length ? await storeAttachments(this.store, { ticketId: ticket.id, eventId: null, source: msg.channel, files }) : [];
+      return this.appendToTicket(ticket, { channel: msg.channel, author, email: sender.email, assurance: sender.assurance, text, attachmentIds: stored.map((a) => a.id) });
     }
 
     const flooding =
@@ -217,8 +226,8 @@ export class ChannelHub implements ReplyDelivery {
         MAX_NEW_TICKETS_PER_REQUESTER_PER_HOUR;
     const created = this.store.createTicket({
       orgId: org.id,
-      title: msg.subject?.trim() || titleFrom(msg.text),
-      description: msg.text,
+      title: msg.subject?.trim() || titleFrom(text),
+      description: text,
       requesterName: sender.name,
       requesterEmail: sender.email ?? "",
       author,
@@ -227,6 +236,7 @@ export class ChannelHub implements ReplyDelivery {
       assurance: sender.assurance,
       verification: sender.verification,
     });
+    if (files.length) await storeAttachments(this.store, { ticketId: created.id, eventId: null, source: msg.channel, files });
     this.store.audit({
       orgId: org.id,
       actor: msg.channel,

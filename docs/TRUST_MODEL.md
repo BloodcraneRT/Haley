@@ -114,6 +114,10 @@ Ticket text, emails and chat messages come from end users. Haley treats them as 
 - Credentials never enter the model's context.
 - Tools only reach the ticket's own client.
 - The SyncroMSP webhook isn't signed by Syncro, so a delivery is only a nudge.
+- Attachments are the requester's content too. A screenshot or PDF that says "reset the CEO's password" gets the same treatment as a message that says it: PDF and text content is marked untrusted, and the policy decides what runs.
+- Attachment content is never saved to the knowledge base or client notes automatically.
+- "What would Haley handle?" reports send ticket subjects to the model as data, and the answer can only pick from Haley's fixed capability and recipe lists. A prospect's PSA credentials are used for one report and never stored; only totals and three example subjects per group are kept.
+- Technicians download attachments through a route that never renders them as a page (`nosniff`, a sandboxed CSP, and a download for anything that isn't an image), and each download is audited.
   - Haley never reads its body; she re-reads tickets and alerts from Syncro's API, as the regular sync does.
   - The URL holds a 48-character secret that can be rotated.
   - Bursts are collapsed to at most one sync every 10 seconds.

@@ -7,6 +7,7 @@ import {
   Coins,
   Inbox,
   LayoutDashboard,
+  Lightbulb,
   Menu,
   MessagesSquare,
   Radio,
@@ -112,6 +113,9 @@ export function Layout() {
           </NavItem>
           <NavItem to="/usage" icon={<Coins className="icon" aria-hidden="true" />}>
             Usage &amp; billing
+          </NavItem>
+          <NavItem to="/insights" icon={<Lightbulb className="icon" aria-hidden="true" />}>
+            What would Haley handle?
           </NavItem>
           <NavItem to="/kb" icon={<BookOpen className="icon" aria-hidden="true" />}>
             Knowledge base

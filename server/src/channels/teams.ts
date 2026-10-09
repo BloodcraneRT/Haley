@@ -3,6 +3,7 @@ import type { Connector } from "../connectors/types.js";
 import type { Store } from "../store.js";
 import type { Org, Ticket } from "../types.js";
 import type { ChannelAdapter, DeliveryResult, InboundMessage } from "./types.js";
+import { downloadFile, MAX_FILES_PER_MESSAGE, type IncomingFile } from "../attachments.js";
 
 type Json = Record<string, any>;
 
@@ -16,6 +17,11 @@ export interface TeamsConfig {
   /** Tenant for single-tenant bot registrations; empty for multi-tenant. */
   tenantId: string;
 }
+
+/** Hosts Teams serves attachments from: the bot connector, Teams/Skype media and SharePoint/OneDrive. */
+const isMicrosoftHost = (host: string) =>
+  host === "smba.trafficmanager.net" ||
+  [".botframework.com", ".skype.com", ".teams.microsoft.com", ".sharepoint.com", ".microsoft.com"].some((suffix) => host.endsWith(suffix));
 
 const b64json = (part: string): Json => JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
 
@@ -99,13 +105,16 @@ export class TeamsChannel implements ChannelAdapter {
   }
 
   async toInbound(activity: Json): Promise<InboundMessage | null> {
-    if (activity.type !== "message" || !activity.text) return null;
+    const files = (Array.isArray(activity.attachments) ? (activity.attachments as Json[]) : []).filter(
+      (a) => String(a.contentType ?? "").startsWith("image/") || a.contentType === "application/vnd.microsoft.teams.file.download.info",
+    );
+    if (activity.type !== "message" || (!activity.text && !files.length)) return null;
     const tenantId = activity.conversation?.tenantId ?? activity.channelData?.tenant?.id;
     const org = tenantId ? this.orgForTenant(tenantId) : null;
     if (!org) return null;
     const email = await this.resolveUser(org, activity.from?.aadObjectId ?? "");
     const personal = activity.conversation?.conversationType === "personal";
-    const text = String(activity.text)
+    const text = String(activity.text ?? "")
       .replace(/<at>[^<]*<\/at>/g, "")
       .replace(/<[^>]+>/g, "")
       .trim();
@@ -128,7 +137,29 @@ export class TeamsChannel implements ChannelAdapter {
         tenantId,
         private: personal ? "1" : "0",
       },
+      attachments: await this.download(files),
     };
+  }
+
+  /**
+   * Pasted images (contentUrl, fetched with the bot's token) and shared files (a pre-signed downloadUrl),
+   * only from Microsoft's own hosts.
+   */
+  private async download(files: Json[]): Promise<IncomingFile[]> {
+    const out: IncomingFile[] = [];
+    for (const [i, a] of files.entries()) {
+      const isFile = a.contentType === "application/vnd.microsoft.teams.file.download.info";
+      const filename = String(a.name ?? (isFile ? "file" : "image.png"));
+      const contentType = isFile ? String(a.content?.fileType ?? "application/octet-stream") : String(a.contentType);
+      if (i >= MAX_FILES_PER_MESSAGE) {
+        out.push({ filename, contentType, data: new Uint8Array(), skipped: `Not kept: only ${MAX_FILES_PER_MESSAGE} files per message are read.` });
+        continue;
+      }
+      const url = String(isFile ? (a.content?.downloadUrl ?? "") : (a.contentUrl ?? ""));
+      const headers: Record<string, string> = isFile ? {} : { authorization: `Bearer ${await this.accessToken()}` };
+      out.push(await downloadFile(this.fetchImpl, { url, filename, contentType }, { allowHost: isMicrosoftHost, headers }));
+    }
+    return out;
   }
 
   private async accessToken(): Promise<string> {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { LlmError, type ChatMessage, type LlmClient, type LlmRequest, type ModelResponse, type Part, type StopReason } from "./types.js";
+import { imagePlaceholder, LlmError, withoutImages, type ChatMessage, type LlmClient, type LlmRequest, type ModelResponse, type Part, type StopReason } from "./types.js";
 
 export interface OpenAICompatibleOptions {
   /** Shown in errors and the dashboard, e.g. "openai/gpt-5" or "ollama/qwen3". */
@@ -16,6 +16,8 @@ export interface OpenAICompatibleOptions {
   temperature?: number;
   /** OpenAI reasoning models: low | medium | high. */
   reasoningEffort?: string;
+  /** Whether this model reads images; when false, images are sent as text placeholders. Default false. */
+  vision?: boolean;
   extraHeaders?: Record<string, string>;
   timeoutMs?: number;
 }
@@ -47,14 +49,20 @@ export function toOpenAIMessages(system: string, messages: ChatMessage[]): Json[
       continue;
     }
     const text: string[] = [];
+    const images: Json[] = [];
     for (const part of message.parts) {
       if (part.type === "tool_result") {
         out.push({ role: "tool", tool_call_id: part.toolCallId, content: part.isError ? `ERROR: ${part.content}` : part.content });
       } else if (part.type === "text") {
         text.push(part.text);
+      } else if (part.type === "image") {
+        if (part.data) images.push({ type: "image_url", image_url: { url: `data:${part.mediaType};base64,${part.data}` } });
+        else text.push(imagePlaceholder(part.name, "not shown again here"));
       }
     }
-    if (text.length) out.push({ role: "user", content: text.join("\n\n") });
+    // Plain string content unless there are images, which need the array form.
+    if (images.length) out.push({ role: "user", content: [...(text.length ? [{ type: "text", text: text.join("\n\n") }] : []), ...images] });
+    else if (text.length) out.push({ role: "user", content: text.join("\n\n") });
   }
   return out;
 }
@@ -89,7 +97,7 @@ export class OpenAICompatibleLlm implements LlmClient {
     const o = this.options;
     const body: Json = {
       model: o.model,
-      messages: toOpenAIMessages(system, messages),
+      messages: toOpenAIMessages(system, this.options.vision ? messages : withoutImages(messages)),
       tools: tools.map((t) => ({ type: "function", function: { name: t.name, description: t.description, parameters: t.inputSchema } })),
       tool_choice: "auto",
       [o.tokenParam ?? "max_tokens"]: o.maxTokens ?? 8192,

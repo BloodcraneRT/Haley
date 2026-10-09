@@ -33,6 +33,7 @@ import type {
   TicketFlags,
   AssigneeSuggestion,
   RuleSuggestion,
+  Attachment,
   Technician,
 } from "./types.js";
 import {
@@ -1122,6 +1123,96 @@ export class Store {
         id,
       );
     return this.getTechnician(id);
+  }
+
+  // ------------------------------------------------------------- attachments
+
+  addAttachment(input: {
+    ticketId: string;
+    eventId: string | null;
+    source: string;
+    filename: string;
+    mediaType: string;
+    kind: Attachment["kind"];
+    size: number;
+    sha256: string;
+    extractedText?: string | null;
+    note?: string;
+    data?: Uint8Array | null;
+  }): Attachment {
+    const id = newId("att");
+    this.db
+      .prepare(
+        `INSERT INTO attachments (id, ticket_id, event_id, source, filename, media_type, kind, size, sha256, extracted_text, note, data, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(id, input.ticketId, input.eventId, input.source, input.filename, input.mediaType, input.kind, input.size, input.sha256, input.extractedText ?? null, input.note ?? "", input.data ?? null, now());
+    return this.getAttachment(id)!;
+  }
+
+  private static readonly ATTACHMENT_COLUMNS = "id, ticket_id, event_id, source, filename, media_type, kind, size, sha256, note, created_at";
+
+  getAttachment(id: string): Attachment | null {
+    return (this.db.prepare(`SELECT ${Store.ATTACHMENT_COLUMNS} FROM attachments WHERE id = ?`).get(id) as unknown as Attachment | undefined) ?? null;
+  }
+
+  /** Oldest first. */
+  listAttachments(ticketId: string): Attachment[] {
+    return this.db.prepare(`SELECT ${Store.ATTACHMENT_COLUMNS} FROM attachments WHERE ticket_id = ? ORDER BY created_at, rowid`).all(ticketId) as unknown as Attachment[];
+  }
+
+  /** Ties attachments stored before their message event existed to that event. */
+  linkAttachments(ids: string[], eventId: string): void {
+    for (const id of ids) this.db.prepare("UPDATE attachments SET event_id = ? WHERE id = ? AND event_id IS NULL").run(eventId, id);
+  }
+
+  attachmentData(id: string): Uint8Array | null {
+    const row = this.db.prepare("SELECT data FROM attachments WHERE id = ?").get(id) as { data: Uint8Array | null } | undefined;
+    return row?.data ?? null;
+  }
+
+  attachmentText(id: string): string | null {
+    const row = this.db.prepare("SELECT extracted_text FROM attachments WHERE id = ?").get(id) as { extracted_text: string | null } | undefined;
+    return row?.extracted_text ?? null;
+  }
+
+  /** Deletes attachments older than a time (retention). Returns how many. */
+  purgeAttachmentsBefore(before: string): number {
+    return Number(this.db.prepare("DELETE FROM attachments WHERE created_at < ?").run(before).changes);
+  }
+
+  // ------------------------------------------------------------- insight reports
+
+  createInsightReport(input: { createdBy: string; params: Record<string, unknown> }): string {
+    const id = newId("ins");
+    this.db.prepare("INSERT INTO insight_reports (id, created_by, params, status, created_at) VALUES (?, ?, ?, 'running', ?)").run(id, input.createdBy, json(input.params), now());
+    return id;
+  }
+
+  finishInsightReport(id: string, outcome: { result: unknown } | { error: string }): void {
+    if ("result" in outcome) this.db.prepare("UPDATE insight_reports SET status = 'done', result = ?, finished_at = ? WHERE id = ?").run(json(outcome.result), now(), id);
+    else this.db.prepare("UPDATE insight_reports SET status = 'failed', error = ?, finished_at = ? WHERE id = ?").run(outcome.error, now(), id);
+  }
+
+  getInsightReport(id: string): { id: string; created_by: string; params: Record<string, unknown>; status: string; result: unknown; error: string | null; created_at: string; finished_at: string | null } | null {
+    const row = this.db.prepare("SELECT * FROM insight_reports WHERE id = ?").get(id) as Row | undefined;
+    if (!row) return null;
+    return { ...(row as Record<string, unknown>), params: parse(row.params, {}), result: parse(row.result, null) } as never;
+  }
+
+  /** Newest first, without results. */
+  listInsightReports(): Array<{ id: string; created_by: string; params: Record<string, unknown>; status: string; error: string | null; created_at: string; finished_at: string | null }> {
+    const rows = this.db.prepare("SELECT id, created_by, params, status, error, created_at, finished_at FROM insight_reports ORDER BY created_at DESC LIMIT 100").all() as Row[];
+    return rows.map((r) => ({ ...(r as Record<string, unknown>), params: parse(r.params, {}) }) as never);
+  }
+
+  /** Reports still "running" when the server starts were cut off by the restart. */
+  failInterruptedInsightReports(): number {
+    return Number(this.db.prepare("UPDATE insight_reports SET status = 'failed', error = 'Interrupted by a server restart; run it again.', finished_at = ? WHERE status = 'running'").run(now()).changes);
+  }
+
+  deleteInsightReport(id: string): boolean {
+    return this.db.prepare("DELETE FROM insight_reports WHERE id = ?").run(id).changes > 0;
   }
 
   // ------------------------------------------------------------- lessons
