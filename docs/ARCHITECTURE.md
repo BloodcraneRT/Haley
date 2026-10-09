@@ -168,12 +168,13 @@ Syncro implements all three.
 
 ## "What would Haley handle?" reports
 
-- **`PsaAdapter.listClosedTickets(from, to, { max })`** (optional): ConnectWise, HaloPSA and Syncro return closed tickets with subject, the start of the description, recorded time and category. No comments are read.
+- **`PsaAdapter.listClosedTickets(from, to, { max })`** (optional): all five PSAs return closed tickets with subject, the start of the description, recorded time and category. No comments are read.
 - **`insights.ts`:**
   - `clusterTickets()` is leader clustering over subject and description words (`similar.ts`). Groups need three tickets; the rest are "Other".
   - `buildInsights()` names the 30 biggest groups with one model call (the workspace's default model, if any) and matches them to `CAPABILITIES` and recipes. The answer is validated, and coverage is capped at what the matched capability allows. Without a model, or when its answer doesn't parse, `matchCluster()` matches by words.
   - Hours use the median recorded time where at least half a group has it, else the minutes-per-ticket setting, scaled to a 30-day month.
   - `InsightService` runs reports in the background (at most 5,000 tickets) and stores only aggregates and three example subjects per group (`insight_reports`, migration 18).
+- **Checking queries (`psa/probe.ts`):** a read-only probe reports which fields a PSA returned and how often they were filled in, never values. It runs from the PSA page (**Check fields**, `POST /api/psa/:id/probe`) or `npm run probe:psa`. Unchecked queries are marked `preview` in `psa/registry.ts`, and the dashboard says so.
 - **Prospects:** `POST /api/insights { prospect: { kind, config } }` builds a throwaway adapter. Credentials are never stored or audited.
 
 ## Help desk quality: checks before close, needs-care flags, dispatch, lessons

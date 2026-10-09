@@ -227,7 +227,8 @@ describe("insight reports API", () => {
     const missing = await app.inject({ method: "POST", url: "/api/insights", payload: { prospect: { kind: "halopsa", config: { instance: "x" } } } });
     expect(missing.statusCode).toBe(400);
     expect(missing.json().error).toContain("Missing");
-    expect((await app.inject({ method: "POST", url: "/api/insights", payload: { prospect: { kind: "autotask", config: { username: "a", secret: "b", integrationCode: "c" } } } })).statusCode).toBe(400);
+    // A PSA kind that doesn't exist.
+    expect((await app.inject({ method: "POST", url: "/api/insights", payload: { prospect: { kind: "freshdesk", config: {} } } })).statusCode).toBe(400);
     expect((await app.inject({ method: "POST", url: "/api/insights", payload: { connectionId: "nope" } })).statusCode).toBe(404);
 
     const started = (await app.inject({ method: "POST", url: "/api/insights", payload: { prospect: { kind: "halopsa", config: PROSPECT } } })).json();

@@ -31,6 +31,7 @@ import { assist } from "./copilot.js";
 import { registerStatusPage } from "./routes/statusPage.js";
 import { requesterSnapshot } from "./snapshot.js";
 import { runCost, usageCsv, usageReport } from "./usage.js";
+import { probePsa } from "./psa/probe.js";
 import { PSA_PROVIDERS, buildPsaAdapter } from "./psa/registry.js";
 import "./psa/dynamics.js";
 import "./psa/syncro.js";
@@ -1148,6 +1149,15 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     psa.invalidate(req.params.id);
     store.audit({ actor: actor(req), action: "psa.removed", target: req.params.id });
     return { ok: true };
+  });
+
+  // Read-only: which fields the PSA returns for the newer queries, never their values.
+  app.post<{ Params: { id: string } }>("/api/psa/:id/probe", async (req) => {
+    const connection = store.getPsaConnection(req.params.id);
+    if (!connection) throw notFound("PSA connection");
+    const steps = await probePsa(psa.adapterFor(connection));
+    store.audit({ actor: actor(req), action: "psa.probed", target: connection.id, detail: { ok: steps.filter((s) => s.ok).map((s) => s.method) } });
+    return { connectionId: connection.id, kind: connection.kind, at: new Date().toISOString(), steps };
   });
 
   app.post<{ Params: { id: string } }>("/api/psa/:id/test", async (req) => {

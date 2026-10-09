@@ -76,7 +76,7 @@ const report: InsightReport = {
 describe("what would Haley handle", () => {
   it("starts a prospect report without a saved connection, sending only the filled-in fields", async () => {
     vi.spyOn(api, "insights").mockResolvedValue([]);
-    vi.spyOn(api, "psaProviders").mockResolvedValue([halo, { ...halo, id: "autotask", name: "Autotask", insights: false }]);
+    vi.spyOn(api, "psaProviders").mockResolvedValue([{ ...halo, preview: ["insights"] }, { ...halo, id: "autotask", name: "Autotask", insights: false }]);
     vi.spyOn(api, "psaConnections").mockResolvedValue([]);
     const start = vi.spyOn(api, "startInsight").mockResolvedValue({ ...report, status: "running", result: null });
     const { node } = await renderView(() => (
@@ -88,6 +88,7 @@ describe("what would Haley handle", () => {
     await click(button(node, "New report"));
     expect(node.textContent).toContain("never saved");
     expect(node.querySelector("#insight-kind")!.textContent).not.toContain("Autotask");
+    expect(node.querySelector("#insight-kind")!.textContent).toContain("HaloPSA (preview)");
     expect(node.querySelector("#insight-team")).toBeNull();
     const submit = node.querySelector<HTMLButtonElement>('button[form="insight-form"]')!;
     expect(submit.disabled).toBe(true);
@@ -107,6 +108,7 @@ describe("what would Haley handle", () => {
 
   it("shows the headline, ranks groups by hours, and hides example subjects until asked", async () => {
     vi.spyOn(api, "insight").mockResolvedValue(report);
+    vi.spyOn(api, "psaProviders").mockResolvedValue([{ ...halo, preview: ["insights"] }]);
     const csv = vi.spyOn(api, "downloadInsightCsv").mockResolvedValue();
     const { node } = await renderView(() => (
       <MemoryRouter initialEntries={["/insights/ins_1"]}>
@@ -116,6 +118,7 @@ describe("what would Haley handle", () => {
       </MemoryRouter>
     ));
     expect(node.querySelector(".insight-headline")!.textContent).toContain("about 40 tickets a month (40% of 100)");
+    expect(node.textContent).toContain("Reports from HaloPSA are in preview");
     expect(node.querySelector(".insight-headline")!.textContent).toContain("12.5 technician hours");
     const rows = [...node.querySelectorAll(".insight-table tbody tr")];
     expect(rows[0].textContent).toContain("Sage 50 crashes");

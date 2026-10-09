@@ -8,7 +8,8 @@
     "start": "node --env-file-if-exists=../.env --env-file-if-exists=.env --enable-source-maps --disable-warning=ExperimentalWarning dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "probe:psa": "tsx --env-file-if-exists=../.env --env-file-if-exists=.env --disable-warning=ExperimentalWarning src/probe.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
