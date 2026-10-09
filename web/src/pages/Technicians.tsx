@@ -5,6 +5,7 @@ import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedbac
 import { ConfirmModal, Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import { Pill } from "../components/Pill";
+import { TeamSettingsCard } from "../components/TeamSettings";
 import { usePoll } from "../hooks/usePoll";
 import { useApp } from "../lib/app-context";
 
@@ -158,6 +159,7 @@ export function TechniciansPage() {
               </div>
             )}
           </section>
+          <TeamSettingsCard />
           <p className="secondary" style={{ margin: 0 }}>
             Slack and Teams accounts are linked automatically the first time a technician clicks an approval card, by matching the email on their chat account
             to the one here. Renaming a technician also renames them in client rules that name them as an approver.

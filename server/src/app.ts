@@ -43,6 +43,7 @@ import { registerHooks } from "./routes/hooks.js";
 import { registerM365Onboarding } from "./routes/m365Onboarding.js";
 import { registerMemoryRoutes } from "./routes/memories.js";
 import { registerTechnicianRoutes } from "./routes/technicians.js";
+import { qaChecks, qaReview } from "./qa.js";
 import { registerApprovalRoutes } from "./routes/approvals.js";
 import { ApprovalNotifier } from "./approvals/notify.js";
 import { SlackApprovals } from "./approvals/slack.js";
@@ -701,12 +702,43 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
         category: z.string().optional(),
         assignee: z.string().optional(),
         title: z.string().min(1).optional(),
+        /** Why the technician is closing despite the checks before close (see /qa). */
+        qaOverride: z.string().trim().min(3).max(500).optional(),
       }),
       req,
     );
-    const ticket = store.updateTicket(req.params.id, patch as never, actor(req));
+    const { qaOverride, ...changes } = patch;
+    const current = store.getTicket(req.params.id);
+    if (!current) throw notFound("Ticket");
+    const closing = (changes.status === "resolved" || changes.status === "closed") && current.status !== changes.status;
+    if (closing) {
+      const mode = store.getHelpdeskSettings().qaBeforeClose;
+      const blocking = mode === "off" ? [] : qaChecks(current, store.listTicketEvents(current.id)).filter((i) => i.level === "warning");
+      if (mode === "require" && blocking.length && !qaOverride) {
+        throw new HttpError(409, `Before you close: ${blocking.map((i) => i.text).join(" ")} Add a reason to close anyway.`);
+      }
+      if (blocking.length && qaOverride) {
+        store.audit({ orgId: current.org_id, actor: actor(req), action: "ticket.qa_override", target: current.id, detail: { issues: blocking.map((i) => i.code), reason: qaOverride } });
+      }
+    }
+    const ticket = store.updateTicket(req.params.id, changes as never, actor(req));
     if (!ticket) throw notFound("Ticket");
+    if (changes.assignee !== undefined && changes.assignee !== current.assignee) {
+      store.audit({ orgId: current.org_id, actor: actor(req), action: "ticket.assigned", target: current.id, detail: { from: current.assignee, to: changes.assignee } });
+    }
     return ticket;
+  });
+
+  /** Checks before a technician closes a ticket: is the requester answered, is the fix written down, was a promise kept. */
+  app.post<{ Params: { id: string } }>("/api/tickets/:id/qa", async (req) => {
+    const ticket = store.getTicket(req.params.id);
+    if (!ticket) throw notFound("Ticket");
+    const settings = store.getHelpdeskSettings();
+    if (settings.qaBeforeClose === "off") return { mode: "off", issues: [], modelChecked: false };
+    const org = store.getOrg(ticket.org_id);
+    const useModel = settings.qaModelCheck && !org?.settings.paused;
+    const result = await qaReview({ store, llm: useModel ? llmFor(ticket.org_id) : null }, ticket, useModel);
+    return { mode: settings.qaBeforeClose, ...result };
   });
 
   app.post<{ Params: { id: string } }>("/api/tickets/:id/comments", async (req) => {
@@ -1169,6 +1201,25 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     const before = store.getBillingSettings();
     const next = store.setBillingSettings(patch);
     store.audit({ actor: actor(req), action: "billing.settings_changed", target: "billing", detail: { from: before, to: next } });
+    return next;
+  });
+
+  const helpdeskSettings = z
+    .object({
+      qaBeforeClose: z.enum(["off", "warn", "require"]),
+      qaModelCheck: z.boolean(),
+      sentimentModelCheck: z.boolean(),
+      autoAssignOnEscalation: z.enum(["off", "suggested"]),
+    })
+    .partial();
+
+  app.get("/api/helpdesk/settings", async () => store.getHelpdeskSettings());
+
+  app.patch("/api/helpdesk/settings", async (req) => {
+    const patch = body(helpdeskSettings, req);
+    const before = store.getHelpdeskSettings();
+    const next = store.setHelpdeskSettings(patch);
+    store.audit({ actor: actor(req), action: "helpdesk.settings_changed", target: "helpdesk", detail: { from: before, to: next } });
     return next;
   });
 

@@ -45,8 +45,10 @@ import {
   type TicketStatus,
   type AssistMode,
   type AssistResult,
+  type QaResult,
 } from "../api";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { CloseCheckModal } from "../components/CloseCheck";
 import { Avatar, displayName, isHaley } from "../components/Avatar";
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
 import { Markdown } from "../components/Markdown";
@@ -115,7 +117,18 @@ export function TicketDetailPage() {
     }
   };
 
+  const [closeCheck, setCloseCheck] = useState<{ patch: TicketPatch; result: QaResult } | null>(null);
+  const [closing, setClosing] = useState(false);
+
   const patchTicket = async (patch: TicketPatch) => {
+    // Resolving or closing runs the checks first; a failed check never blocks the technician.
+    if ((patch.status === "resolved" || patch.status === "closed") && patch.status !== ticket.status && !patch.qaOverride) {
+      const result = await api.ticketQa(ticket.id).catch(() => null);
+      if (result && result.issues.length) {
+        setCloseCheck({ patch, result });
+        return;
+      }
+    }
     detail.mutate((d) => d && { ...d, ticket: { ...d.ticket, ...patch } });
     try {
       await api.updateTicket(ticket.id, patch);
@@ -240,6 +253,30 @@ export function TicketDetailPage() {
           </section>
 
           <Composer ticketId={ticket.id} runActive={Boolean(active)} requester={ticket.requester_name || ticket.requester_email} onPosted={() => void detail.reload()} />
+          <CloseCheckModal
+            check={closeCheck?.result ?? null}
+            statusLabel={closeCheck?.patch.status ? TICKET_STATUS_META[closeCheck.patch.status].label : "Closed"}
+            busy={closing}
+            onClose={() => setCloseCheck(null)}
+            onReply={() => {
+              setCloseCheck(null);
+              window.setTimeout(() => document.getElementById("composer-body")?.focus(), 0);
+            }}
+            onCloseAnyway={async (reason) => {
+              if (!closeCheck) return;
+              setClosing(true);
+              try {
+                await api.updateTicket(ticket.id, { ...closeCheck.patch, ...(reason ? { qaOverride: reason } : {}) });
+                setCloseCheck(null);
+                refreshStats();
+              } catch (err) {
+                toast(errorMessage(err), "error");
+              } finally {
+                setClosing(false);
+                void detail.reload();
+              }
+            }}
+          />
         </div>
 
         <aside className="stack">

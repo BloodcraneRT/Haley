@@ -381,6 +381,28 @@ export const DEFAULT_APPROVAL_SETTINGS: ApprovalSettings = {
   escalationNotices: true,
 };
 
+/** Workspace-wide help desk behaviour: checks before closing, frustration detection and dispatch. */
+export interface HelpdeskSettings {
+  /** Before a technician closes a ticket: no check, show what's missing, or require a reason to close anyway. */
+  qaBeforeClose: "off" | "warn" | "require";
+  /** Also ask the AI model whether the resolution note explains the fix and the last reply answers the requester. */
+  qaModelCheck: boolean;
+  /** Confirm likely frustration with one short model call (only after the free heuristics flag a message). */
+  sentimentModelCheck: boolean;
+  /** When Haley escalates: only suggest a technician, or assign the suggested one. */
+  autoAssignOnEscalation: "off" | "suggested";
+}
+
+export const DEFAULT_HELPDESK_SETTINGS: HelpdeskSettings = {
+  qaBeforeClose: "warn",
+  qaModelCheck: false,
+  sentimentModelCheck: false,
+  autoAssignOnEscalation: "off",
+};
+
+/** What a model call was for, for billing and reporting. */
+export type UsagePurpose = "run" | "assist" | "qa" | "sentiment" | "lesson";
+
 /** Workspace-wide billing and reporting settings. */
 export interface BillingSettings {
   /** Markup applied to AI cost when it's passed through to clients, in percent. */

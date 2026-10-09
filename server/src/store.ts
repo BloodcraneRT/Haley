@@ -32,7 +32,16 @@ import type {
   TicketStatus,
   Technician,
 } from "./types.js";
-import { DEFAULT_APPROVAL_SETTINGS, DEFAULT_BILLING_SETTINGS, DEFAULT_ORG_SETTINGS, type ApprovalSettings, type BillingSettings } from "./types.js";
+import {
+  DEFAULT_APPROVAL_SETTINGS,
+  DEFAULT_BILLING_SETTINGS,
+  DEFAULT_HELPDESK_SETTINGS,
+  DEFAULT_ORG_SETTINGS,
+  type ApprovalSettings,
+  type BillingSettings,
+  type HelpdeskSettings,
+  type UsagePurpose,
+} from "./types.js";
 import type { ModelProfile } from "./ai/providers.js";
 import { DEFAULT_PSA_OPTIONS, type PsaConnection, type PsaKind, type PsaOptions, type TicketLink } from "./psa/types.js";
 
@@ -813,7 +822,7 @@ export class Store {
   }
 
   /** One model call: a run's turn, or (runId null) a copilot answer for a technician. */
-  recordModelUsage(input: { runId: string | null; orgId: string; model: string; inputTokens: number; outputTokens: number; purpose?: "run" | "assist" }): void {
+  recordModelUsage(input: { runId: string | null; orgId: string; model: string; inputTokens: number; outputTokens: number; purpose?: UsagePurpose }): void {
     this.db
       .prepare("INSERT INTO model_usage (run_id, org_id, model, input_tokens, output_tokens, created_at, purpose) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(input.runId, input.orgId, input.model, input.inputTokens, input.outputTokens, now(), input.purpose ?? "run");
@@ -941,6 +950,19 @@ export class Store {
   listApprovalPosts(actionId: string): Array<{ channel: "slack" | "teams"; ref: Record<string, string> }> {
     const rows = this.db.prepare("SELECT channel, ref FROM approval_posts WHERE action_id = ? ORDER BY created_at").all(actionId) as Row[];
     return rows.map((r) => ({ channel: r.channel as "slack" | "teams", ref: parse<Record<string, string>>(r.ref, {}) }));
+  }
+
+  getHelpdeskSettings(): HelpdeskSettings {
+    const row = this.db.prepare("SELECT value FROM workspace_settings WHERE key = 'helpdesk'").get() as Row | undefined;
+    return { ...DEFAULT_HELPDESK_SETTINGS, ...parse<Partial<HelpdeskSettings>>(row?.value, {}) };
+  }
+
+  setHelpdeskSettings(patch: Partial<HelpdeskSettings>): HelpdeskSettings {
+    const next = { ...this.getHelpdeskSettings(), ...patch };
+    this.db
+      .prepare("INSERT INTO workspace_settings (key, value) VALUES ('helpdesk', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(json(next));
+    return next;
   }
 
   getBillingSettings(): BillingSettings {

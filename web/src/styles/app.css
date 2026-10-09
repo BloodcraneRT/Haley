@@ -5904,3 +5904,33 @@ a.psa-source-chip:hover {
   white-space: nowrap;
   text-align: right;
 }
+
+/* ------------------------------------------------------------------ before you close */
+
+.close-check-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.close-check-list li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  line-height: 1.45;
+}
+
+.close-check-list li svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.close-check-list .is-warning svg {
+  color: var(--tone-amber-fg);
+}
+
+.close-check-list .is-hint svg {
+  color: var(--text-3);
+}

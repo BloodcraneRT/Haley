@@ -11,6 +11,7 @@ vi.mock("../src/lib/app-context", () => ({
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  vi.spyOn(api, "helpdeskSettings").mockResolvedValue({ qaBeforeClose: "warn", qaModelCheck: false, sentimentModelCheck: false, autoAssignOnEscalation: "off" });
   Object.defineProperties(HTMLDialogElement.prototype, {
     showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
     close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },

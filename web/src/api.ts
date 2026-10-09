@@ -1081,6 +1081,29 @@ export interface TicketPatch {
   category?: string;
   assignee?: string;
   title?: string;
+  /** Why the technician closes despite the checks before close. */
+  qaOverride?: string;
+}
+
+/** server/src/qa.ts */
+export interface QaIssue {
+  code: "no_reply" | "no_resolution_note" | "unkept_promise" | "model";
+  level: "warning" | "hint";
+  text: string;
+}
+
+export interface QaResult {
+  mode: "off" | "warn" | "require";
+  issues: QaIssue[];
+  modelChecked: boolean;
+}
+
+/** server/src/types.ts HelpdeskSettings */
+export interface HelpdeskSettings {
+  qaBeforeClose: "off" | "warn" | "require";
+  qaModelCheck: boolean;
+  sentimentModelCheck: boolean;
+  autoAssignOnEscalation: "off" | "suggested";
 }
 
 export interface ArticleInput {
@@ -1132,6 +1155,9 @@ export const api = {
   ticket: (id: string) => get<TicketDetail>(`/api/tickets/${enc(id)}`),
   createTicket: (input: NewTicketInput) => post<Ticket & { runId: string | null }>("/api/tickets", input),
   updateTicket: (id: string, input: TicketPatch) => patch<Ticket>(`/api/tickets/${enc(id)}`, input),
+  ticketQa: (id: string) => post<QaResult>(`/api/tickets/${enc(id)}/qa`),
+  helpdeskSettings: () => get<HelpdeskSettings>("/api/helpdesk/settings"),
+  updateHelpdeskSettings: (input: Partial<HelpdeskSettings>) => patch<HelpdeskSettings>("/api/helpdesk/settings", input),
   addComment: (id: string, input: { body: string; kind: "comment" | "reply"; runAgent?: boolean }) =>
     post<{ event: TicketEvent; runId: string | null }>(`/api/tickets/${enc(id)}/comments`, input),
   runTicket: (id: string, mode: RunMode = "live") => post<Run>(`/api/tickets/${enc(id)}/run`, { mode }),
