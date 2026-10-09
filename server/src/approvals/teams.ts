@@ -144,6 +144,9 @@ export class TeamsApprovals implements ApprovalChannel {
         { type: "TextBlock", text: `🚨 Escalated to a technician · ${plain(notice.orgName)}`, weight: "Bolder", wrap: true },
         { type: "TextBlock", text: `#${notice.ticket.number} ${plain(clip(notice.ticket.title, 120))} · ${plain(notice.ticket.requester)}`, isSubtle: true, wrap: true },
         ...(notice.care.length ? [{ type: "TextBlock", text: `⚠️ ${plain(notice.care.join(" · "))}`, wrap: true, color: "Warning" }] : []),
+        ...(notice.suggested
+          ? [{ type: "TextBlock", text: `${notice.suggested.assigned ? "Assigned to" : "Suggested:"} ${plain(notice.suggested.name)} (${plain(notice.suggested.reasons.join(", "))})`, wrap: true }]
+          : []),
         { type: "TextBlock", text: plain(clip(notice.reason, 600)), wrap: true },
       ],
       actions: notice.url ? [{ type: "Action.OpenUrl", title: "Open in Haley", url: notice.url }] : [],

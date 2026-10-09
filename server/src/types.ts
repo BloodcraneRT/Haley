@@ -177,6 +177,12 @@ export interface Integration {
   created_at: string;
 }
 
+export interface AssigneeSuggestion {
+  name: string;
+  reasons: string[];
+  at: string;
+}
+
 export interface TicketFlags {
   frustrated?: { reason: string; at: string; confirmed: boolean };
   vip?: boolean;
@@ -218,7 +224,7 @@ export interface Ticket {
   /** Needs-care markers: a frustrated requester (why, and whether an AI check confirmed it) and VIP requesters. */
   flags: TicketFlags;
   /** The technician suggested when Haley last escalated, with why. */
-  suggested_assignee: string | null;
+  suggested_assignee: AssigneeSuggestion | null;
   created_at: string;
   updated_at: string;
 }

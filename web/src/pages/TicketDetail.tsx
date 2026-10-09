@@ -47,6 +47,7 @@ import {
   type AssistMode,
   type AssistResult,
   type QaResult,
+  type AssigneeSuggestion,
 } from "../api";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { CloseCheckModal } from "../components/CloseCheck";
@@ -443,6 +444,11 @@ function TicketProps({ detail, onPatch }: { detail: TicketDetail; onPatch: (p: T
   const commit = (field: "category" | "assignee", value: string) => {
     if (value.trim() !== t[field]) onPatch({ [field]: value.trim() });
   };
+  // Directory names for the assignee picker (free text still works).
+  const directory = usePoll(() => api.technicians().catch(() => ({ technicians: [], suggestions: [] })), []);
+  const names = (directory.data?.technicians ?? []).filter((x) => x.active).map((x) => x.name);
+  const [options, setOptions] = useState<AssigneeSuggestion[] | null>(null);
+  const suggestion = t.suggested_assignee && t.suggested_assignee.name !== t.assignee ? t.suggested_assignee : null;
 
   return (
     <section className="card" aria-labelledby="props-title">
@@ -498,10 +504,45 @@ function TicketProps({ detail, onPatch }: { detail: TicketDetail; onPatch: (p: T
               className="input input-sm"
               value={assignee}
               placeholder="Unassigned"
+              list="technician-names"
               onChange={(e) => setAssignee(e.target.value)}
               onBlur={() => commit("assignee", assignee)}
               onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
             />
+            <datalist id="technician-names">
+              {names.map((n) => (
+                <option key={n} value={n} />
+              ))}
+            </datalist>
+            {suggestion ? (
+              <div className="assignee-suggestion">
+                <span>
+                  Suggested: <strong>{suggestion.name}</strong> <span className="muted">({suggestion.reasons.join(", ")})</span>
+                </span>
+                <button className="btn btn-sm" onClick={() => onPatch({ assignee: suggestion.name })}>
+                  Assign
+                </button>
+              </div>
+            ) : (
+              names.length > 0 &&
+              !options && (
+                <button className="btn btn-ghost btn-sm" onClick={() => void api.assigneeSuggestions(t.id).then(setOptions).catch(() => setOptions([]))}>
+                  Who should take this?
+                </button>
+              )
+            )}
+            {options && !suggestion && (
+              <ul className="assignee-options">
+                {options.map((o) => (
+                  <li key={o.name}>
+                    <button className="btn btn-sm" onClick={() => onPatch({ assignee: o.name })} disabled={o.name === t.assignee}>
+                      {o.name}
+                    </button>{" "}
+                    <span className="muted">{o.reasons.join(", ")}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </dd>
           <dt>Client</dt>
           <dd className="truncate">

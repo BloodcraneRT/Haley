@@ -45,6 +45,7 @@ import { registerMemoryRoutes } from "./routes/memories.js";
 import { registerTechnicianRoutes } from "./routes/technicians.js";
 import { qaChecks, qaReview } from "./qa.js";
 import { FrustrationDetector } from "./frustration.js";
+import { onEscalated, rankTechnicians } from "./dispatch.js";
 import { registerApprovalRoutes } from "./routes/approvals.js";
 import { ApprovalNotifier } from "./approvals/notify.js";
 import { SlackApprovals } from "./approvals/slack.js";
@@ -185,6 +186,9 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   });
   store.onTicketCreated((ticket) => frustration.onTicketCreated(ticket));
   store.onTicketEvent((event) => frustration.onEvent(event));
+
+  // Suggest (or assign) a technician whenever Haley escalates; registered before the notices so they can name them.
+  store.onTicketStatusChanged((ticket, from, who) => onEscalated(store, ticket, from, who));
 
   // Approval cards and escalation notices in the MSP's own Slack (and Teams).
   const slackApprovals = new SlackApprovals(store, fetchImpl);
@@ -745,6 +749,15 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       store.audit({ orgId: current.org_id, actor: actor(req), action: "ticket.assigned", target: current.id, detail: { from: current.assignee, to: changes.assignee } });
     }
     return ticket;
+  });
+
+  /** The best technicians for a ticket, with why (no model call). */
+  app.get<{ Params: { id: string } }>("/api/tickets/:id/assignee-suggestions", async (req) => {
+    const ticket = store.getTicket(req.params.id);
+    if (!ticket) throw notFound("Ticket");
+    return rankTechnicians(store, ticket)
+      .slice(0, 3)
+      .map((c) => ({ name: c.technician.name, score: c.score, reasons: c.reasons }));
   });
 
   /** A technician clears a needs-care flag (e.g. the requester is fine now). */

@@ -5934,3 +5934,23 @@ a.psa-source-chip:hover {
 .close-check-list .is-hint svg {
   color: var(--text-3);
 }
+
+/* ------------------------------------------------------------------ dispatch */
+
+.assignee-suggestion {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: var(--text-sm);
+}
+
+.assignee-options {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  font-size: var(--text-sm);
+}

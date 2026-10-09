@@ -23,6 +23,8 @@ export interface EscalationNotice {
   url: string | null;
   /** Needs-care lines: "VIP requester", "Seems frustrated: …". */
   care: string[];
+  /** The technician suggested (or assigned) for it, with their Slack id for a mention when linked. */
+  suggested: { name: string; reasons: string[]; assigned: boolean; slackUserId: string | null } | null;
 }
 
 /** Slack or Teams, as seen by the notifier. Each returns the ref needed to update the post later, or null if it isn't set up. */
@@ -177,6 +179,12 @@ export class ApprovalNotifier implements ApprovalEvents {
         reason: latest?.body.slice(0, 600) || (actor === "scheduler" ? "The SLA target was missed." : "Haley handed this to a person."),
         url: this.link(`/tickets/${ticket.id}`),
         care: careLines(this.store.getTicket(ticket.id) ?? ticket),
+        suggested: (() => {
+          const current = this.store.getTicket(ticket.id) ?? ticket;
+          const s = current.suggested_assignee;
+          if (!s) return null;
+          return { name: s.name, reasons: s.reasons, assigned: current.assignee === s.name, slackUserId: this.store.findTechnician({ name: s.name })?.slack_user_id ?? null };
+        })(),
       };
       for (const channel of channels) {
         try {

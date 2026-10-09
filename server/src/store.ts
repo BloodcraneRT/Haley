@@ -31,6 +31,7 @@ import type {
   TicketChannel,
   TicketStatus,
   TicketFlags,
+  AssigneeSuggestion,
   Technician,
 } from "./types.js";
 import {
@@ -493,6 +494,7 @@ export class Store {
       ...(row as unknown as Ticket),
       channel_ref: parse(row.channel_ref, {}),
       flags: parse<TicketFlags>(row.flags, {}),
+      suggested_assignee: parse<AssigneeSuggestion | null>(row.suggested_assignee, null),
       needs_followup: Boolean(row.needs_followup),
       sla_escalated: Boolean(row.sla_escalated),
     };
@@ -528,8 +530,25 @@ export class Store {
     return this.getTicket(id);
   }
 
-  setSuggestedAssignee(id: string, name: string | null): void {
-    this.db.prepare("UPDATE tickets SET suggested_assignee = ? WHERE id = ?").run(name, id);
+  setSuggestedAssignee(id: string, suggestion: AssigneeSuggestion | null): void {
+    this.db.prepare("UPDATE tickets SET suggested_assignee = ? WHERE id = ?").run(suggestion ? json(suggestion) : null, id);
+  }
+
+  /** Who (a person, not Haley or the system) last resolved or closed each ticket since a time, for dispatch suggestions. */
+  resolutionsSince(since: string): Array<{ ticket_id: string; author: string; org_id: string; category: string; created_at: string }> {
+    return this.db
+      .prepare(
+        `SELECT e.ticket_id, e.author, t.org_id, t.category, e.created_at FROM ticket_events e JOIN tickets t ON t.id = e.ticket_id
+         WHERE e.kind = 'status_change' AND e.created_at >= ? AND json_extract(e.meta, '$.to') IN ('resolved', 'closed')
+           AND e.author NOT IN ('haley', 'system', 'scheduler') ORDER BY e.created_at LIMIT 20000`,
+      )
+      .all(since) as Array<{ ticket_id: string; author: string; org_id: string; category: string; created_at: string }>;
+  }
+
+  /** Open tickets per assignee (lower-cased). */
+  openTicketsByAssignee(): Map<string, number> {
+    const rows = this.db.prepare("SELECT lower(assignee) AS a, COUNT(*) AS n FROM tickets WHERE status NOT IN ('resolved', 'closed') GROUP BY lower(assignee)").all() as Row[];
+    return new Map(rows.map((r) => [r.a as string, Number(r.n)]));
   }
 
   markMfaVerified(id: string, method: string, at: string): void {

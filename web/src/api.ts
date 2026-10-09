@@ -141,6 +141,12 @@ export interface OrgDetail extends Org {
   integrations: Integration[];
 }
 
+export interface AssigneeSuggestion {
+  name: string;
+  reasons: string[];
+  at?: string;
+}
+
 export interface TicketFlags {
   frustrated?: { reason: string; at: string; confirmed: boolean };
   vip?: boolean;
@@ -176,7 +182,7 @@ export interface Ticket {
   /** Needs-care markers. */
   flags?: TicketFlags;
   /** The technician suggested when Haley last escalated. */
-  suggested_assignee?: string | null;
+  suggested_assignee?: AssigneeSuggestion | null;
   sla_escalated: boolean;
   /** Last approved step-up verification (MFA push or SMS code) and the method used. */
   mfa_verified_at: string | null;
@@ -1163,6 +1169,7 @@ export const api = {
   deleteTechnician: (id: string) => del<Technician>(`/api/technicians/${enc(id)}`),
 
   tickets: (q: { orgId?: string; status?: string; search?: string; flag?: "frustrated" | "vip" } = {}) => get<TicketWithOrg[]>("/api/tickets", q),
+  assigneeSuggestions: (id: string) => get<Array<AssigneeSuggestion & { score: number }>>(`/api/tickets/${enc(id)}/assignee-suggestions`),
   clearTicketFlag: (id: string, flag: "frustrated" | "vip") => del<Ticket>(`/api/tickets/${enc(id)}/flags/${flag}`),
   ticket: (id: string) => get<TicketDetail>(`/api/tickets/${enc(id)}`),
   createTicket: (input: NewTicketInput) => post<Ticket & { runId: string | null }>("/api/tickets", input),
