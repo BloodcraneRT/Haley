@@ -35,6 +35,7 @@ import type {
   RuleSuggestion,
   Attachment,
   Technician,
+  WorkingHours,
 } from "./types.js";
 import {
   DEFAULT_APPROVAL_SETTINGS,
@@ -537,14 +538,14 @@ export class Store {
   }
 
   /** Who (a person, not Haley or the system) last resolved or closed each ticket since a time, for dispatch suggestions. */
-  resolutionsSince(since: string): Array<{ ticket_id: string; author: string; org_id: string; category: string; created_at: string }> {
+  resolutionsSince(since: string): Array<{ ticket_id: string; author: string; assignee: string; org_id: string; category: string; created_at: string }> {
     return this.db
       .prepare(
-        `SELECT e.ticket_id, e.author, t.org_id, t.category, e.created_at FROM ticket_events e JOIN tickets t ON t.id = e.ticket_id
+        `SELECT e.ticket_id, e.author, t.assignee, t.org_id, t.category, e.created_at FROM ticket_events e JOIN tickets t ON t.id = e.ticket_id
          WHERE e.kind = 'status_change' AND e.created_at >= ? AND json_extract(e.meta, '$.to') IN ('resolved', 'closed')
            AND e.author NOT IN ('haley', 'system', 'scheduler') ORDER BY e.created_at LIMIT 20000`,
       )
-      .all(since) as Array<{ ticket_id: string; author: string; org_id: string; category: string; created_at: string }>;
+      .all(since) as Array<{ ticket_id: string; author: string; assignee: string; org_id: string; category: string; created_at: string }>;
   }
 
   /** Open tickets per assignee (lower-cased). */
@@ -1060,6 +1061,7 @@ export class Store {
       slack_user_id: (row.slack_user_id as string | null) ?? null,
       teams_aad_id: (row.teams_aad_id as string | null) ?? null,
       psa_refs: parse<Record<string, string>>(row.psa_refs, {}),
+      working_hours: parse<WorkingHours | null>(row.working_hours, null),
       active: row.active === 1,
       created_at: row.created_at as string,
       updated_at: row.updated_at as string,
@@ -1105,13 +1107,22 @@ export class Store {
 
   updateTechnician(
     id: string,
-    patch: { name?: string; email?: string | null; slackUserId?: string | null; teamsAadId?: string | null; active?: boolean; psaRefs?: Record<string, string> },
+    patch: {
+      name?: string;
+      email?: string | null;
+      slackUserId?: string | null;
+      teamsAadId?: string | null;
+      active?: boolean;
+      psaRefs?: Record<string, string>;
+      workingHours?: WorkingHours | null;
+    },
   ): Technician | null {
     const current = this.getTechnician(id);
     if (!current) return null;
     const pick = <T>(value: T | undefined, fallback: T) => (value === undefined ? fallback : value);
+    const hours = pick(patch.workingHours, current.working_hours);
     this.db
-      .prepare("UPDATE technicians SET name = ?, email = ?, slack_user_id = ?, teams_aad_id = ?, active = ?, psa_refs = ?, updated_at = ? WHERE id = ?")
+      .prepare("UPDATE technicians SET name = ?, email = ?, slack_user_id = ?, teams_aad_id = ?, active = ?, psa_refs = ?, working_hours = ?, updated_at = ? WHERE id = ?")
       .run(
         pick(patch.name?.trim(), current.name),
         patch.email === undefined ? current.email : patch.email?.trim().toLowerCase() || null,
@@ -1119,6 +1130,7 @@ export class Store {
         patch.teamsAadId === undefined ? current.teams_aad_id : patch.teamsAadId?.toLowerCase() || null,
         pick(patch.active, current.active) ? 1 : 0,
         json(pick(patch.psaRefs, current.psa_refs)),
+        hours ? json(hours) : null,
         now(),
         id,
       );
@@ -1739,17 +1751,31 @@ export class Store {
   updateTicketLink(
     ticketId: string,
     connectionId: string,
-    patch: { seenCommentIds?: string[]; pushedEventIds?: string[]; lastStatus?: string; loggedTime?: string[] },
+    patch: {
+      seenCommentIds?: string[];
+      pushedEventIds?: string[];
+      lastStatus?: string;
+      loggedTime?: string[];
+      timeEntryIds?: string[];
+      lastOwner?: string;
+      seenAttachmentIds?: string[];
+    },
   ): void {
     const link = this.getTicketLink(ticketId, connectionId);
     if (!link) return;
     this.db
-      .prepare("UPDATE ticket_links SET seen_comment_ids = ?, pushed_event_ids = ?, last_status = ?, logged_time = ? WHERE ticket_id = ? AND connection_id = ?")
+      .prepare(
+        `UPDATE ticket_links SET seen_comment_ids = ?, pushed_event_ids = ?, last_status = ?, logged_time = ?, time_entry_ids = ?, last_owner = ?,
+           seen_attachment_ids = ? WHERE ticket_id = ? AND connection_id = ?`,
+      )
       .run(
         json(patch.seenCommentIds ?? link.seen_comment_ids),
         json(patch.pushedEventIds ?? link.pushed_event_ids),
         patch.lastStatus ?? link.last_status,
         json(patch.loggedTime ?? link.logged_time),
+        json(patch.timeEntryIds ?? link.time_entry_ids),
+        patch.lastOwner ?? link.last_owner,
+        json(patch.seenAttachmentIds ?? link.seen_attachment_ids),
         ticketId,
         connectionId,
       );
@@ -1761,6 +1787,9 @@ export class Store {
       seen_comment_ids: parse(row.seen_comment_ids, []),
       logged_time: parse(row.logged_time, []),
       pushed_event_ids: parse(row.pushed_event_ids, []),
+      time_entry_ids: parse(row.time_entry_ids, []),
+      seen_attachment_ids: parse(row.seen_attachment_ids, []),
+      last_owner: (row.last_owner as string | undefined) ?? "",
     };
   }
 

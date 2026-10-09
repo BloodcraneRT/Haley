@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { AppointmentInput, CannedResponse, Contract, ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, TimeEntry } from "./types.js";
+import type { AppointmentInput, CannedResponse, Contract, ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -50,6 +50,14 @@ export interface SyncroConfig {
 }
 
 /** SyncroMSP REST API v1 (https://api-docs.syncromsp.com). 180 requests/minute per IP. */
+/** The Syncro user (technician) a ticket is assigned to: `user_id`, with `user` when it's included. */
+function syncroOwner(t: Json): PsaOwner | null {
+  const id = t.user_id ?? t.user?.id;
+  if (id == null) return null;
+  const name = String(t.user?.full_name ?? t.user?.name ?? t.user?.email ?? `User ${id}`);
+  return { id: String(id), name, email: t.user?.email ? String(t.user.email).toLowerCase() : null };
+}
+
 export class SyncroAdapter implements PsaAdapter {
   readonly kind = "syncro" as const;
   private readonly base: string;
@@ -147,6 +155,7 @@ export class SyncroAdapter implements PsaAdapter {
       externalStatus: String(t.status ?? ""),
       priority: fromSyncroPriority(t.priority),
       updatedAt: t.updated_at,
+      owner: syncroOwner(t),
       // The first comment is the ticket's description; it's always "seen".
       comments: first ? [{ id: String(first.id), body: String(first.body ?? ""), author: String(first.tech ?? ""), fromCustomer: false, public: !first.hidden, createdAt: first.created_at }, ...mapped] : mapped,
     };
@@ -200,6 +209,11 @@ export class SyncroAdapter implements PsaAdapter {
 
   async setStatus(ticketId: string, status: TicketStatus): Promise<void> {
     await this.call("PUT", `/tickets/${ticketId}`, { status: toSyncroStatus(status) });
+  }
+
+  async setOwner(ticketId: string, ownerId: string): Promise<void> {
+    if (!/^\d+$/.test(ownerId)) throw new ConnectorError(`Not a Syncro user id: ${ownerId}`);
+    await this.call("PUT", `/tickets/${ticketId}`, { user_id: Number(ownerId) });
   }
 
   /** GET /canned_responses?query= (the token needs "Ticket Canned Responses - Manage", even to read). */

@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, TimeEntry } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -101,6 +101,8 @@ export class ConnectWiseAdapter implements PsaAdapter {
   private readonly boards: string[];
   private readonly boardStatuses = new Map<number, Json[]>();
   private priorities: Json[] | null = null;
+  /** Members by id, for owners' names and emails (looked up once per adapter). */
+  private readonly members = new Map<string, PsaOwner>();
 
   constructor(
     private readonly config: ConnectWiseConfig,
@@ -205,10 +207,28 @@ export class ConnectWiseAdapter implements PsaAdapter {
     };
   }
 
+  /** The ticket's owner (a member), with their email from /system/members (cached). */
+  private async owner(t: Json): Promise<PsaOwner | null> {
+    const id = t.owner?.id;
+    if (id == null) return null;
+    const key = String(id);
+    if (!this.members.has(key)) {
+      const m = await this.call<Json>("GET", `/system/members/${key}?fields=id,identifier,firstName,lastName,officeEmail`).catch(() => ({}) as Json);
+      const name = `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() || t.owner.name || t.owner.identifier || `Member ${key}`;
+      this.members.set(key, { id: key, name, email: m.officeEmail ? String(m.officeEmail).toLowerCase() : null });
+    }
+    return this.members.get(key)!;
+  }
+
   async getTicket(id: string): Promise<ExternalTicket> {
     if (!/^\d+$/.test(id)) throw new ConnectorError(`Not a ConnectWise ticket id: ${id}`);
     const [ticket, notes] = await Promise.all([this.call<Json>("GET", `/service/tickets/${id}`), this.notes(id)]);
-    return this.toTicket(ticket, notes);
+    return { ...this.toTicket(ticket, notes), owner: await this.owner(ticket) };
+  }
+
+  async setOwner(ticketId: string, ownerId: string): Promise<void> {
+    if (!/^\d+$/.test(ticketId) || !/^\d+$/.test(ownerId)) throw new ConnectorError(`Not a ConnectWise ticket or member id: ${ticketId}, ${ownerId}`);
+    await this.call("PATCH", `/service/tickets/${ticketId}`, [{ op: "replace", path: "owner", value: { id: Number(ownerId) } }]);
   }
 
   async listUpdatedTickets(since: string | null): Promise<ExternalTicket[]> {
@@ -221,7 +241,7 @@ export class ConnectWiseAdapter implements PsaAdapter {
       .filter((t) => !since || iso(t._info?.lastUpdated) > since)
       .sort((a, b) => iso(a._info?.lastUpdated).localeCompare(iso(b._info?.lastUpdated)) || Number(a.id) - Number(b.id));
     const tickets: ExternalTicket[] = [];
-    for (const summary of changed) tickets.push(this.toTicket(summary, await this.notes(String(summary.id))));
+    for (const summary of changed) tickets.push({ ...this.toTicket(summary, await this.notes(String(summary.id))), owner: await this.owner(summary) });
     return tickets;
   }
 

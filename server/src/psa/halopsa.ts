@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, TimeEntry } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -104,6 +104,8 @@ export class HaloAdapter implements PsaAdapter {
   private readonly api: string;
   private token: { value: string; expiresAt: number } | null = null;
   private statuses: Json[] | null = null;
+  /** Agents by id, for owners' names and emails (looked up once per adapter). */
+  private readonly agents = new Map<string, PsaOwner>();
 
   constructor(
     private readonly config: HaloConfig,
@@ -244,10 +246,27 @@ export class HaloAdapter implements PsaAdapter {
     };
   }
 
+  /** The ticket's agent, with their email from /Agent (cached). Agent 0 or none means unassigned. */
+  private async owner(t: Json): Promise<PsaOwner | null> {
+    const id = Number(t.agent_id);
+    if (!(id > 0)) return null;
+    const key = String(id);
+    if (!this.agents.has(key)) {
+      const a = await this.call<Json>("GET", `/Agent/${key}`).catch(() => ({}) as Json);
+      this.agents.set(key, { id: key, name: String(a.name ?? t.agent_name ?? `Agent ${key}`), email: a.email ? String(a.email).toLowerCase() : null });
+    }
+    return this.agents.get(key)!;
+  }
+
   async getTicket(id: string): Promise<ExternalTicket> {
     if (!/^\d+$/.test(id)) throw new ConnectorError(`Not a HaloPSA ticket id: ${id}`);
     const [ticket, actions, statuses] = await Promise.all([this.call<Json>("GET", `/Tickets/${id}?includedetails=true`), this.actions(id), this.statusList()]);
-    return this.toTicket(ticket, actions, statuses);
+    return { ...this.toTicket(ticket, actions, statuses), owner: await this.owner(ticket) };
+  }
+
+  async setOwner(ticketId: string, ownerId: string): Promise<void> {
+    if (!/^\d+$/.test(ticketId) || !/^\d+$/.test(ownerId)) throw new ConnectorError(`Not a HaloPSA ticket or agent id: ${ticketId}, ${ownerId}`);
+    await this.call("POST", "/Tickets", [{ id: Number(ticketId), agent_id: Number(ownerId) }]);
   }
 
   async listUpdatedTickets(since: string | null): Promise<ExternalTicket[]> {

@@ -1,11 +1,12 @@
 import { Pencil, Plus, RotateCcw, UserMinus, UserPlus, UsersRound } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { api, errorMessage, type Technician } from "../api";
+import { api, errorMessage, type Technician, type WorkingHours } from "../api";
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
 import { ConfirmModal, Modal } from "../components/Modal";
 import { PageHeader } from "../components/PageHeader";
 import { Pill } from "../components/Pill";
 import { TeamSettingsCard } from "../components/TeamSettings";
+import { hoursProblem, WorkingHoursEditor } from "../components/WorkingHoursEditor";
 import { usePoll } from "../hooks/usePoll";
 import { useApp } from "../lib/app-context";
 
@@ -115,7 +116,12 @@ export function TechniciansPage() {
                     {d.technicians.map((t) => (
                       <tr key={t.id} className={t.active ? "" : "is-muted"}>
                         <td className="cell-title">
-                          {t.name} {t.id === me?.id && <Pill tone="blue">You</Pill>} {!t.active && <Pill>Inactive</Pill>}
+                          {t.name} {t.id === me?.id && <Pill tone="blue">You</Pill>} {!t.active && <Pill>Inactive</Pill>}{" "}
+                          {t.active && t.working === false && (
+                            <Pill tone="amber" title={t.nextOn ? `Next on ${t.nextOn} (their time)` : "Off now"}>
+                              Off now{t.nextOn ? ` · back ${t.nextOn}` : ""}
+                            </Pill>
+                          )}
                           <div className="cell-sub hide-sm-up">{t.email ?? "No email"}</div>
                         </td>
                         <td className="hide-sm">{t.email ?? <span className="muted">None</span>}</td>
@@ -199,7 +205,15 @@ export function TechniciansPage() {
   );
 }
 
-type TechnicianInput = { name: string; email: string | null; slackUserId: string | null; teamsAadId: string | null };
+type TechnicianInput = {
+  name: string;
+  email: string | null;
+  slackUserId: string | null;
+  teamsAadId: string | null;
+  /** Only sent when changed. */
+  workingHours?: WorkingHours | null;
+  psaRefs?: Record<string, string>;
+};
 
 function TechnicianModal({
   target,
@@ -214,12 +228,17 @@ function TechnicianModal({
 }) {
   const existing = target && "id" in target ? target : null;
   const [draft, setDraft] = useState({ name: "", email: "", slack: "", teams: "" });
+  const [hours, setHours] = useState<WorkingHours | null>(null);
+  const [refs, setRefs] = useState<Record<string, string>>({});
   const [lastKey, setLastKey] = useState<string | null>(null);
   const key = target ? (existing?.id ?? `new:${target.name}`) : null;
   if (key !== lastKey) {
     setLastKey(key);
     setDraft({ name: target?.name ?? "", email: existing?.email ?? "", slack: existing?.slack_user_id ?? "", teams: existing?.teams_aad_id ?? "" });
+    setHours(existing?.working_hours ?? null);
+    setRefs(existing?.psa_refs ?? {});
   }
+  const connections = usePoll(() => (existing ? api.psaConnections() : Promise.resolve([])), [existing?.id]);
   const name = draft.name.trim();
   const email = draft.email.trim();
   const slack = draft.slack.trim();
@@ -232,12 +251,22 @@ function TechnicianModal({
         ? "Slack user ids look like U0123ABCD."
         : teams && !GUID.test(teams)
           ? "Teams ids are Entra object ids (a GUID)."
-          : null;
+          : hoursProblem(hours);
   const renamed = existing && name && name !== existing.name;
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (problem || busy) return;
-    onSave({ name, email: email || null, slackUserId: slack || null, teamsAadId: teams || null });
+    const hoursChanged = JSON.stringify(hours) !== JSON.stringify(existing?.working_hours ?? null);
+    const trimmed = Object.fromEntries(Object.entries(refs).map(([k, v]) => [k, v.trim()]));
+    const refsChanged = Object.entries(trimmed).some(([k, v]) => v !== (existing?.psa_refs[k] ?? ""));
+    onSave({
+      name,
+      email: email || null,
+      slackUserId: slack || null,
+      teamsAadId: teams || null,
+      ...(existing && hoursChanged ? { workingHours: hours } : {}),
+      ...(existing && refsChanged ? { psaRefs: trimmed } : {}),
+    });
   };
   return (
     <Modal
@@ -279,6 +308,21 @@ function TechnicianModal({
               <input id="tech-teams" className="input mono" value={draft.teams} onChange={(e) => setDraft({ ...draft, teams: e.target.value })} placeholder="Linked on first click" />
               <span className="help">Clear either one to unlink that account.</span>
             </div>
+            <WorkingHoursEditor value={hours} onChange={setHours} />
+            {(connections.data ?? []).length > 0 && (
+              <fieldset className="hours-editor">
+                <legend className="field-label">PSA ids</legend>
+                <span className="help" style={{ marginTop: -6 }}>
+                  Their member, resource or agent id in each PSA. Filled in automatically when a synced ticket is assigned to them; needed to send assignments back.
+                </span>
+                {connections.data!.map((c) => (
+                  <div className="field" key={c.id}>
+                    <label htmlFor={`tech-psa-${c.id}`}>{c.name}</label>
+                    <input id={`tech-psa-${c.id}`} className="input mono" value={refs[c.id] ?? ""} onChange={(e) => setRefs({ ...refs, [c.id]: e.target.value })} placeholder="Not linked" />
+                  </div>
+                ))}
+              </fieldset>
+            )}
           </>
         )}
         {problem && name && (

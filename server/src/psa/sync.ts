@@ -2,6 +2,7 @@ import type { ChannelHub } from "../channels/hub.js";
 import type { ChannelAdapter, DeliveryResult } from "../channels/types.js";
 import type { Store } from "../store.js";
 import type { Ticket, TicketEvent, TicketStatus } from "../types.js";
+import { matchOwner } from "./owners.js";
 import type { ExternalTicket, PsaAdapter, PsaConnection, PsaKind, TicketLink } from "./types.js";
 
 export interface SyncResult {
@@ -13,6 +14,8 @@ export interface SyncResult {
   /** Time entries added for Haley's work. */
   timeLogged: number;
   unmappedCustomers: string[];
+  /** Technicians assigned in Haley who have no id in this PSA, so the assignment couldn't be sent. */
+  ownersNotSent: string[];
   errors: string[];
   /** Set when the sync didn't run, with the reason. */
   skipped?: string;
@@ -145,7 +148,7 @@ export class PsaSync {
   }
 
   async sync(connectionId: string): Promise<SyncResult> {
-    const result: SyncResult = { imported: 0, commentsImported: 0, exported: 0, pushed: 0, statusUpdates: 0, timeLogged: 0, unmappedCustomers: [], errors: [] };
+    const result: SyncResult = { imported: 0, commentsImported: 0, exported: 0, pushed: 0, statusUpdates: 0, timeLogged: 0, unmappedCustomers: [], ownersNotSent: [], errors: [] };
     const connection = this.store.getPsaConnection(connectionId);
     if (!connection) return { ...result, skipped: "The connection no longer exists." };
     if (!connection.enabled) return { ...result, skipped: "Sync is paused for this connection." };
@@ -244,6 +247,7 @@ export class PsaSync {
       this.store.updateTicketLink(received.ticketId, connection.id, {
         pushedEventIds: this.store.listTicketEvents(received.ticketId).map((e) => e.id),
       });
+      this.applyOwner(connection, received.ticketId, external);
       result.imported++;
       return;
     }
@@ -283,6 +287,42 @@ export class PsaSync {
       seenCommentIds: [...link.seen_comment_ids, ...fresh.map((c) => c.id)],
       lastStatus,
     });
+    this.applyOwner(connection, ticket.id, external);
+  }
+
+  /**
+   * When the PSA ticket's owner changes, assign the Haley ticket to the matching technician. An owner that hasn't
+   * changed since the last sync leaves the Haley assignment alone, so assigning someone in Haley sticks.
+   */
+  private applyOwner(connection: PsaConnection, ticketId: string, external: ExternalTicket) {
+    if (external.owner === undefined) return;
+    const link = this.store.getTicketLink(ticketId, connection.id);
+    const ownerId = external.owner?.id ?? "";
+    if (!link || ownerId === link.last_owner) return;
+    this.store.updateTicketLink(ticketId, connection.id, { lastOwner: ownerId });
+    const technician = matchOwner(this.store, connection.id, external.owner);
+    const ticket = this.store.getTicket(ticketId);
+    if (technician && ticket && ticket.assignee !== technician.name) this.store.updateTicket(ticketId, { assignee: technician.name }, connection.name);
+  }
+
+  /** With "send assignments", sets the PSA owner to the technician the ticket is assigned to in Haley. */
+  private async pushOwner(connection: PsaConnection, adapter: PsaAdapter, link: TicketLink, ticket: Ticket, result: SyncResult): Promise<string> {
+    if (!connection.options.syncOwner || !adapter.setOwner || !ticket.assignee) return link.last_owner;
+    const technician = this.store.findTechnician({ name: ticket.assignee });
+    if (!technician) return link.last_owner;
+    const ref = technician.psa_refs[connection.id];
+    if (!ref) {
+      if (!result.ownersNotSent.includes(technician.name)) result.ownersNotSent.push(technician.name);
+      return link.last_owner;
+    }
+    if (ref === link.last_owner) return ref;
+    try {
+      await adapter.setOwner(link.external_id, ref);
+      return ref;
+    } catch (err) {
+      result.errors.push(`Assigning #${link.external_number || link.external_id} to ${technician.name}: ${err instanceof Error ? err.message : String(err)}`);
+      return link.last_owner;
+    }
   }
 
   /** Mirrors new timeline events and status changes to linked PSA tickets. */
@@ -311,7 +351,8 @@ export class PsaSync {
         lastStatus = status;
         result.statusUpdates++;
       }
-      this.store.updateTicketLink(ticket.id, connection.id, { pushedEventIds: pushed, seenCommentIds: seen, lastStatus });
+      const lastOwner = await this.pushOwner(connection, adapter, link, ticket, result);
+      this.store.updateTicketLink(ticket.id, connection.id, { pushedEventIds: pushed, seenCommentIds: seen, lastStatus, lastOwner });
       if (connection.options.timeEntries && connection.options.timeEntries !== "off" && adapter.logTime) {
         await this.logTime(connection, adapter, { ...link, pushed_event_ids: pushed, seen_comment_ids: seen, last_status: lastStatus }, ticket, result);
       }

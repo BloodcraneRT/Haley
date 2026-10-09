@@ -1,7 +1,7 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter } from "./types.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, PsaOwner } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -10,7 +10,7 @@ const MAX_PAGES = 50;
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const INCIDENT_SELECT =
-  "incidentid,ticketnumber,title,description,statecode,statuscode,prioritycode,modifiedon,createdon,_customerid_value,_primarycontactid_value";
+  "incidentid,ticketnumber,title,description,statecode,statuscode,prioritycode,modifiedon,createdon,_customerid_value,_primarycontactid_value,_ownerid_value";
 const INCIDENT_EXPAND =
   "primarycontactid($select=fullname,emailaddress1),customerid_account($select=name,websiteurl,emailaddress1),customerid_contact($select=fullname,emailaddress1,_parentcustomerid_value)";
 
@@ -65,6 +65,8 @@ export class DynamicsAdapter implements PsaAdapter {
   private readonly orgUrl: string;
   private readonly api: string;
   private token: { value: string; expiresAt: number } | null = null;
+  /** System users by id, for owners' emails (looked up once per adapter). */
+  private readonly users = new Map<string, PsaOwner>();
 
   constructor(
     private readonly config: DynamicsConfig,
@@ -236,6 +238,24 @@ export class DynamicsAdapter implements PsaAdapter {
     };
   }
 
+  /** The case's owner when it's a user (cases owned by a team have no single owner), with their email. */
+  private async owner(i: Json): Promise<PsaOwner | null> {
+    const id = i._ownerid_value;
+    if (!id || i["_ownerid_value@Microsoft.Dynamics.CRM.lookuplogicalname"] === "team") return null;
+    const key = String(id);
+    if (!this.users.has(key)) {
+      const { data: u } = await this.call<Json>("GET", `/systemusers(${key})?$select=fullname,internalemailaddress`).catch(() => ({ data: {} as Json }));
+      const name = String(u.fullname ?? i["_ownerid_value@OData.Community.Display.V1.FormattedValue"] ?? "Dynamics user");
+      this.users.set(key, { id: key, name, email: u.internalemailaddress ? String(u.internalemailaddress).toLowerCase() : null });
+    }
+    return this.users.get(key)!;
+  }
+
+  async setOwner(ticketId: string, ownerId: string): Promise<void> {
+    if (!GUID.test(ticketId) || !GUID.test(ownerId)) throw new ConnectorError(`Not a case or user id: ${ticketId}, ${ownerId}`);
+    await this.call("PATCH", `/incidents(${ticketId})`, { "ownerid@odata.bind": `/systemusers(${ownerId})` }, { "if-match": "*" });
+  }
+
   private async activity(id: string): Promise<[Json[], Json[]]> {
     if (!GUID.test(id)) throw new ConnectorError(`Not a case id: ${id}`);
     return Promise.all([
@@ -253,7 +273,7 @@ export class DynamicsAdapter implements PsaAdapter {
       this.call<Json>("GET", `/incidents(${id})?$select=${INCIDENT_SELECT}&$expand=${INCIDENT_EXPAND}`),
       this.activity(id),
     ]);
-    return this.toTicket(data, notes, emails);
+    return { ...this.toTicket(data, notes, emails), owner: await this.owner(data) };
   }
 
   async listUpdatedTickets(since: string | null): Promise<ExternalTicket[]> {
@@ -264,7 +284,7 @@ export class DynamicsAdapter implements PsaAdapter {
     const tickets: ExternalTicket[] = [];
     for (const incident of incidents) {
       const [notes, emails] = await this.activity(String(incident.incidentid));
-      tickets.push(this.toTicket(incident, notes, emails));
+      tickets.push({ ...this.toTicket(incident, notes, emails), owner: await this.owner(incident) });
     }
     return tickets;
   }

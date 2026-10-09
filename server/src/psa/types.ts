@@ -28,6 +28,15 @@ export interface ExternalTicket {
   priority: TicketPriority | null;
   updatedAt: string;
   comments: ExternalComment[];
+  /** Who the ticket is assigned to in the PSA. Undefined when the adapter doesn't read owners; null when unassigned. */
+  owner?: PsaOwner | null;
+}
+
+/** A PSA member, resource or agent a ticket is assigned to. */
+export interface PsaOwner {
+  id: string;
+  name: string;
+  email: string | null;
 }
 
 /** A closed ticket, summarised for the "What would Haley handle?" report (no comments, to keep it cheap). */
@@ -80,6 +89,8 @@ export interface PsaAdapter {
   listContracts?(customerId: string): Promise<Contract[]>;
   /** Books an appointment (e.g. an on-site visit) on the PSA calendar, linked to a ticket when given. */
   createAppointment?(input: AppointmentInput): Promise<{ id: string }>;
+  /** Assigns the PSA ticket to a member (by the PSA's id for them), when assignments made in Haley go back. */
+  setOwner?(ticketId: string, ownerId: string): Promise<void>;
   /** Tickets closed in [from, to), newest first, at most `max` (for the automation report). */
   listClosedTickets?(from: string, to: string, opts: { max: number }): Promise<HistoricTicket[]>;
 }
@@ -139,6 +150,10 @@ export interface PsaOptions {
   timeEntries: "off" | "actual" | "estimate";
   /** When time entries were turned on; earlier work isn't logged retroactively. Set by the server. */
   timeEntriesSince?: string;
+  /** Send assignments made in Haley back to the PSA as the ticket's owner (for technicians with a PSA id). */
+  syncOwner?: boolean;
+  /** Import files attached to synced tickets in the PSA. On for new connections, off for older ones until turned on. */
+  importAttachments?: boolean;
 }
 
 export const DEFAULT_PSA_OPTIONS: PsaOptions = {
@@ -175,6 +190,12 @@ export interface TicketLink {
   pushed_event_ids: string[];
   /** Work already logged as PSA time: "run:<id>" per run, or "estimate" once per ticket. */
   logged_time: string[];
+  /** The PSA ids of the time entries Haley logged, so they aren't counted as technicians' time. */
+  time_entry_ids: string[];
+  /** The PSA owner id last seen or set, so an unchanged owner doesn't overwrite an assignment made in Haley. */
+  last_owner: string;
+  /** PSA attachment ids already imported (or skipped). */
+  seen_attachment_ids: string[];
   last_status: string;
   created_at: string;
 }

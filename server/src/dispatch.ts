@@ -1,6 +1,7 @@
 import { rankSimilar } from "./similar.js";
 import type { Store } from "./store.js";
 import type { AssigneeSuggestion, Technician, Ticket, TicketStatus } from "./types.js";
+import { isWorking, nextOn } from "./workingHours.js";
 
 const DAY = 86_400_000;
 const SIMILAR_WINDOW_DAYS = 180;
@@ -13,6 +14,8 @@ export interface Candidate {
   technician: Technician;
   score: number;
   reasons: string[];
+  /** Within their working hours (always true when they have none set). */
+  working: boolean;
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -27,10 +30,11 @@ export function rankTechnicians(store: Store, ticket: Ticket, nowMs = Date.now()
   if (!technicians.length) return [];
   const byName = new Map(technicians.map((t) => [t.name.toLowerCase(), t]));
 
-  // The person who last resolved or closed each ticket, if they're in the directory.
+  // The person who last resolved or closed each ticket, if they're in the directory. When it was closed by someone
+  // outside it (the PSA sync, the requester), the technician it was assigned to (its PSA owner) gets the credit.
   const resolver = new Map<string, { name: string; org_id: string; category: string; at: string }>();
   for (const r of store.resolutionsSince(new Date(nowMs - SIMILAR_WINDOW_DAYS * DAY).toISOString())) {
-    const tech = byName.get(r.author.toLowerCase());
+    const tech = byName.get(r.author.toLowerCase()) ?? (r.assignee ? byName.get(r.assignee.toLowerCase()) : undefined);
     if (tech) resolver.set(r.ticket_id, { name: tech.name, org_id: r.org_id, category: r.category, at: r.created_at });
   }
 
@@ -60,15 +64,24 @@ export function rankTechnicians(store: Store, ticket: Ticket, nowMs = Date.now()
       if (clientCount) reasons.push(`resolved ${plural(clientCount, "ticket")} for ${org?.name ?? "this client"} lately`);
       if (categoryCount && !similarCount) reasons.push(`knows ${ticket.category} tickets`);
       reasons.push(open ? `${open} open now` : "nothing open now");
-      return { technician, score: Math.round(score * 1000) / 1000, reasons };
+      return { technician, score: Math.round(score * 1000) / 1000, reasons, working: isWorking(technician.working_hours, nowMs) };
     })
     .sort((a, b) => b.score - a.score || a.technician.name.localeCompare(b.technician.name));
 }
 
-/** The best technician for a ticket, or null when the directory is empty. */
+/**
+ * The best technician who is working now, or null when the directory is empty. When nobody is working, the best
+ * one overall, marked off, with when they're next on.
+ */
 export function suggestTechnician(store: Store, ticket: Ticket, nowMs = Date.now()): AssigneeSuggestion | null {
-  const [best] = rankTechnicians(store, ticket, nowMs);
-  return best ? { name: best.technician.name, reasons: best.reasons, at: new Date(nowMs).toISOString() } : null;
+  const ranked = rankTechnicians(store, ticket, nowMs);
+  const at = new Date(nowMs).toISOString();
+  const best = ranked.find((c) => c.working);
+  if (best) return { name: best.technician.name, reasons: best.reasons, at };
+  const [first] = ranked;
+  if (!first) return null;
+  const next = nextOn(first.technician.working_hours, nowMs);
+  return { name: first.technician.name, reasons: [`nobody is working now${next ? `; ${first.technician.name} is next on ${next}` : ""}`, ...first.reasons], at, offNow: true };
 }
 
 const AUTOMATIC = new Set(["haley", "scheduler", "system"]);
@@ -82,7 +95,8 @@ export function onEscalated(store: Store, ticket: Ticket, from: TicketStatus, ac
   const suggestion = suggestTechnician(store, ticket, nowMs);
   store.setSuggestedAssignee(ticket.id, suggestion);
   if (!suggestion) return;
-  if (store.getHelpdeskSettings().autoAssignOnEscalation === "suggested") {
+  // Never auto-assign to someone who is off; the suggestion still shows.
+  if (store.getHelpdeskSettings().autoAssignOnEscalation === "suggested" && !suggestion.offNow) {
     store.updateTicket(ticket.id, { assignee: suggestion.name }, "haley");
     store.audit({ orgId: ticket.org_id, actor: "haley", action: "ticket.auto_assigned", target: ticket.id, detail: { to: suggestion.name, reasons: suggestion.reasons } });
   }

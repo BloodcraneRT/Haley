@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Store } from "../store.js";
+import { WEEKDAYS } from "../types.js";
+import { isTime, isTimeZone, isWorking, nextOn } from "../workingHours.js";
 
 class TechnicianRouteError extends Error {
   constructor(
@@ -15,6 +17,15 @@ const name = z.string().trim().min(1).max(80);
 const email = z.string().trim().toLowerCase().email().max(254);
 const slackUserId = z.string().trim().regex(/^[UW][A-Z0-9]{2,20}$/, "Slack user ids look like U0123ABCD");
 const teamsAadId = z.string().trim().uuid("Teams ids are Entra object ids (a GUID)");
+
+const range = z.tuple([z.string().refine(isTime, "Times are HH:MM"), z.string().refine(isTime, "Times are HH:MM")]).refine(([a, b]) => a !== b, "A range can't start and end at the same time");
+const workingHours = z.object({
+  tz: z.string().trim().refine(isTimeZone, "Unknown time zone"),
+  days: z.object(Object.fromEntries(WEEKDAYS.map((d) => [d, z.array(range).max(4).optional()])) as Record<(typeof WEEKDAYS)[number], z.ZodOptional<z.ZodArray<typeof range>>>),
+  awayUntil: z.iso.date().nullable().default(null),
+});
+// PSA member/resource ids per connection; an empty value removes one.
+const psaRefs = z.record(z.string().min(1).max(64), z.string().trim().max(64));
 
 const SUGGESTION_DAYS = 90;
 const isUnique = (err: unknown) => err instanceof Error && /UNIQUE constraint failed: technicians\.(\w+)/.exec(err.message)?.[1];
@@ -54,7 +65,14 @@ export function registerTechnicianRoutes(app: FastifyInstance, store: Store, act
     return [...names.values()].sort((a, b) => a.localeCompare(b));
   };
 
-  app.get("/api/technicians", async () => ({ technicians: store.listTechnicians(), suggestions: suggestions() }));
+  app.get("/api/technicians", async () => {
+    const now = Date.now();
+    const technicians = store.listTechnicians().map((t) => {
+      const working = isWorking(t.working_hours, now);
+      return { ...t, working, nextOn: working ? null : nextOn(t.working_hours, now) };
+    });
+    return { technicians, suggestions: suggestions() };
+  });
 
   app.post("/api/technicians", async (req) => {
     const input = parse(z.object({ name, email: email.optional() }), req.body);
@@ -82,9 +100,19 @@ export function registerTechnicianRoutes(app: FastifyInstance, store: Store, act
         slackUserId: slackUserId.nullable().optional(),
         teamsAadId: teamsAadId.nullable().optional(),
         active: z.boolean().optional(),
+        workingHours: workingHours.nullable().optional(),
+        psaRefs: psaRefs.optional(),
       }),
       req.body,
     );
+    if (patch.psaRefs) {
+      for (const id of Object.keys(patch.psaRefs)) if (!store.getPsaConnection(id)) throw new TechnicianRouteError(400, `Unknown PSA connection ${id}`);
+      patch.psaRefs = Object.fromEntries(Object.entries({ ...current.psa_refs, ...patch.psaRefs }).filter(([, v]) => v !== ""));
+      for (const [connectionId, ref] of Object.entries(patch.psaRefs)) {
+        const other = store.listTechnicians().find((t) => t.id !== current.id && t.psa_refs[connectionId] === ref);
+        if (other) throw new TechnicianRouteError(409, `${other.name} already has that PSA id.`);
+      }
+    }
     let updated;
     try {
       updated = store.updateTechnician(current.id, patch)!;

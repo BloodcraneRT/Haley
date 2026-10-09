@@ -145,6 +145,10 @@ export interface AssigneeSuggestion {
   name: string;
   reasons: string[];
   at?: string;
+  /** Nobody suitable was working; this technician is off now. */
+  offNow?: boolean;
+  /** In the on-demand list: within their working hours now. */
+  working?: boolean;
 }
 
 export interface TicketFlags {
@@ -466,16 +470,34 @@ export interface ApprovalSettingsInput {
 }
 
 /** server/src/types.ts Technician */
+export const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+
+/** Weekly "HH:MM" ranges in the technician's time zone (an end before the start runs past midnight), and time away. */
+export interface WorkingHours {
+  tz: string;
+  days: Partial<Record<Weekday, Array<[string, string]>>>;
+  /** Last day away, inclusive (their local date). */
+  awayUntil: string | null;
+}
+
 export interface Technician {
   id: string;
   name: string;
   email: string | null;
   slack_user_id: string | null;
   teams_aad_id: string | null;
+  /** PSA member or resource id per PSA connection id. */
   psa_refs: Record<string, string>;
+  /** Null: always available. */
+  working_hours: WorkingHours | null;
   active: boolean;
   created_at: string;
   updated_at: string;
+  /** Within their hours right now (from the list endpoint). */
+  working?: boolean;
+  /** When they're next on, in their own time ("Mon 08:00"), when they're off. */
+  nextOn?: string | null;
 }
 
 export interface UsageClientRow {
@@ -770,6 +792,10 @@ export interface PsaOptions {
   requesterAssurance: "none" | "email";
   /** Time entries for Haley's work: each run's working time, or the minutes-per-ticket estimate once per resolved ticket. */
   timeEntries?: "off" | "actual" | "estimate";
+  /** Send assignments made in Haley back to the PSA as the ticket's owner. */
+  syncOwner?: boolean;
+  /** Import files attached to synced tickets in the PSA. */
+  importAttachments?: boolean;
 }
 
 export interface PsaConnection {
@@ -810,6 +836,8 @@ export interface SyncResult {
   statusUpdates: number;
   timeLogged?: number;
   unmappedCustomers: string[];
+  /** Technicians assigned in Haley who have no id in this PSA, so the assignment wasn't sent. */
+  ownersNotSent?: string[];
   errors: string[];
 }
 
@@ -1286,7 +1314,10 @@ export const api = {
   deleteMemory: (id: string) => del<{ ok: true }>(`/api/memories/${enc(id)}`),
   technicians: () => get<{ technicians: Technician[]; suggestions: string[] }>("/api/technicians"),
   addTechnician: (input: { name: string; email?: string }) => post<Technician>("/api/technicians", input),
-  updateTechnician: (id: string, input: { name?: string; email?: string | null; slackUserId?: string | null; teamsAadId?: string | null; active?: boolean }) =>
+  updateTechnician: (
+    id: string,
+    input: { name?: string; email?: string | null; slackUserId?: string | null; teamsAadId?: string | null; active?: boolean; workingHours?: WorkingHours | null; psaRefs?: Record<string, string> },
+  ) =>
     patch<Technician>(`/api/technicians/${enc(id)}`, input),
   deleteTechnician: (id: string) => del<Technician>(`/api/technicians/${enc(id)}`),
 

@@ -30,7 +30,7 @@ async function change(node: HTMLInputElement, value: string) {
 }
 
 const dana: Technician = {
-  id: "tech_dana", name: "Dana Reyes", email: "dana@msp.example", slack_user_id: "U0DANA1", teams_aad_id: null, psa_refs: {}, active: true,
+  id: "tech_dana", name: "Dana Reyes", email: "dana@msp.example", slack_user_id: "U0DANA1", teams_aad_id: null, psa_refs: {}, working_hours: null, active: true,
   created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z",
 };
 
@@ -73,5 +73,22 @@ describe("technician directory page", () => {
     await change(node.querySelector<HTMLInputElement>("#tech-slack")!, "");
     await act(async () => { node.querySelector("#technician-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
     expect(update).toHaveBeenCalledWith("tech_dana", { name: "Dana R.", email: "dana@msp.example", slackUserId: null, teamsAadId: null });
+  });
+
+  it("sets working hours and a PSA id, sending only what changed, and shows who is off", async () => {
+    vi.spyOn(api, "technicians").mockResolvedValue({ technicians: [{ ...dana, working: false, nextOn: "Mon 08:00" }], suggestions: [] });
+    vi.spyOn(api, "psaConnections").mockResolvedValue([{ id: "psa_1", name: "ConnectWise" } as never]);
+    const update = vi.spyOn(api, "updateTechnician").mockResolvedValue(dana);
+    const { node } = await renderView(() => <MemoryRouter><TechniciansPage /></MemoryRouter>);
+    expect(node.querySelector(".technicians-table tbody tr")!.textContent).toContain("Off now · back Mon 08:00");
+    await click(node.querySelector('[aria-label="Edit Dana Reyes"]')!);
+    await click(node.querySelector('[role="switch"][aria-label="Set working hours"]')!);
+    await change(node.querySelector<HTMLInputElement>("#hours-tz")!, "America/Chicago");
+    await change(node.querySelector<HTMLInputElement>("#tech-psa-psa_1")!, " 31 ");
+    await act(async () => { node.querySelector("#technician-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    const input = update.mock.calls[0][1];
+    expect(input.psaRefs).toEqual({ psa_1: "31" });
+    expect(input.workingHours).toMatchObject({ tz: "America/Chicago", awayUntil: null, days: { mon: [["09:00", "17:00"]], fri: [["09:00", "17:00"]] } });
+    expect(input.workingHours!.days.sat).toBeUndefined();
   });
 });
