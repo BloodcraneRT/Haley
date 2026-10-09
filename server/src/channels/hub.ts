@@ -1,4 +1,5 @@
 import type { Store } from "../store.js";
+import { fixDidNotHold } from "../frustration.js";
 import { ASSURANCE_RANK, effectiveAssurance, type Assurance, type Run, type Ticket, type TicketChannel } from "../types.js";
 
 /** One-time credential links expire after this long. */
@@ -151,6 +152,30 @@ export class ChannelHub implements ReplyDelivery {
     });
     // PSA comments still belong on the technician timeline, but must not enter owner-authorized runs.
     if (!trusted) return { ticketId: ticket.id, ticketNumber: ticket.number, created: false, runId: null };
+    // A frustrated requester saying Haley's fix didn't hold goes to a person rather than a second attempt.
+    const flagged = this.store.getTicket(ticket.id);
+    if (
+      fromRequester &&
+      flagged?.flags.frustrated &&
+      ticket.assignee === "haley" &&
+      ticket.status !== "escalated" &&
+      !org?.settings.paused &&
+      !this.runs.activeRun(ticket.id) &&
+      fixDidNotHold(msg.text, this.store.listTicketEvents(ticket.id))
+    ) {
+      this.store.addTicketEvent(
+        ticket.id,
+        "escalation",
+        "haley",
+        `Handed to a technician: the requester seems frustrated (${flagged.flags.frustrated.reason}) and says Haley's earlier fix didn't hold.`,
+        { reason: "frustrated" },
+      );
+      this.store.updateTicket(ticket.id, { status: "escalated", assignee: "unassigned" }, "haley");
+      this.store.audit({ orgId: ticket.org_id, actor: "haley", action: "ticket.escalated", target: ticket.id, detail: { reason: "frustrated" } });
+      const text = "I'm sorry this is still happening. I've passed it to one of our technicians, who will pick it up with you here.";
+      void this.deliverReply(this.store.getTicket(ticket.id)!, text).then((delivery) => this.store.addTicketEvent(ticket.id, "reply", "haley", text, { auto: true, delivery }));
+      return { ticketId: ticket.id, ticketNumber: ticket.number, created: false, runId: null };
+    }
     if (["resolved", "closed", "waiting_on_customer"].includes(ticket.status) && ticket.assignee === "haley") {
       this.store.setTicketStatus(ticket.id, "in_progress", "haley");
     }

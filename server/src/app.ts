@@ -43,6 +43,11 @@ import { registerHooks } from "./routes/hooks.js";
 import { registerM365Onboarding } from "./routes/m365Onboarding.js";
 import { registerMemoryRoutes } from "./routes/memories.js";
 import { registerTechnicianRoutes } from "./routes/technicians.js";
+import { qaChecks, qaReview } from "./qa.js";
+import { policyRuleInput } from "./policyRuleSchema.js";
+import { FrustrationDetector } from "./frustration.js";
+import { onEscalated, rankTechnicians } from "./dispatch.js";
+import { editRatio, LessonService } from "./lessons.js";
 import { registerApprovalRoutes } from "./routes/approvals.js";
 import { ApprovalNotifier } from "./approvals/notify.js";
 import { SlackApprovals } from "./approvals/slack.js";
@@ -104,6 +109,10 @@ export interface HaleyApp {
   syncroWebhook: Debouncer;
   /** Posts and updates approval cards in Slack and Teams (exposed for tests to await). */
   approvalNotifier: ApprovalNotifier;
+  /** Flags VIP and frustrated requesters (exposed for tests to await the optional model check). */
+  frustration: FrustrationDetector;
+  /** Suggests lessons from technicians' corrections (exposed for tests to await). */
+  lessons: LessonService;
 }
 
 export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, psaFactory }: AppDeps): Promise<HaleyApp> {
@@ -171,6 +180,35 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   const agent = new AgentService(store, llmFor, config, connectorsFor, hub);
   hub.attach(agent);
   agent.recoverInterrupted();
+  // Needs-care flags: VIP requesters and frustrated ones (free signals, optionally confirmed by the model).
+  const frustration = new FrustrationDetector(store, (orgId) => {
+    try {
+      return llmFor(orgId);
+    } catch {
+      return null;
+    }
+  });
+  store.onTicketCreated((ticket) => frustration.onTicketCreated(ticket));
+  store.onTicketEvent((event) => frustration.onEvent(event));
+
+  // Lessons: technicians' corrections become suggested client notes or policy rules (accepted by a technician).
+  const lessons = new LessonService(
+    store,
+    agent,
+    (orgId) => {
+      try {
+        return llmFor(orgId);
+      } catch {
+        return null;
+      }
+    },
+    (orgId) => connectorsFor(orgId).flatMap((c) => c.tools.filter((t) => t.risk !== "read").map((t) => t.name)),
+  );
+  agent.attachApprovalEvents(lessons);
+
+  // Suggest (or assign) a technician whenever Haley escalates; registered before the notices so they can name them.
+  store.onTicketStatusChanged((ticket, from, who) => onEscalated(store, ticket, from, who));
+
   // Approval cards and escalation notices in the MSP's own Slack (and Teams).
   const slackApprovals = new SlackApprovals(store, fetchImpl);
   const teamsApprovals = teams ? new TeamsApprovals(store, teams, ch.teamsTenantId) : null;
@@ -308,20 +346,6 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   // --------------------------------------------------------------- orgs
 
   const emails = z.array(z.string().trim().toLowerCase().email());
-  const patterns = z.array(z.string().trim().toLowerCase().min(1).max(200)).max(50).default([]);
-  const policyRuleInput = z.object({
-    id: z.string().trim().min(1).max(64).optional(),
-    name: z.string().trim().min(1).max(120),
-    enabled: z.boolean().default(true),
-    tools: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
-    risks: z.array(z.enum(["write", "destructive"])).default([]),
-    targets: patterns,
-    departments: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
-    requesters: patterns,
-    effect: z.enum(["allow", "approve", "deny"]),
-    approvers: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
-    minAssurance: z.enum(["email", "chat", "directory", "mfa", "technician"]).default("directory"),
-  });
   const settingsInput = z
     .object({
       emailDomains: z.array(z.string().trim().toLowerCase().min(3)),
@@ -337,6 +361,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
         z.object({ responseMinutes: z.number().int().min(1).max(100_000), resolutionMinutes: z.number().int().min(1).max(100_000) }),
       ),
       policyRules: z.array(policyRuleInput).max(100),
+      vipRequesters: emails.max(200),
       approvalSlackChannel: z.union([z.literal(""), z.string().trim().regex(/^[CG][A-Z0-9]{2,20}$/, "Slack channel ids look like C0123ABCD")]),
     })
     .partial();
@@ -499,7 +524,10 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   // ------------------------------------------------------------ tickets
 
   app.get("/api/tickets", async (req) => {
-    const q = query(z.object({ orgId: z.string().optional(), status: z.string().optional(), search: z.string().optional() }), req);
+    const q = query(
+      z.object({ orgId: z.string().optional(), status: z.string().optional(), search: z.string().optional(), flag: z.enum(["frustrated", "vip"]).optional() }),
+      req,
+    );
     const orgs = new Map(store.listOrgs().map((o) => [o.id, o]));
     return store.listTickets(q).map((t) => ({ ...withSla(t, orgs.get(t.org_id)), org_name: orgs.get(t.org_id)?.name ?? "" }));
   });
@@ -629,7 +657,9 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     if (org?.settings.paused) throw new HttpError(409, `Haley is paused for ${org.name}.`);
     const result = await assist({ store, llm: llmFor(ticket.org_id) }, ticket, input.mode, input.instruction);
     store.audit({ orgId: ticket.org_id, actor: actor(req), action: "ticket.assist", target: ticket.id, detail: { mode: input.mode, model: result.model } });
-    return result;
+    // Drafts are kept so the reply sent from one can be compared (lessons from heavy edits).
+    const draftId = input.mode === "draft_reply" ? store.createAssistDraft({ ticketId: ticket.id, mode: input.mode, text: result.text, createdBy: actor(req) }) : null;
+    return { ...result, draftId };
   });
 
   /** Past tickets like this one (with how they were fixed) and matching knowledge base articles. */
@@ -701,12 +731,95 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
         category: z.string().optional(),
         assignee: z.string().optional(),
         title: z.string().min(1).optional(),
+        /** Why the technician is closing despite the checks before close (see /qa). */
+        qaOverride: z.string().trim().min(3).max(500).optional(),
       }),
       req,
     );
-    const ticket = store.updateTicket(req.params.id, patch as never, actor(req));
+    const { qaOverride, ...changes } = patch;
+    const current = store.getTicket(req.params.id);
+    if (!current) throw notFound("Ticket");
+    const closing = (changes.status === "resolved" || changes.status === "closed") && current.status !== changes.status;
+    if (closing) {
+      const mode = store.getHelpdeskSettings().qaBeforeClose;
+      const blocking = mode === "off" ? [] : qaChecks(current, store.listTicketEvents(current.id)).filter((i) => i.level === "warning");
+      if (mode === "require" && blocking.length && !qaOverride) {
+        throw new HttpError(409, `Before you close: ${blocking.map((i) => i.text).join(" ")} Add a reason to close anyway.`);
+      }
+      if (blocking.length && qaOverride) {
+        store.audit({ orgId: current.org_id, actor: actor(req), action: "ticket.qa_override", target: current.id, detail: { issues: blocking.map((i) => i.code), reason: qaOverride } });
+      }
+    }
+    const ticket = store.updateTicket(req.params.id, changes as never, actor(req));
     if (!ticket) throw notFound("Ticket");
+    if (changes.assignee !== undefined && changes.assignee !== current.assignee) {
+      store.audit({ orgId: current.org_id, actor: actor(req), action: "ticket.assigned", target: current.id, detail: { from: current.assignee, to: changes.assignee } });
+    }
     return ticket;
+  });
+
+  /** Looks for a lasting lesson in technicians' corrections on this ticket; suggestions wait for a technician. */
+  app.post<{ Params: { id: string } }>("/api/tickets/:id/lesson", async (req) => {
+    if (!store.getTicket(req.params.id)) throw notFound("Ticket");
+    return lessons.suggest(req.params.id, actor(req));
+  });
+
+  app.get<{ Params: { id: string } }>("/api/orgs/:id/rule-suggestions", async (req) => {
+    if (!store.getOrg(req.params.id)) throw notFound("Organization");
+    return store.listRuleSuggestions(req.params.id);
+  });
+
+  /** Adds a suggested rule (optionally as the technician edited it) to the end of the client's rules. */
+  app.post<{ Params: { id: string } }>("/api/rule-suggestions/:id/accept", async (req) => {
+    const suggestion = store.getRuleSuggestion(req.params.id);
+    if (!suggestion) throw notFound("Suggestion");
+    const { rule } = body(z.object({ rule: policyRuleInput.optional() }), req);
+    const org = store.getOrg(suggestion.org_id);
+    if (!org) throw notFound("Organization");
+    if (!store.decideRuleSuggestion(suggestion.id, "accepted", actor(req))) throw new HttpError(409, "This suggestion was already decided.");
+    const added = { ...(rule ?? suggestion.rule), id: `rule_${randomUUID().slice(0, 8)}` };
+    store.updateOrg(org.id, { settings: { policyRules: [...org.settings.policyRules, added as never] } });
+    store.audit({ orgId: org.id, actor: actor(req), action: "rule.suggestion_accepted", target: suggestion.id, detail: { rule: added.id, edited: Boolean(rule), effect: added.effect } });
+    return { rule: added };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/rule-suggestions/:id/dismiss", async (req) => {
+    const suggestion = store.getRuleSuggestion(req.params.id);
+    if (!suggestion) throw notFound("Suggestion");
+    if (!store.decideRuleSuggestion(suggestion.id, "dismissed", actor(req))) throw new HttpError(409, "This suggestion was already decided.");
+    store.audit({ orgId: suggestion.org_id, actor: actor(req), action: "rule.suggestion_dismissed", target: suggestion.id });
+    return { ok: true };
+  });
+
+  /** The best technicians for a ticket, with why (no model call). */
+  app.get<{ Params: { id: string } }>("/api/tickets/:id/assignee-suggestions", async (req) => {
+    const ticket = store.getTicket(req.params.id);
+    if (!ticket) throw notFound("Ticket");
+    return rankTechnicians(store, ticket)
+      .slice(0, 3)
+      .map((c) => ({ name: c.technician.name, score: c.score, reasons: c.reasons }));
+  });
+
+  /** A technician clears a needs-care flag (e.g. the requester is fine now). */
+  app.delete<{ Params: { id: string; flag: string } }>("/api/tickets/:id/flags/:flag", async (req) => {
+    const ticket = store.getTicket(req.params.id);
+    if (!ticket) throw notFound("Ticket");
+    if (req.params.flag !== "frustrated" && req.params.flag !== "vip") throw new HttpError(400, "Unknown flag");
+    const updated = store.setTicketFlags(ticket.id, { [req.params.flag]: null })!;
+    store.audit({ orgId: ticket.org_id, actor: actor(req), action: "ticket.flag_cleared", target: ticket.id, detail: { flag: req.params.flag } });
+    return updated;
+  });
+
+  /** Checks before a technician closes a ticket: is the requester answered, is the fix written down, was a promise kept. */
+  app.post<{ Params: { id: string } }>("/api/tickets/:id/qa", async (req) => {
+    const ticket = store.getTicket(req.params.id);
+    if (!ticket) throw notFound("Ticket");
+    const settings = store.getHelpdeskSettings();
+    if (settings.qaBeforeClose === "off") return { mode: "off", issues: [], modelChecked: false };
+    const org = store.getOrg(ticket.org_id);
+    const useModel = settings.qaModelCheck && !org?.settings.paused;
+    const result = await qaReview({ store, llm: useModel ? llmFor(ticket.org_id) : null }, ticket, useModel);
+    return { mode: settings.qaBeforeClose, ...result };
   });
 
   app.post<{ Params: { id: string } }>("/api/tickets/:id/comments", async (req) => {
@@ -718,6 +831,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
         kind: z.enum(["comment", "reply"]).default("comment"),
         author: z.string().optional(),
         runAgent: z.boolean().default(false),
+        /** The copilot draft this reply started from, if any. */
+        draftId: z.string().max(64).optional(),
       }),
       req,
     );
@@ -725,7 +840,9 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     const active = input.runAgent ? agent.activeRun(ticket.id) : undefined;
     if (active) throw new RunConflictError(`Haley is already working this ticket (run ${active.id}).`);
     if (input.runAgent && store.getOrg(ticket.org_id)?.settings.paused) throw new RunConflictError("Haley is paused for this client.");
-    const event = store.addTicketEvent(ticket.id, input.kind, input.author || actor(req), input.body);
+    const draft = input.draftId && input.kind === "reply" ? store.getAssistDraft(input.draftId) : null;
+    const draftMeta = draft && draft.ticket_id === ticket.id ? { draftId: draft.id, draftEditRatio: editRatio(draft.text, input.body) } : {};
+    const event = store.addTicketEvent(ticket.id, input.kind, input.author || actor(req), input.body, draftMeta);
     if (ticket.status === "waiting_on_customer" && input.kind === "comment" && input.author) {
       store.setTicketStatus(ticket.id, "in_progress", "system");
     }
@@ -1172,6 +1289,25 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     return next;
   });
 
+  const helpdeskSettings = z
+    .object({
+      qaBeforeClose: z.enum(["off", "warn", "require"]),
+      qaModelCheck: z.boolean(),
+      sentimentModelCheck: z.boolean(),
+      autoAssignOnEscalation: z.enum(["off", "suggested"]),
+    })
+    .partial();
+
+  app.get("/api/helpdesk/settings", async () => store.getHelpdeskSettings());
+
+  app.patch("/api/helpdesk/settings", async (req) => {
+    const patch = body(helpdeskSettings, req);
+    const before = store.getHelpdeskSettings();
+    const next = store.setHelpdeskSettings(patch);
+    store.audit({ actor: actor(req), action: "helpdesk.settings_changed", target: "helpdesk", detail: { from: before, to: next } });
+    return next;
+  });
+
   // ---------------------------------------------------------- approvals
 
   app.get("/api/approvals", async () => {
@@ -1287,7 +1423,9 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
 
   // Let approval posts already in flight finish before the database closes.
   app.addHook("onClose", async () => approvalNotifier.idle());
+  app.addHook("onClose", async () => frustration.idle());
+  app.addHook("onClose", async () => lessons.idle());
   app.addHook("onClose", async () => db.close());
   app.addHook("onClose", async () => scheduler.stop());
-  return { app, store, agent, scheduler, psa, syncroWebhook, approvalNotifier };
+  return { app, store, agent, scheduler, psa, syncroWebhook, approvalNotifier, frustration, lessons };
 }

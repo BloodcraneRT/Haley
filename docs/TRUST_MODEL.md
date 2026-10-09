@@ -153,6 +153,14 @@ Ticket text, emails and chat messages come from end users. Haley treats them as 
 - **Untrusted text is escaped:** ticket titles, requester names and Haley's text. In Slack that stops `@channel` mentions and forged links; in Teams it breaks Markdown link syntax.
 - **Ask for changes.** This sends a change back with a technician's note. Haley sees the note as the failed tool's result, so she can adjust and propose again; she can't treat it as approval.
 
+## Learning from technicians, without changing policy on its own
+
+- **Lessons are suggestions.** Haley can propose a client note or a policy rule from technicians' corrections: rejected or sent-back changes with a reason, heavily edited drafts, re-categorised tickets, or a requester saying a fix didn't hold. A note waits in "Waiting for review" and a rule in "Suggested by Haley". Neither is used until a technician accepts it, and a suggested rule that loosens policy is marked.
+- **Suggested rules are checked like hand-written ones.** They go through the same validation, must name tools the client actually has, and can never match every change. Hard rails can't be expressed as rules.
+- **Secrets are dropped.** Secret-looking notes are discarded, as they are for Haley's own notes.
+- **Limits.** Lesson checks are capped at 20 per client per day.
+- **Other help desk checks don't act on customer systems.** Checks before close, frustration flags and dispatch suggestions only inform technicians and Haley's tone. The one change they make on their own is handing a frustrated requester's reopened ticket to a person, and assigning an escalation when the workspace turns that on.
+
 ## Accountability
 
 - Every tool call is recorded with its input, risk, Haley's stated rationale, the policy's reason and the outcome.

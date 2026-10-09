@@ -23,6 +23,7 @@ import {
   TriangleAlert,
   Undo2,
   X,
+  HeartPulse,
 } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -45,8 +46,11 @@ import {
   type TicketStatus,
   type AssistMode,
   type AssistResult,
+  type QaResult,
+  type AssigneeSuggestion,
 } from "../api";
 import { ApprovalCard } from "../components/ApprovalCard";
+import { CloseCheckModal } from "../components/CloseCheck";
 import { Avatar, displayName, isHaley } from "../components/Avatar";
 import { EmptyState, ErrorBanner, Loading, Spinner } from "../components/Feedback";
 import { Markdown } from "../components/Markdown";
@@ -115,7 +119,18 @@ export function TicketDetailPage() {
     }
   };
 
+  const [closeCheck, setCloseCheck] = useState<{ patch: TicketPatch; result: QaResult } | null>(null);
+  const [closing, setClosing] = useState(false);
+
   const patchTicket = async (patch: TicketPatch) => {
+    // Resolving or closing runs the checks first; a failed check never blocks the technician.
+    if ((patch.status === "resolved" || patch.status === "closed") && patch.status !== ticket.status && !patch.qaOverride) {
+      const result = await api.ticketQa(ticket.id).catch(() => null);
+      if (result && result.issues.length) {
+        setCloseCheck({ patch, result });
+        return;
+      }
+    }
     detail.mutate((d) => d && { ...d, ticket: { ...d.ticket, ...patch } });
     try {
       await api.updateTicket(ticket.id, patch);
@@ -149,6 +164,11 @@ export function TicketDetailPage() {
         subtitle={
           <span className="row row-wrap" style={{ gap: 8 }}>
             <TicketStatusPill status={ticket.status} />
+            {ticket.flags?.vip && (
+              <Pill tone="violet" title="VIP requester for this client">
+                VIP
+              </Pill>
+            )}
             {ticket.resolution_confirmed_at && (
               <Pill tone="green" title={`The requester confirmed the fix ${new Date(ticket.resolution_confirmed_at).toLocaleString()}`}>
                 Confirmed fixed
@@ -197,6 +217,28 @@ export function TicketDetailPage() {
       <div className="layout-main-side">
         <div className="stack" style={{ gap: 20 }}>
           {ticket.incident_id && <TicketIncidentBanner incidentId={ticket.incident_id} />}
+          {ticket.flags?.frustrated && (
+            <div className="banner banner-warn care-banner" role="status">
+              <HeartPulse className="icon-sm" aria-hidden="true" />
+              <span style={{ flex: 1 }}>
+                <strong>{ticket.requester_name || "The requester"} seems frustrated:</strong> {ticket.flags.frustrated.reason}.
+                {ticket.flags.frustrated.confirmed ? " Confirmed by the AI check." : ""}
+              </span>
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={async () => {
+                  try {
+                    await api.clearTicketFlag(ticket.id, "frustrated");
+                    void detail.reload();
+                  } catch (err) {
+                    toast(errorMessage(err), "error");
+                  }
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          )}
           {latest && <RunBanner run={latest} pendingCount={pending.length} onRunLive={() => void runHaley("live")} starting={starting === "live"} />}
           {ticket.needs_followup && (
             <div className="banner banner-info" role="status">
@@ -240,6 +282,30 @@ export function TicketDetailPage() {
           </section>
 
           <Composer ticketId={ticket.id} runActive={Boolean(active)} requester={ticket.requester_name || ticket.requester_email} onPosted={() => void detail.reload()} />
+          <CloseCheckModal
+            check={closeCheck?.result ?? null}
+            statusLabel={closeCheck?.patch.status ? TICKET_STATUS_META[closeCheck.patch.status].label : "Closed"}
+            busy={closing}
+            onClose={() => setCloseCheck(null)}
+            onReply={() => {
+              setCloseCheck(null);
+              window.setTimeout(() => document.getElementById("composer-body")?.focus(), 0);
+            }}
+            onCloseAnyway={async (reason) => {
+              if (!closeCheck) return;
+              setClosing(true);
+              try {
+                await api.updateTicket(ticket.id, { ...closeCheck.patch, ...(reason ? { qaOverride: reason } : {}) });
+                setCloseCheck(null);
+                refreshStats();
+              } catch (err) {
+                toast(errorMessage(err), "error");
+              } finally {
+                setClosing(false);
+                void detail.reload();
+              }
+            }}
+          />
         </div>
 
         <aside className="stack">
@@ -378,6 +444,11 @@ function TicketProps({ detail, onPatch }: { detail: TicketDetail; onPatch: (p: T
   const commit = (field: "category" | "assignee", value: string) => {
     if (value.trim() !== t[field]) onPatch({ [field]: value.trim() });
   };
+  // Directory names for the assignee picker (free text still works).
+  const directory = usePoll(() => api.technicians().catch(() => ({ technicians: [], suggestions: [] })), []);
+  const names = (directory.data?.technicians ?? []).filter((x) => x.active).map((x) => x.name);
+  const [options, setOptions] = useState<AssigneeSuggestion[] | null>(null);
+  const suggestion = t.suggested_assignee && t.suggested_assignee.name !== t.assignee ? t.suggested_assignee : null;
 
   return (
     <section className="card" aria-labelledby="props-title">
@@ -433,10 +504,45 @@ function TicketProps({ detail, onPatch }: { detail: TicketDetail; onPatch: (p: T
               className="input input-sm"
               value={assignee}
               placeholder="Unassigned"
+              list="technician-names"
               onChange={(e) => setAssignee(e.target.value)}
               onBlur={() => commit("assignee", assignee)}
               onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
             />
+            <datalist id="technician-names">
+              {names.map((n) => (
+                <option key={n} value={n} />
+              ))}
+            </datalist>
+            {suggestion ? (
+              <div className="assignee-suggestion">
+                <span>
+                  Suggested: <strong>{suggestion.name}</strong> <span className="muted">({suggestion.reasons.join(", ")})</span>
+                </span>
+                <button className="btn btn-sm" onClick={() => onPatch({ assignee: suggestion.name })}>
+                  Assign
+                </button>
+              </div>
+            ) : (
+              names.length > 0 &&
+              !options && (
+                <button className="btn btn-ghost btn-sm" onClick={() => void api.assigneeSuggestions(t.id).then(setOptions).catch(() => setOptions([]))}>
+                  Who should take this?
+                </button>
+              )
+            )}
+            {options && !suggestion && (
+              <ul className="assignee-options">
+                {options.map((o) => (
+                  <li key={o.name}>
+                    <button className="btn btn-sm" onClick={() => onPatch({ assignee: o.name })} disabled={o.name === t.assignee}>
+                      {o.name}
+                    </button>{" "}
+                    <span className="muted">{o.reasons.join(", ")}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </dd>
           <dt>Client</dt>
           <dd className="truncate">
@@ -781,6 +887,23 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
   const [busy, setBusy] = useState(false);
   const [assisting, setAssisting] = useState<AssistMode | null>(null);
   const [advice, setAdvice] = useState<AssistResult | null>(null);
+  /** The copilot draft the reply box started from, sent with the reply (lessons compare the two). */
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [learning, setLearning] = useState(false);
+
+  const suggestLesson = async () => {
+    setLearning(true);
+    try {
+      const result = await api.suggestLesson(ticketId);
+      if (result.kind === "note") toast(`Haley suggested a note for this client: “${result.memory.content}” Confirm it on the client page.`);
+      else if (result.kind === "rule") toast(`Haley suggested a policy rule, "${result.suggestion.rule.name}". Review it on the client page.`);
+      else toast(result.reason, "info");
+    } catch (err) {
+      toast(errorMessage(err), "error");
+    } finally {
+      setLearning(false);
+    }
+  };
 
   /** The copilot: a draft fills the reply box (anything typed there is used as guidance); other answers show above it. */
   const askHaley = async (mode: AssistMode) => {
@@ -791,6 +914,7 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
       if (mode === "draft_reply") {
         setKind("reply");
         setBody(result.text);
+        setDraftId(result.draftId ?? null);
         toast("Draft ready. Review and edit it before sending.");
       } else {
         setAdvice(result);
@@ -808,7 +932,8 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
     setBusy(true);
     const wantRun = runAgent && !runActive;
     try {
-      const res = await api.addComment(ticketId, { body: body.trim(), kind, runAgent: wantRun });
+      const res = await api.addComment(ticketId, { body: body.trim(), kind, runAgent: wantRun, ...(kind === "reply" && draftId ? { draftId } : {}) });
+      setDraftId(null);
       toast(res.runId ? "Posted. Haley is picking it up." : kind === "reply" ? "Reply posted." : "Note added.");
       setBody("");
       setRunAgent(false);
@@ -886,6 +1011,17 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
             {label}
           </button>
         ))}
+        <span className="spacer" />
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          title="Turn the corrections on this ticket (rejected or sent-back changes, edited drafts) into a note or rule for this client, for you to review"
+          onClick={() => void suggestLesson()}
+          disabled={learning}
+        >
+          {learning ? <Spinner /> : null}
+          Suggest a lesson
+        </button>
       </div>
       <label htmlFor="composer-body" className="sr-only">
         {kind === "comment" ? "Internal note" : "Reply"}

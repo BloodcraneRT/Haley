@@ -99,6 +99,8 @@ export interface OrgSettings {
   policyRules: PolicyRule[];
   /** Slack channel id (in the MSP's own workspace) for this client's approval cards; empty uses the workspace default. */
   approvalSlackChannel: string;
+  /** Requesters (emails) whose tickets get a priority bump and extra care. */
+  vipRequesters: string[];
 }
 
 export type PolicyEffect = "allow" | "approve" | "deny";
@@ -145,6 +147,7 @@ export const DEFAULT_ORG_SETTINGS: OrgSettings = {
   modelProfileId: "",
   policyRules: [],
   approvalSlackChannel: "",
+  vipRequesters: [],
   sla: {
     urgent: { responseMinutes: 15, resolutionMinutes: 240 },
     high: { responseMinutes: 60, resolutionMinutes: 480 },
@@ -172,6 +175,30 @@ export interface Integration {
   status: "unknown" | "connected" | "error";
   status_detail: string;
   created_at: string;
+}
+
+/** A policy rule Haley suggested from a technician's feedback; it applies only once a technician accepts it. */
+export interface RuleSuggestion {
+  id: string;
+  org_id: string;
+  rule: Omit<PolicyRule, "id">;
+  why: string;
+  ticket_id: string | null;
+  run_id: string | null;
+  status: "pending" | "accepted" | "dismissed";
+  decided_by: string | null;
+  created_at: string;
+}
+
+export interface AssigneeSuggestion {
+  name: string;
+  reasons: string[];
+  at: string;
+}
+
+export interface TicketFlags {
+  frustrated?: { reason: string; at: string; confirmed: boolean };
+  vip?: boolean;
 }
 
 export interface Ticket {
@@ -207,6 +234,10 @@ export interface Ticket {
   resolution_confirmed_at: string | null;
   /** The incident (shared problem) this ticket is part of. */
   incident_id: string | null;
+  /** Needs-care markers: a frustrated requester (why, and whether an AI check confirmed it) and VIP requesters. */
+  flags: TicketFlags;
+  /** The technician suggested when Haley last escalated, with why. */
+  suggested_assignee: AssigneeSuggestion | null;
   created_at: string;
   updated_at: string;
 }
@@ -320,7 +351,8 @@ export interface ClientMemory {
   org_id: string;
   content: string;
   status: "active" | "pending";
-  source: "agent" | "technician";
+  /** agent: Haley noted it while working; lesson: suggested from a technician's feedback; technician: typed by one. */
+  source: "agent" | "technician" | "lesson";
   run_id: string | null;
   ticket_id: string | null;
   created_by: string;
@@ -380,6 +412,28 @@ export const DEFAULT_APPROVAL_SETTINGS: ApprovalSettings = {
   chatApprovalMaxRisk: "destructive",
   escalationNotices: true,
 };
+
+/** Workspace-wide help desk behaviour: checks before closing, frustration detection and dispatch. */
+export interface HelpdeskSettings {
+  /** Before a technician closes a ticket: no check, show what's missing, or require a reason to close anyway. */
+  qaBeforeClose: "off" | "warn" | "require";
+  /** Also ask the AI model whether the resolution note explains the fix and the last reply answers the requester. */
+  qaModelCheck: boolean;
+  /** Confirm likely frustration with one short model call (only after the free heuristics flag a message). */
+  sentimentModelCheck: boolean;
+  /** When Haley escalates: only suggest a technician, or assign the suggested one. */
+  autoAssignOnEscalation: "off" | "suggested";
+}
+
+export const DEFAULT_HELPDESK_SETTINGS: HelpdeskSettings = {
+  qaBeforeClose: "warn",
+  qaModelCheck: false,
+  sentimentModelCheck: false,
+  autoAssignOnEscalation: "off",
+};
+
+/** What a model call was for, for billing and reporting. */
+export type UsagePurpose = "run" | "assist" | "qa" | "sentiment" | "lesson";
 
 /** Workspace-wide billing and reporting settings. */
 export interface BillingSettings {

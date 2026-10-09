@@ -1,4 +1,4 @@
-import { Plus, Search, Sparkles, Ticket as TicketIcon, TimerOff } from "lucide-react";
+import { HeartPulse, Plus, Search, Sparkles, Ticket as TicketIcon, TimerOff } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, errorMessage, TICKET_PRIORITIES, TICKET_STATUSES, type OrgSummary, type TicketPriority } from "../api";
@@ -7,7 +7,7 @@ import { Modal } from "../components/Modal";
 import { OrgSelect } from "../components/OrgSelect";
 import { OpenIncidentsBanner } from "../components/Incidents";
 import { PageHeader } from "../components/PageHeader";
-import { ChannelBadge, IdentityBadge, Priority, psaRef, psaShortRef, SlaIndicator, TicketStatusPill } from "../components/Pill";
+import { CareBadges, ChannelBadge, IdentityBadge, Priority, psaRef, psaShortRef, SlaIndicator, TicketStatusPill } from "../components/Pill";
 import { RelativeTime } from "../components/RelativeTime";
 import { usePoll } from "../hooks/usePoll";
 import { useDebouncedQuery } from "../hooks/useDebouncedQuery";
@@ -21,12 +21,13 @@ export function TicketsPage() {
   const status = params.get("status") ?? "open";
   const q = params.get("q") ?? "";
   const slaBreached = params.get("sla") === "breached";
+  const needsCare = params.get("care") === "1";
   const creating = params.get("new") === "1";
 
   const orgs = usePoll(() => api.orgs(), []);
   const tickets = usePoll(
-    () => api.tickets({ orgId: orgId || undefined, status: status === "all" ? undefined : status, search: q || undefined }),
-    [orgId, status, q],
+    () => api.tickets({ orgId: orgId || undefined, status: status === "all" ? undefined : status, search: q || undefined, flag: needsCare ? "frustrated" : undefined }),
+    [orgId, status, q, needsCare],
     10_000,
   );
 
@@ -42,7 +43,7 @@ export function TicketsPage() {
 
   const all = tickets.data ?? [];
   const list = slaBreached ? all.filter((t) => t.sla && (t.sla.response === "breached" || t.sla.resolution === "breached")) : all;
-  const filtered = Boolean(orgId || q || status !== "open" || slaBreached);
+  const filtered = Boolean(orgId || q || status !== "open" || slaBreached || needsCare);
   const noOrgs = orgs.data?.length === 0;
 
   return (
@@ -95,6 +96,15 @@ export function TicketsPage() {
           title="Only tickets past their response or resolution target"
         >
           <TimerOff className="icon-sm" aria-hidden="true" /> SLA breached
+        </button>
+        <button
+          type="button"
+          className={`btn btn-sm toggle-btn ${needsCare ? "is-on" : ""}`}
+          aria-pressed={needsCare}
+          onClick={() => update("care", needsCare ? null : "1")}
+          title="Only tickets where the requester seems frustrated"
+        >
+          <HeartPulse className="icon-sm" aria-hidden="true" /> Needs care
         </button>
         {filtered && (
           <button
@@ -201,6 +211,7 @@ export function TicketsPage() {
                             {psaShortRef(t)}
                           </span>
                         )}
+                        <CareBadges ticket={t} />
                       </div>
                     </td>
                     <td className="hide-sm nowrap secondary">{t.org_name}</td>

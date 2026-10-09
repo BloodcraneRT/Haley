@@ -30,9 +30,21 @@ import type {
   TicketPriority,
   TicketChannel,
   TicketStatus,
+  TicketFlags,
+  AssigneeSuggestion,
+  RuleSuggestion,
   Technician,
 } from "./types.js";
-import { DEFAULT_APPROVAL_SETTINGS, DEFAULT_BILLING_SETTINGS, DEFAULT_ORG_SETTINGS, type ApprovalSettings, type BillingSettings } from "./types.js";
+import {
+  DEFAULT_APPROVAL_SETTINGS,
+  DEFAULT_BILLING_SETTINGS,
+  DEFAULT_HELPDESK_SETTINGS,
+  DEFAULT_ORG_SETTINGS,
+  type ApprovalSettings,
+  type BillingSettings,
+  type HelpdeskSettings,
+  type UsagePurpose,
+} from "./types.js";
 import type { ModelProfile } from "./ai/providers.js";
 import { DEFAULT_PSA_OPTIONS, type PsaConnection, type PsaKind, type PsaOptions, type TicketLink } from "./psa/types.js";
 
@@ -66,6 +78,8 @@ export interface TicketFilter {
   orgId?: string;
   status?: string;
   search?: string;
+  /** Only tickets with this flag set ("Needs care"). */
+  flag?: "frustrated" | "vip";
   limit?: number;
 }
 
@@ -258,6 +272,8 @@ export class Store {
         mfa_method: "",
         resolution_confirmed_at: null,
         incident_id: null,
+        flags: {},
+        suggested_assignee: null,
         created_at: ts,
         updated_at: ts,
       };
@@ -306,6 +322,9 @@ export class Store {
       where.push("status = ?");
       args.push(filter.status);
     }
+    if (filter.flag) {
+      where.push(`json_extract(flags, '$.${filter.flag === "vip" ? "vip" : "frustrated"}') IS NOT NULL`);
+    }
     if (filter.search) {
       where.push("(title LIKE ? OR description LIKE ? OR requester_name LIKE ? OR CAST(number AS TEXT) = ?)");
       const like = `%${filter.search}%`;
@@ -320,13 +339,19 @@ export class Store {
 
   // ------------------------------------------------------------ incidents
 
-  /** Called after every new ticket (incident detection). Listener errors never fail ticket creation. */
   private readonly statusListeners: Array<(ticket: Ticket, from: TicketStatus, actor: string) => void> = [];
   /** Called after any ticket status change, with the updated ticket. Listeners must not throw into the caller. */
   onTicketStatusChanged(listener: (ticket: Ticket, from: TicketStatus, actor: string) => void): void {
     this.statusListeners.push(listener);
   }
 
+  private readonly eventListeners: Array<(event: TicketEvent) => void> = [];
+  /** Called after every ticket event is recorded (frustration detection). Listener errors are ignored. */
+  onTicketEvent(listener: (event: TicketEvent) => void): void {
+    this.eventListeners.push(listener);
+  }
+
+  /** Called after every new ticket (incident detection). Listener errors never fail ticket creation. */
   private readonly ticketCreatedListeners: Array<(ticket: Ticket) => void> = [];
   onTicketCreated(listener: (ticket: Ticket) => void): void {
     this.ticketCreatedListeners.push(listener);
@@ -469,6 +494,8 @@ export class Store {
     return {
       ...(row as unknown as Ticket),
       channel_ref: parse(row.channel_ref, {}),
+      flags: parse<TicketFlags>(row.flags, {}),
+      suggested_assignee: parse<AssigneeSuggestion | null>(row.suggested_assignee, null),
       needs_followup: Boolean(row.needs_followup),
       sla_escalated: Boolean(row.sla_escalated),
     };
@@ -489,6 +516,40 @@ export class Store {
         .prepare("SELECT * FROM tickets WHERE status = 'resolved' AND assignee = 'haley' AND resolved_at IS NOT NULL AND resolved_at < ? ORDER BY resolved_at LIMIT 1000")
         .all(before) as Row[]
     ).map((r) => this.toTicket(r));
+  }
+
+  /** Sets or clears ticket flags (null clears one). Doesn't touch updated_at: flags aren't ticket activity. */
+  setTicketFlags(id: string, patch: { [K in keyof TicketFlags]?: TicketFlags[K] | null }): Ticket | null {
+    const ticket = this.getTicket(id);
+    if (!ticket) return null;
+    const next: Record<string, unknown> = { ...ticket.flags };
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null || value === undefined || value === false) delete next[key];
+      else next[key] = value;
+    }
+    this.db.prepare("UPDATE tickets SET flags = ? WHERE id = ?").run(json(next), id);
+    return this.getTicket(id);
+  }
+
+  setSuggestedAssignee(id: string, suggestion: AssigneeSuggestion | null): void {
+    this.db.prepare("UPDATE tickets SET suggested_assignee = ? WHERE id = ?").run(suggestion ? json(suggestion) : null, id);
+  }
+
+  /** Who (a person, not Haley or the system) last resolved or closed each ticket since a time, for dispatch suggestions. */
+  resolutionsSince(since: string): Array<{ ticket_id: string; author: string; org_id: string; category: string; created_at: string }> {
+    return this.db
+      .prepare(
+        `SELECT e.ticket_id, e.author, t.org_id, t.category, e.created_at FROM ticket_events e JOIN tickets t ON t.id = e.ticket_id
+         WHERE e.kind = 'status_change' AND e.created_at >= ? AND json_extract(e.meta, '$.to') IN ('resolved', 'closed')
+           AND e.author NOT IN ('haley', 'system', 'scheduler') ORDER BY e.created_at LIMIT 20000`,
+      )
+      .all(since) as Array<{ ticket_id: string; author: string; org_id: string; category: string; created_at: string }>;
+  }
+
+  /** Open tickets per assignee (lower-cased). */
+  openTicketsByAssignee(): Map<string, number> {
+    const rows = this.db.prepare("SELECT lower(assignee) AS a, COUNT(*) AS n FROM tickets WHERE status NOT IN ('resolved', 'closed') GROUP BY lower(assignee)").all() as Row[];
+    return new Map(rows.map((r) => [r.a as string, Number(r.n)]));
   }
 
   markMfaVerified(id: string, method: string, at: string): void {
@@ -619,6 +680,13 @@ export class Store {
     this.db.prepare("UPDATE tickets SET updated_at = ? WHERE id = ?").run(event.created_at, ticketId);
     if (kind === "reply" && !meta.auto) {
       this.db.prepare("UPDATE tickets SET first_response_at = ? WHERE id = ? AND first_response_at IS NULL").run(event.created_at, ticketId);
+    }
+    for (const listener of this.eventListeners) {
+      try {
+        listener(event);
+      } catch {
+        // Detection is best effort.
+      }
     }
     return event;
   }
@@ -813,7 +881,7 @@ export class Store {
   }
 
   /** One model call: a run's turn, or (runId null) a copilot answer for a technician. */
-  recordModelUsage(input: { runId: string | null; orgId: string; model: string; inputTokens: number; outputTokens: number; purpose?: "run" | "assist" }): void {
+  recordModelUsage(input: { runId: string | null; orgId: string; model: string; inputTokens: number; outputTokens: number; purpose?: UsagePurpose }): void {
     this.db
       .prepare("INSERT INTO model_usage (run_id, org_id, model, input_tokens, output_tokens, created_at, purpose) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(input.runId, input.orgId, input.model, input.inputTokens, input.outputTokens, now(), input.purpose ?? "run");
@@ -943,6 +1011,19 @@ export class Store {
     return rows.map((r) => ({ channel: r.channel as "slack" | "teams", ref: parse<Record<string, string>>(r.ref, {}) }));
   }
 
+  getHelpdeskSettings(): HelpdeskSettings {
+    const row = this.db.prepare("SELECT value FROM workspace_settings WHERE key = 'helpdesk'").get() as Row | undefined;
+    return { ...DEFAULT_HELPDESK_SETTINGS, ...parse<Partial<HelpdeskSettings>>(row?.value, {}) };
+  }
+
+  setHelpdeskSettings(patch: Partial<HelpdeskSettings>): HelpdeskSettings {
+    const next = { ...this.getHelpdeskSettings(), ...patch };
+    this.db
+      .prepare("INSERT INTO workspace_settings (key, value) VALUES ('helpdesk', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .run(json(next));
+    return next;
+  }
+
   getBillingSettings(): BillingSettings {
     const row = this.db.prepare("SELECT value FROM workspace_settings WHERE key = 'billing'").get() as Row | undefined;
     return { ...DEFAULT_BILLING_SETTINGS, ...parse<Partial<BillingSettings>>(row?.value, {}) };
@@ -1041,6 +1122,49 @@ export class Store {
         id,
       );
     return this.getTechnician(id);
+  }
+
+  // ------------------------------------------------------------- lessons
+
+  /** Keeps a copilot draft for 30 days so the reply sent from it can be compared. */
+  createAssistDraft(input: { ticketId: string; mode: string; text: string; createdBy: string }): string {
+    const id = newId("draft");
+    const ts = now();
+    this.db.prepare("DELETE FROM assist_drafts WHERE created_at < ?").run(new Date(Date.now() - 30 * 86_400_000).toISOString());
+    this.db.prepare("INSERT INTO assist_drafts (id, ticket_id, mode, text, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, input.ticketId, input.mode, input.text, input.createdBy, ts);
+    return id;
+  }
+
+  getAssistDraft(id: string): { id: string; ticket_id: string; mode: string; text: string } | null {
+    return (this.db.prepare("SELECT id, ticket_id, mode, text FROM assist_drafts WHERE id = ?").get(id) as { id: string; ticket_id: string; mode: string; text: string } | undefined) ?? null;
+  }
+
+  createRuleSuggestion(input: { orgId: string; rule: RuleSuggestion["rule"]; why: string; ticketId: string | null; runId: string | null }): RuleSuggestion {
+    const id = newId("rsug");
+    this.db
+      .prepare("INSERT INTO rule_suggestions (id, org_id, rule, why, ticket_id, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(id, input.orgId, json(input.rule), input.why, input.ticketId, input.runId, now());
+    return this.getRuleSuggestion(id)!;
+  }
+
+  getRuleSuggestion(id: string): RuleSuggestion | null {
+    const row = this.db.prepare("SELECT * FROM rule_suggestions WHERE id = ?").get(id) as Row | undefined;
+    return row ? ({ ...(row as unknown as RuleSuggestion), rule: parse(row.rule, {} as RuleSuggestion["rule"]) } as RuleSuggestion) : null;
+  }
+
+  listRuleSuggestions(orgId: string, status: RuleSuggestion["status"] = "pending"): RuleSuggestion[] {
+    const rows = this.db.prepare("SELECT id FROM rule_suggestions WHERE org_id = ? AND status = ? ORDER BY created_at DESC").all(orgId, status) as Row[];
+    return rows.map((r) => this.getRuleSuggestion(r.id as string)!);
+  }
+
+  decideRuleSuggestion(id: string, status: "accepted" | "dismissed", decidedBy: string): boolean {
+    return this.db.prepare("UPDATE rule_suggestions SET status = ?, decided_by = ? WHERE id = ? AND status = 'pending'").run(status, decidedBy, id).changes > 0;
+  }
+
+  /** Model calls for a client and purpose since a time (for daily caps). */
+  countModelUsage(orgId: string, purpose: UsagePurpose, since: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM model_usage WHERE org_id = ? AND purpose = ? AND created_at >= ?").get(orgId, purpose, since) as Row;
+    return Number(row.n);
   }
 
   // ------------------------------------------------------------- memory

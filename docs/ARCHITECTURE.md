@@ -156,6 +156,21 @@ Syncro implements all three.
 - **`copilot.ts`:** makes one tool-less model call, and `model_usage` rows can now have no run (migration 12, `purpose = 'assist'`).
 - **`routes/statusPage.ts`:** serves `/t/<ticket>.<expiry>.<hmac>` as a server-rendered page with a strict CSP. The forms post url-encoded bodies to a scoped parser.
 
+## Help desk quality: checks before close, needs-care flags, dispatch, lessons
+
+- **`qa.ts`:** deterministic checks before close (no reply since the requester's last message, no resolution note, an unkept promise) plus an optional model check (purpose `qa`). `PATCH /api/tickets/:id` enforces `require` mode with `qaOverride` (audited). The setting is `HelpdeskSettings` in workspace settings.
+- **`frustration.ts`:**
+  - `FrustrationDetector` hooks `Store.onTicketCreated` and the new `Store.onTicketEvent`. It scores free signals, sets `tickets.flags` (migration 15), and optionally confirms with a model call (purpose `sentiment`).
+  - VIPs (`OrgSettings.vipRequesters`) get a priority bump.
+  - `careContext()` adds a `<care>` block to the run intro.
+  - `ChannelHub.appendToTicket` escalates instead of re-running when a frustrated requester says the fix didn't hold.
+- **`dispatch.ts`:**
+  - `rankTechnicians()` scores directory technicians: similar-ticket resolvers, client and category familiarity, minus load. It uses `Store.resolutionsSince()` and `openTicketsByAssignee()`.
+  - `onEscalated()` is a status listener registered before the notifier. It stores `tickets.suggested_assignee` and optionally assigns.
+- **`lessons.ts`:**
+  - `LessonService` is a second `ApprovalEvents` listener, so `AgentService` now keeps a list of them. `decided` is emitted after the resume is queued, so listeners can wait for the run to settle.
+  - It collects feedback, makes one model call (purpose `lesson`), and validates the result with the shared `policyRuleSchema.ts`. Notes become pending `client_memories` (`source: "lesson"`), rules become `rule_suggestions` (migration 16), and copilot drafts are kept in `assist_drafts` so a reply's `draftEditRatio` can be recorded.
+
 ## Technicians and chat approvals
 
 - **`technicians` table (migration 13):** name (the sign-in name), email, Slack user id, Teams object id, active. Behind `routes/technicians.ts`; renaming rewrites approver names in client rules.
@@ -197,6 +212,7 @@ Connectors that call an MSP-configured host or tenant (NinjaOne, SyncroMSP RMM, 
 | `model_profiles` | AI models: provider, model, base URL, encrypted key, options, fallback, default flag. |
 | `verification_attempts`, `secret_links` | Step-up verification history (drives fatigue limits) and view-once credential links (hashed tokens). |
 | `psa_connections`, `ticket_links` | PSA credentials (encrypted), customer→client map, sync cursor and options; ticket ↔ PSA ticket links with seen comments and mirrored events. |
+| `assist_drafts`, `rule_suggestions` | Copilot reply drafts (30 days, to see how they were edited) and policy rules Haley suggested from technicians' feedback. |
 | `technicians`, `approval_posts` | The MSP's technicians with their Slack and Teams ids; approval cards and escalation notices posted to chat, so they can be updated. |
 | `audit_log` | Append-only record of security-relevant events. |
 
