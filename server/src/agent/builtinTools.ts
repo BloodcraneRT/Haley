@@ -323,7 +323,7 @@ export function normalizeQuote(text: string): string {
 /** Most notes Haley keeps per client; past this she should update knowledge articles instead. */
 export const MAX_CLIENT_MEMORIES = 200;
 /** Credentials and codes never belong in memory, which every later run reads. */
-const SECRET_LIKE = /\b(pass(word|code|phrase)?|pwd|secret|api[ _-]?key|token|recovery key|otp|pin)\b\s*(is|[:=])\s*\S+|\b\d{6}(-\d{6}){3,}\b/i;
+export const SECRET_LIKE = /\b(pass(word|code|phrase)?|pwd|secret|api[ _-]?key|token|recovery key|otp|pin)\b\s*(is|[:=])\s*\S+|\b\d{6}(-\d{6}){3,}\b/i;
 
 function memoryTools(store: Store, run: Run): HaleyTool[] {
   return [

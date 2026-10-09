@@ -55,7 +55,7 @@ export interface ApprovalEvents {
  */
 export class AgentService {
   private readonly inflight = new Map<string, Promise<void>>();
-  private events: ApprovalEvents | null = null;
+  private readonly events: ApprovalEvents[] = [];
 
   constructor(
     private readonly store: Store,
@@ -134,15 +134,16 @@ export class AgentService {
   // ------------------------------------------------------------ approval
 
   attachApprovalEvents(events: ApprovalEvents): void {
-    this.events = events;
+    this.events.push(events);
   }
 
   private emit(work: (events: ApprovalEvents) => void): void {
-    if (!this.events) return;
-    try {
-      work(this.events);
-    } catch {
-      // Notifications are best effort; the dashboard queue is the record.
+    for (const events of this.events) {
+      try {
+        work(events);
+      } catch {
+        // Notifications are best effort; the dashboard queue is the record.
+      }
     }
   }
 
@@ -174,12 +175,13 @@ export class AgentService {
       const verb = kind === "approve" ? "Approved" : kind === "reject" ? "Rejected" : "Changes requested";
       this.store.addTicketEvent(run.ticket_id, "action", decidedBy, `${verb}: ${action.description}${note ? ` — ${note}` : ""}`, { actionId, decision: status });
     }
-    const decided = this.store.getAction(actionId)!;
-    this.emit((e) => e.decided(decided));
     if (this.store.listActions({ runId: run.id, status: "pending_approval" }).length === 0) {
       this.kick(run.id, () => this.resume(run.id));
     }
-    return this.store.getAction(actionId)!;
+    // After the resume is queued, so listeners that wait for the run to settle wait for it.
+    const decided = this.store.getAction(actionId)!;
+    this.emit((e) => e.decided(decided));
+    return decided;
   }
 
   /** Resolves when the run's current background work (if any) settles. For tests and graceful shutdown. */

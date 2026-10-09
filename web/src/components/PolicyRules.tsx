@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp, Ban, CircleCheck, ListChecks, Lock, Pencil, Plus, Trash, UserCheck } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { api, errorMessage, type OrgDetail, type PolicyEffect, type PolicyRule, type PolicyRuleInput } from "../api";
+import { Link } from "react-router-dom";
+import { api, errorMessage, type OrgDetail, type PolicyEffect, type PolicyRule, type PolicyRuleInput, type RuleSuggestion } from "../api";
 import { usePoll } from "../hooks/usePoll";
 import { useApp } from "../lib/app-context";
 import { ASSURANCE_META, type Tone } from "../lib/format";
@@ -73,6 +74,28 @@ export function PolicyRulesSection({ org, onSaved }: { org: OrgDetail; onSaved: 
   const { toast } = useApp();
   const rules = org.settings.policyRules ?? [];
   const [editing, setEditing] = useState<PolicyRule | "new" | null>(null);
+  /** A suggestion from Haley being reviewed in the rule editor before it's added. */
+  const [reviewing, setReviewing] = useState<RuleSuggestion | null>(null);
+  const suggestions = usePoll(() => api.ruleSuggestions(org.id), [org.id]);
+
+  const decideSuggestion = async (s: RuleSuggestion, accept: boolean) => {
+    setBusy(s.id);
+    try {
+      if (accept) {
+        await api.acceptRuleSuggestion(s.id);
+        toast(`Added "${s.rule.name}".`);
+      } else {
+        await api.dismissRuleSuggestion(s.id);
+        toast("Dismissed.");
+      }
+    } catch (err) {
+      toast(errorMessage(err), "error");
+    } finally {
+      setBusy(null);
+      void suggestions.reload();
+      onSaved();
+    }
+  };
   const [deleting, setDeleting] = useState<PolicyRule | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -127,6 +150,55 @@ export function PolicyRulesSection({ org, onSaved }: { org: OrgDetail; onSaved: 
           <Plus className="icon-sm" aria-hidden="true" /> Add rule
         </button>
       </div>
+      {(suggestions.data ?? []).length > 0 && (
+        <div className="card rule-suggestions" aria-label="Rules suggested by Haley">
+          <h3 className="memory-heading">Suggested by Haley from technicians' feedback</h3>
+          <ul className="list">
+            {suggestions.data!.map((s) => (
+              <li key={s.id} className="memory-row">
+                <div className="memory-main">
+                  <p className="memory-content">
+                    <strong>{s.rule.name}</strong>{" "}
+                    {s.rule.effect === "allow" && (
+                      <Pill tone="amber" title="This rule lets changes run without a sign-off the autonomy level would ask for">
+                        Loosens policy
+                      </Pill>
+                    )}
+                  </p>
+                  <p className="memory-meta secondary">
+                    {ruleSummary({ ...s.rule, risks: s.rule.risks ?? [], targets: s.rule.targets ?? [], departments: s.rule.departments ?? [], requesters: s.rule.requesters ?? [], approvers: s.rule.approvers ?? [], minAssurance: s.rule.minAssurance ?? "directory" })}
+                    {s.why ? ` · ${s.why}` : ""}
+                    {s.ticket_id && (
+                      <>
+                        {" · "}
+                        <Link to={`/tickets/${s.ticket_id}`}>from a ticket</Link>
+                      </>
+                    )}
+                  </p>
+                </div>
+                <div className="memory-actions">
+                  <button className="btn btn-sm btn-primary" disabled={busy !== null} onClick={() => void decideSuggestion(s, true)}>
+                    Add rule
+                  </button>
+                  <button
+                    className="btn btn-sm"
+                    disabled={busy !== null}
+                    onClick={() => {
+                      setReviewing(s);
+                      setEditing("new");
+                    }}
+                  >
+                    Edit first
+                  </button>
+                  <button className="btn btn-sm btn-ghost" disabled={busy !== null} onClick={() => void decideSuggestion(s, false)}>
+                    Dismiss
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="card">
         <p className="rules-intro secondary">
           Client-specific exceptions to the autonomy level. Rules apply to changes only, and Haley uses the first enabled rule that matches.
@@ -231,8 +303,21 @@ export function PolicyRulesSection({ org, onSaved }: { org: OrgDetail; onSaved: 
       <RuleModal
         org={org}
         rule={editing}
-        onClose={() => setEditing(null)}
+        initial={reviewing?.rule}
+        onClose={() => {
+          setEditing(null);
+          setReviewing(null);
+        }}
         onSave={async (rule) => {
+          if (reviewing) {
+            await api.acceptRuleSuggestion(reviewing.id, rule);
+            toast(`Added "${rule.name}".`);
+            setEditing(null);
+            setReviewing(null);
+            void suggestions.reload();
+            onSaved();
+            return;
+          }
           const isNew = editing === "new";
           const next: PolicyRuleInput[] = isNew ? [...rules, rule] : rules.map((r) => (r.id === rule.id ? { ...r, ...rule } : r));
           await api.updateOrg(org.id, { settings: { policyRules: next } });
@@ -273,11 +358,14 @@ const emptyRule = (): RuleDraft => ({
 function RuleModal({
   org,
   rule,
+  initial,
   onClose,
   onSave,
 }: {
   org: OrgDetail;
   rule: PolicyRule | "new" | null;
+  /** Pre-fills a new rule (a suggestion from Haley). */
+  initial?: RuleDraft;
   onClose: () => void;
   /** Throws to keep the dialog open with the server's message. */
   onSave: (rule: RuleDraft) => Promise<void>;
@@ -290,7 +378,7 @@ function RuleModal({
 
   useEffect(() => {
     if (!open) return;
-    setDraft(rule === "new" ? emptyRule() : { ...rule! });
+    setDraft(rule === "new" ? (initial ? { ...emptyRule(), ...initial } : emptyRule()) : { ...rule! });
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, rule === "new" ? "new" : rule?.id]);

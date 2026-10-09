@@ -32,6 +32,7 @@ import type {
   TicketStatus,
   TicketFlags,
   AssigneeSuggestion,
+  RuleSuggestion,
   Technician,
 } from "./types.js";
 import {
@@ -1121,6 +1122,49 @@ export class Store {
         id,
       );
     return this.getTechnician(id);
+  }
+
+  // ------------------------------------------------------------- lessons
+
+  /** Keeps a copilot draft for 30 days so the reply sent from it can be compared. */
+  createAssistDraft(input: { ticketId: string; mode: string; text: string; createdBy: string }): string {
+    const id = newId("draft");
+    const ts = now();
+    this.db.prepare("DELETE FROM assist_drafts WHERE created_at < ?").run(new Date(Date.now() - 30 * 86_400_000).toISOString());
+    this.db.prepare("INSERT INTO assist_drafts (id, ticket_id, mode, text, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, input.ticketId, input.mode, input.text, input.createdBy, ts);
+    return id;
+  }
+
+  getAssistDraft(id: string): { id: string; ticket_id: string; mode: string; text: string } | null {
+    return (this.db.prepare("SELECT id, ticket_id, mode, text FROM assist_drafts WHERE id = ?").get(id) as { id: string; ticket_id: string; mode: string; text: string } | undefined) ?? null;
+  }
+
+  createRuleSuggestion(input: { orgId: string; rule: RuleSuggestion["rule"]; why: string; ticketId: string | null; runId: string | null }): RuleSuggestion {
+    const id = newId("rsug");
+    this.db
+      .prepare("INSERT INTO rule_suggestions (id, org_id, rule, why, ticket_id, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(id, input.orgId, json(input.rule), input.why, input.ticketId, input.runId, now());
+    return this.getRuleSuggestion(id)!;
+  }
+
+  getRuleSuggestion(id: string): RuleSuggestion | null {
+    const row = this.db.prepare("SELECT * FROM rule_suggestions WHERE id = ?").get(id) as Row | undefined;
+    return row ? ({ ...(row as unknown as RuleSuggestion), rule: parse(row.rule, {} as RuleSuggestion["rule"]) } as RuleSuggestion) : null;
+  }
+
+  listRuleSuggestions(orgId: string, status: RuleSuggestion["status"] = "pending"): RuleSuggestion[] {
+    const rows = this.db.prepare("SELECT id FROM rule_suggestions WHERE org_id = ? AND status = ? ORDER BY created_at DESC").all(orgId, status) as Row[];
+    return rows.map((r) => this.getRuleSuggestion(r.id as string)!);
+  }
+
+  decideRuleSuggestion(id: string, status: "accepted" | "dismissed", decidedBy: string): boolean {
+    return this.db.prepare("UPDATE rule_suggestions SET status = ?, decided_by = ? WHERE id = ? AND status = 'pending'").run(status, decidedBy, id).changes > 0;
+  }
+
+  /** Model calls for a client and purpose since a time (for daily caps). */
+  countModelUsage(orgId: string, purpose: UsagePurpose, since: string): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM model_usage WHERE org_id = ? AND purpose = ? AND created_at >= ?").get(orgId, purpose, since) as Row;
+    return Number(row.n);
   }
 
   // ------------------------------------------------------------- memory

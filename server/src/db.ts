@@ -319,6 +319,27 @@ const MIGRATIONS: string[] = [
   // 15: ticket flags (a frustrated requester, a VIP) and the technician suggested when Haley escalates
   `ALTER TABLE tickets ADD COLUMN flags TEXT NOT NULL DEFAULT '{}';
    ALTER TABLE tickets ADD COLUMN suggested_assignee TEXT;`,
+  // 16: lessons from technicians' decisions: copilot drafts (to see how they were edited) and suggested policy rules
+  `CREATE TABLE IF NOT EXISTS assist_drafts (
+     id TEXT PRIMARY KEY,
+     ticket_id TEXT NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+     mode TEXT NOT NULL,
+     text TEXT NOT NULL,
+     created_by TEXT NOT NULL,
+     created_at TEXT NOT NULL
+   );
+   CREATE TABLE IF NOT EXISTS rule_suggestions (
+     id TEXT PRIMARY KEY,
+     org_id TEXT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
+     rule TEXT NOT NULL,
+     why TEXT NOT NULL,
+     ticket_id TEXT REFERENCES tickets(id) ON DELETE SET NULL,
+     run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+     status TEXT NOT NULL DEFAULT 'pending',
+     decided_by TEXT,
+     created_at TEXT NOT NULL
+   );
+   CREATE INDEX IF NOT EXISTS idx_rule_suggestions_org ON rule_suggestions(org_id, status);`,
 ];
 
 export function openDb(path: string): Db {

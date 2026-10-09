@@ -51,7 +51,7 @@ function ClientMemoryEditor({ orgId }: { orgId: string }) {
       <div className="memory-main">
         <p className="memory-content">{m.content}</p>
         <p className="memory-meta secondary">
-          {m.source === "technician" ? `Added by ${m.created_by}` : "Learned by Haley"}
+          {m.source === "technician" ? `Added by ${m.created_by}` : m.source === "lesson" ? "Suggested from a technician's feedback" : "Learned by Haley"}
           {m.ticket_id && (
             <>
               {" "}
@@ -66,7 +66,7 @@ function ClientMemoryEditor({ orgId }: { orgId: string }) {
           )}
           {" · "}
           <RelativeTime iso={m.updated_at} />
-          {m.reviewed_by && m.status === "active" && m.source === "agent" && ` · confirmed by ${m.reviewed_by}`}
+          {m.reviewed_by && m.status === "active" && m.source !== "technician" && ` · confirmed by ${m.reviewed_by}`}
         </p>
       </div>
       <div className="memory-actions">

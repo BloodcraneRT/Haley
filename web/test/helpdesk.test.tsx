@@ -80,3 +80,33 @@ describe("needs-care badges", () => {
     expect(none.node.textContent).toBe("");
   });
 });
+
+describe("rules suggested by Haley", () => {
+  it("adds, edits first, or dismisses a suggestion, and marks rules that loosen policy", async () => {
+    const { MemoryRouter } = await import("react-router-dom");
+    const { PolicyRulesSection } = await import("../src/components/PolicyRules");
+    const suggestion = {
+      id: "rsug_1", org_id: "org_1", why: "Dana approves every reset.", ticket_id: "tkt_1", run_id: null, status: "pending" as const, decided_by: null, created_at: "2026-10-08T00:00:00Z",
+      rule: { name: "Resets need Dana", enabled: true, tools: ["m365_reset_password"], risks: [], targets: [], departments: [], requesters: [], effect: "approve" as const, approvers: ["Dana Reyes"], minAssurance: "directory" as const },
+    };
+    const loosen = { ...suggestion, id: "rsug_2", rule: { ...suggestion.rule, name: "Let licences through", effect: "allow" as const } };
+    vi.spyOn(api, "ruleSuggestions").mockResolvedValue([suggestion, loosen]);
+    vi.spyOn(api, "technicians").mockResolvedValue({ technicians: [], suggestions: [] });
+    const accept = vi.spyOn(api, "acceptRuleSuggestion").mockResolvedValue({ rule: { ...suggestion.rule, id: "rule_1" } });
+    const dismiss = vi.spyOn(api, "dismissRuleSuggestion").mockResolvedValue({ ok: true });
+    const org = { id: "org_1", name: "Contoso", integrations: [], settings: { policyRules: [] } } as never;
+    const { node } = await renderView(() => <MemoryRouter><PolicyRulesSection org={org} onSaved={() => undefined} /></MemoryRouter>);
+    const rows = [...node.querySelectorAll(".rule-suggestions li")];
+    expect(rows[0].textContent).toContain("Resets need Dana");
+    expect(rows[0].textContent).not.toContain("Loosens policy");
+    expect(rows[1].textContent).toContain("Loosens policy");
+
+    const buttonIn = (row: Element, label: string) => [...row.querySelectorAll("button")].find((b) => b.textContent === label)!;
+    await act(async () => buttonIn(rows[0], "Add rule").click());
+    expect(accept).toHaveBeenCalledWith("rsug_1");
+    await act(async () => buttonIn(rows[1], "Dismiss").click());
+    expect(dismiss).toHaveBeenCalledWith("rsug_2");
+    await act(async () => buttonIn(rows[0], "Edit first").click());
+    expect(node.querySelector<HTMLInputElement>("#rule-name")!.value).toBe("Resets need Dana");
+  });
+});

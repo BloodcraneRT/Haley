@@ -177,6 +177,19 @@ export interface Integration {
   created_at: string;
 }
 
+/** A policy rule Haley suggested from a technician's feedback; it applies only once a technician accepts it. */
+export interface RuleSuggestion {
+  id: string;
+  org_id: string;
+  rule: Omit<PolicyRule, "id">;
+  why: string;
+  ticket_id: string | null;
+  run_id: string | null;
+  status: "pending" | "accepted" | "dismissed";
+  decided_by: string | null;
+  created_at: string;
+}
+
 export interface AssigneeSuggestion {
   name: string;
   reasons: string[];
@@ -338,7 +351,8 @@ export interface ClientMemory {
   org_id: string;
   content: string;
   status: "active" | "pending";
-  source: "agent" | "technician";
+  /** agent: Haley noted it while working; lesson: suggested from a technician's feedback; technician: typed by one. */
+  source: "agent" | "technician" | "lesson";
   run_id: string | null;
   ticket_id: string | null;
   created_by: string;

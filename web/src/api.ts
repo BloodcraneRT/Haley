@@ -750,7 +750,28 @@ export interface AssistResult {
   text: string;
   model: string;
   usage: { inputTokens: number; outputTokens: number };
+  /** Set for reply drafts: send it with the reply so lessons can see how the draft was edited. */
+  draftId?: string | null;
 }
+
+/** server/src/types.ts RuleSuggestion */
+export interface RuleSuggestion {
+  id: string;
+  org_id: string;
+  rule: PolicyRuleInput;
+  why: string;
+  ticket_id: string | null;
+  run_id: string | null;
+  status: "pending" | "accepted" | "dismissed";
+  decided_by: string | null;
+  created_at: string;
+}
+
+/** server/src/lessons.ts LessonResult */
+export type LessonResult =
+  | { kind: "note"; memory: ClientMemory }
+  | { kind: "rule"; suggestion: RuleSuggestion }
+  | { kind: "none"; reason: string };
 
 export interface SimilarTickets {
   tickets: Array<{ id: string; number: number; title: string; status: TicketStatus; created_at: string; resolved_at: string | null; score: number; matched: string[]; resolution: string | null }>;
@@ -977,7 +998,7 @@ export interface ClientMemory {
   org_id: string;
   content: string;
   status: "active" | "pending";
-  source: "agent" | "technician";
+  source: "agent" | "technician" | "lesson";
   run_id: string | null;
   ticket_id: string | null;
   created_by: string;
@@ -1177,7 +1198,11 @@ export const api = {
   ticketQa: (id: string) => post<QaResult>(`/api/tickets/${enc(id)}/qa`),
   helpdeskSettings: () => get<HelpdeskSettings>("/api/helpdesk/settings"),
   updateHelpdeskSettings: (input: Partial<HelpdeskSettings>) => patch<HelpdeskSettings>("/api/helpdesk/settings", input),
-  addComment: (id: string, input: { body: string; kind: "comment" | "reply"; runAgent?: boolean }) =>
+  suggestLesson: (ticketId: string) => post<LessonResult>(`/api/tickets/${enc(ticketId)}/lesson`),
+  ruleSuggestions: (orgId: string) => get<RuleSuggestion[]>(`/api/orgs/${enc(orgId)}/rule-suggestions`),
+  acceptRuleSuggestion: (id: string, rule?: PolicyRuleInput) => post<{ rule: PolicyRule }>(`/api/rule-suggestions/${enc(id)}/accept`, rule ? { rule } : {}),
+  dismissRuleSuggestion: (id: string) => post<{ ok: true }>(`/api/rule-suggestions/${enc(id)}/dismiss`),
+  addComment: (id: string, input: { body: string; kind: "comment" | "reply"; runAgent?: boolean; draftId?: string }) =>
     post<{ event: TicketEvent; runId: string | null }>(`/api/tickets/${enc(id)}/comments`, input),
   runTicket: (id: string, mode: RunMode = "live") => post<Run>(`/api/tickets/${enc(id)}/run`, { mode }),
 

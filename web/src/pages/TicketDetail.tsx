@@ -887,6 +887,23 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
   const [busy, setBusy] = useState(false);
   const [assisting, setAssisting] = useState<AssistMode | null>(null);
   const [advice, setAdvice] = useState<AssistResult | null>(null);
+  /** The copilot draft the reply box started from, sent with the reply (lessons compare the two). */
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [learning, setLearning] = useState(false);
+
+  const suggestLesson = async () => {
+    setLearning(true);
+    try {
+      const result = await api.suggestLesson(ticketId);
+      if (result.kind === "note") toast(`Haley suggested a note for this client: “${result.memory.content}” Confirm it on the client page.`);
+      else if (result.kind === "rule") toast(`Haley suggested a policy rule, "${result.suggestion.rule.name}". Review it on the client page.`);
+      else toast(result.reason, "info");
+    } catch (err) {
+      toast(errorMessage(err), "error");
+    } finally {
+      setLearning(false);
+    }
+  };
 
   /** The copilot: a draft fills the reply box (anything typed there is used as guidance); other answers show above it. */
   const askHaley = async (mode: AssistMode) => {
@@ -897,6 +914,7 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
       if (mode === "draft_reply") {
         setKind("reply");
         setBody(result.text);
+        setDraftId(result.draftId ?? null);
         toast("Draft ready. Review and edit it before sending.");
       } else {
         setAdvice(result);
@@ -914,7 +932,8 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
     setBusy(true);
     const wantRun = runAgent && !runActive;
     try {
-      const res = await api.addComment(ticketId, { body: body.trim(), kind, runAgent: wantRun });
+      const res = await api.addComment(ticketId, { body: body.trim(), kind, runAgent: wantRun, ...(kind === "reply" && draftId ? { draftId } : {}) });
+      setDraftId(null);
       toast(res.runId ? "Posted. Haley is picking it up." : kind === "reply" ? "Reply posted." : "Note added.");
       setBody("");
       setRunAgent(false);
@@ -992,6 +1011,17 @@ function Composer({ ticketId, runActive, requester, onPosted }: { ticketId: stri
             {label}
           </button>
         ))}
+        <span className="spacer" />
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          title="Turn the corrections on this ticket (rejected or sent-back changes, edited drafts) into a note or rule for this client, for you to review"
+          onClick={() => void suggestLesson()}
+          disabled={learning}
+        >
+          {learning ? <Spinner /> : null}
+          Suggest a lesson
+        </button>
       </div>
       <label htmlFor="composer-body" className="sr-only">
         {kind === "comment" ? "Internal note" : "Reply"}
