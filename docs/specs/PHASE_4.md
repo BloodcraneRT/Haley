@@ -1,6 +1,16 @@
 # Spec: phase 4, the deferred items
 
-Status: **4a built** (sections 5 and 8), 2026-10-09. The probe also runs from the dashboard (**Check fields** on the PSA page), not only as a script; Autotask categories come from `issueType`.
+Status: **4a and 4b built** (sections 5, 8, 2, 3 and 4), 2026-10-09. Changes from this spec while building:
+
+- **4a:** the probe also runs from the dashboard (**Check fields** on the PSA page), not only as a script. Autotask categories come from `issueType`.
+- **4b:**
+  - All three sections share migration 19.
+  - Tickets closed in the PSA credit their Haley assignee (set from the PSA owner) in dispatch, rather than a separate resolver row.
+  - The PSA time check is advisory: `require` mode doesn't enforce it.
+  - Haley's older time entries are recognised by her note text as well as by id.
+  - PSA attachments are capped at 5 per ticket per sync (the per-message limit), not 10.
+  - A file attached to a comment belongs to whoever wrote that comment, when the PSA links them (HaloPSA, Dynamics emails).
+  - ConnectWise and Syncro files are treated as the customer's, since neither says who added them. That's safe: Haley reads them as untrusted, like ticket text.
 
 Phases 1–3 of [NEO_FOLLOWUPS.md](NEO_FOLLOWUPS.md) are built. This spec covers what was left out of them, plus the two items that were always planned for phase 4 (phone and new integrations). Each section says what changes, where in the code, the data, the API and UI, safety rules, tests, and size. File references are to `main` after PR #14. The last migration today is 18; the numbers below follow the suggested order and are indicative.
 

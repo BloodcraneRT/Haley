@@ -1,7 +1,8 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, PsaOwner } from "./types.js";
+import { decodeCapped } from "../attachments.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, PsaAdapter, PsaAttachment, PsaOwner } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -249,6 +250,54 @@ export class DynamicsAdapter implements PsaAdapter {
       this.users.set(key, { id: key, name, email: u.internalemailaddress ? String(u.internalemailaddress).toLowerCase() : null });
     }
     return this.users.get(key)!;
+  }
+
+  /**
+   * Files on the case: documents on its notes (added by users, so a technician's) and attachments on the
+   * customer's incoming emails about it (the customer's, linked to that email).
+   */
+  async listAttachments(ticketId: string): Promise<PsaAttachment[]> {
+    if (!GUID.test(ticketId)) throw new ConnectorError(`Not a case id: ${ticketId}`);
+    const [notes, emails] = await Promise.all([
+      this.pages<Json>(`/annotations?$select=annotationid,filename,mimetype,filesize,createdon&$filter=_objectid_value eq ${ticketId} and isdocument eq true`),
+      this.pages<Json>(`/emails?$select=activityid&$filter=_regardingobjectid_value eq ${ticketId} and directioncode eq false&$orderby=createdon desc&$top=10`),
+    ]);
+    const files: PsaAttachment[] = notes.map((n) => ({
+      id: `note:${n.annotationid}`,
+      filename: String(n.filename ?? "attachment"),
+      contentType: n.mimetype ? String(n.mimetype) : null,
+      size: typeof n.filesize === "number" ? n.filesize : null,
+      createdAt: String(n.createdon ?? ""),
+      fromCustomer: false,
+    }));
+    for (const email of emails.slice(0, 10)) {
+      const attachments = await this.pages<Json>(
+        `/activitymimeattachments?$select=activitymimeattachmentid,filename,mimetype,filesize,createdon&$filter=_objectid_value eq ${email.activityid}`,
+      );
+      for (const a of attachments) {
+        files.push({
+          id: `email:${a.activitymimeattachmentid}`,
+          filename: String(a.filename ?? "attachment"),
+          contentType: a.mimetype ? String(a.mimetype) : null,
+          size: typeof a.filesize === "number" ? a.filesize : null,
+          createdAt: String(a.createdon ?? ""),
+          fromCustomer: true,
+          commentId: `email:${email.activityid}`,
+        });
+      }
+    }
+    return files;
+  }
+
+  async getAttachment(_ticketId: string, attachment: PsaAttachment, maxBytes: number): Promise<Uint8Array | null> {
+    if (attachment.size && attachment.size > maxBytes) return null;
+    const [kind, id] = attachment.id.split(":");
+    if (!GUID.test(id ?? "")) throw new ConnectorError(`Not a Dynamics attachment id: ${attachment.id}`);
+    const path = kind === "note" ? `/annotations(${id})?$select=documentbody` : `/activitymimeattachments(${id})?$select=body`;
+    const { data } = await this.call<Json>("GET", path);
+    const base64 = kind === "note" ? data.documentbody : data.body;
+    if (typeof base64 !== "string") throw new ConnectorError("Dynamics didn't return the file's content.");
+    return decodeCapped(base64, maxBytes);
   }
 
   async setOwner(ticketId: string, ownerId: string): Promise<void> {

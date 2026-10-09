@@ -835,6 +835,8 @@ export interface SyncResult {
   pushed: number;
   statusUpdates: number;
   timeLogged?: number;
+  /** Files imported from PSA tickets. */
+  attachmentsImported?: number;
   unmappedCustomers: string[];
   /** Technicians assigned in Haley who have no id in this PSA, so the assignment wasn't sent. */
   ownersNotSent?: string[];

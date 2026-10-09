@@ -474,7 +474,7 @@ function TimeEntriesOption({ value, onChange, disabled }: { value: PsaOptions["t
 
 function SyncResultPanel({ result: r, at, connectionId, onDismiss }: { result: SyncResult; at: string; connectionId: string; onDismiss: () => void }) {
   const failed = r.errors.length > 0;
-  const nothing = !r.imported && !r.commentsImported && !r.exported && !r.pushed && !r.statusUpdates && !r.timeLogged;
+  const nothing = !r.imported && !r.commentsImported && !r.exported && !r.pushed && !r.statusUpdates && !r.timeLogged && !r.attachmentsImported;
   return (
     <section className={`sync-result ${failed ? "is-error" : ""}`} aria-label="Sync result">
       <header className="sync-result-head">
@@ -495,6 +495,7 @@ function SyncResultPanel({ result: r, at, connectionId, onDismiss }: { result: S
         <SyncStat label="Mirrored" value={r.pushed} icon={<ArrowLeftRight className="icon-xs" aria-hidden="true" />} />
         <SyncStat label="Status" value={r.statusUpdates} icon={<RefreshCw className="icon-xs" aria-hidden="true" />} />
         {r.timeLogged ? <SyncStat label="Time logged" value={r.timeLogged} icon={<Timer className="icon-xs" aria-hidden="true" />} /> : null}
+        {r.attachmentsImported ? <SyncStat label="Files" value={r.attachmentsImported} icon={<Paperclip className="icon-xs" aria-hidden="true" />} /> : null}
       </div>
       {(r.ownersNotSent ?? []).length > 0 && (
         <div className="sync-note tone-amber">

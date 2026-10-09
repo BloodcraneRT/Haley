@@ -1,7 +1,8 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
+import { decodeCapped } from "../attachments.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaAttachment, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -276,6 +277,31 @@ export class HaloAdapter implements PsaAdapter {
         notes: String(a.note ?? (a.note_html ? stripHtml(String(a.note_html)) : "")),
         createdAt: iso(a.datetime ?? a.actiondatecreated),
       }));
+  }
+
+  /** Attachments on the ticket; each names the action it came with, whose author says whose file it is. */
+  async listAttachments(ticketId: string): Promise<PsaAttachment[]> {
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not a HaloPSA ticket id: ${ticketId}`);
+    const data = await this.call<Json>("GET", `/Attachment?ticket_id=${ticketId}`);
+    const rows = (Array.isArray(data) ? data : (data.attachments ?? [])) as Json[];
+    return rows.map((a) => ({
+      id: String(a.id),
+      filename: String(a.filename ?? a.name ?? `attachment-${a.id}`),
+      contentType: a.type ? String(a.type) : null,
+      size: typeof a.filesize === "number" ? a.filesize : null,
+      createdAt: iso(a.datecreated),
+      fromCustomer: Number(a.who_type ?? 1) === 1,
+      commentId: a.action_id ? String(a.action_id) : null,
+    }));
+  }
+
+  async getAttachment(_ticketId: string, attachment: PsaAttachment, maxBytes: number): Promise<Uint8Array | null> {
+    if (!/^\d+$/.test(attachment.id)) throw new ConnectorError(`Not a HaloPSA attachment id: ${attachment.id}`);
+    if (attachment.size && attachment.size > maxBytes) return null;
+    const data = await this.call<Json>("GET", `/Attachment/${attachment.id}?includedetails=true`);
+    const base64 = data.data_base64 ?? data.base64 ?? data.data;
+    if (typeof base64 !== "string") throw new ConnectorError("HaloPSA didn't return the file's content.");
+    return decodeCapped(base64, maxBytes);
   }
 
   async setOwner(ticketId: string, ownerId: string): Promise<void> {

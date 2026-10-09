@@ -13,6 +13,46 @@ export interface IncomingFile {
 }
 
 
+/** A response body, or null once it passes `max` bytes (by the declared length, then while reading). */
+export async function readCapped(res: Response, max: number): Promise<Uint8Array | null> {
+  const declared = Number(res.headers.get("content-length") ?? 0);
+  if (declared > max) {
+    await res.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const all = new Uint8Array(await res.arrayBuffer());
+    return all.length > max ? null : all;
+  }
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > max) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const data = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    data.set(c, offset);
+    offset += c.length;
+  }
+  return data;
+}
+
+/** Decodes a base64 file from a JSON API, or null when it's over `max` bytes (checked before decoding). */
+export function decodeCapped(base64: string, max: number): Uint8Array | null {
+  if (Math.floor((base64.length * 3) / 4) - 2 > max) return null;
+  const data = new Uint8Array(Buffer.from(base64, "base64"));
+  return data.length > max ? null : data;
+}
+
 /**
  * Downloads a file a chat platform hosts, refusing anything past the size limit (by header and while
  * reading) and any host the caller doesn't allow. Returns a skipped file rather than throwing.
@@ -34,28 +74,8 @@ export async function downloadFile(
   try {
     const res = await fetchImpl(url, { headers: opts.headers ?? {}, redirect: "follow" });
     if (!res.ok) return skip(`Not downloaded (${res.status}).`);
-    const declared = Number(res.headers.get("content-length") ?? 0);
-    if (declared > MAX_DOWNLOAD_BYTES) return skip(`Not downloaded: over ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB.`);
-    const reader = res.body?.getReader();
-    if (!reader) return { filename: file.filename, contentType: file.contentType, data: new Uint8Array(await res.arrayBuffer()) };
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.length;
-      if (total > MAX_DOWNLOAD_BYTES) {
-        await reader.cancel();
-        return skip(`Not downloaded: over ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB.`);
-      }
-      chunks.push(value);
-    }
-    const data = new Uint8Array(total);
-    let offset = 0;
-    for (const c of chunks) {
-      data.set(c, offset);
-      offset += c.length;
-    }
+    const data = await readCapped(res, MAX_DOWNLOAD_BYTES);
+    if (!data) return skip(`Not downloaded: over ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB.`);
     return { filename: file.filename, contentType: file.contentType, data };
   } catch {
     return skip("Not downloaded: the download failed.");

@@ -1,7 +1,8 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
+import { decodeCapped } from "../attachments.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaAttachment, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 type Picklist = Array<{ value: string; label: string; isActive?: boolean; isDefaultValue?: boolean; isSystem?: boolean }>;
@@ -366,6 +367,32 @@ export class AutotaskAdapter implements PsaAdapter {
       notes: String(r.summaryNotes ?? r.internalNotes ?? ""),
       createdAt: iso(r.startDateTime ?? r.dateWorked ?? r.createDateTime),
     }));
+  }
+
+  /** File attachments on the ticket; one attached by a contact is the customer's. */
+  async listAttachments(ticketId: string): Promise<PsaAttachment[]> {
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not an Autotask ticket id: ${ticketId}`);
+    const rows = await this.query("TicketAttachments", [{ op: "eq", field: "parentID", value: Number(ticketId) }], 2);
+    return rows
+      // URL and folder links have nothing to download.
+      .filter((a) => !a.attachmentType || /^file/i.test(String(a.attachmentType)) || String(a.attachmentType) === "FILE_ATTACHMENT")
+      .map((a) => ({
+        id: String(a.id),
+        filename: String(a.fullPath ?? a.title ?? `attachment-${a.id}`).split(/[\\/]/).pop()!,
+        contentType: a.contentType ? String(a.contentType) : null,
+        size: typeof a.fileSize === "number" ? a.fileSize : null,
+        createdAt: iso(a.attachDate),
+        fromCustomer: a.attachedByContactID != null,
+      }));
+  }
+
+  async getAttachment(ticketId: string, attachment: PsaAttachment, maxBytes: number): Promise<Uint8Array | null> {
+    if (!/^\d+$/.test(ticketId) || !/^\d+$/.test(attachment.id)) throw new ConnectorError(`Not an Autotask ticket or attachment id: ${ticketId}, ${attachment.id}`);
+    if (attachment.size && attachment.size > maxBytes) return null;
+    const data = await this.call<Json>("GET", `/Tickets/${ticketId}/Attachments/${attachment.id}`);
+    const item = (Array.isArray(data.items) ? data.items[0] : data.item) ?? data;
+    if (typeof item?.data !== "string") throw new ConnectorError("Autotask didn't return the file's content.");
+    return decodeCapped(item.data, maxBytes);
   }
 
   /** Assigning a resource needs a role too: their default active service desk role. */

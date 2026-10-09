@@ -1,7 +1,8 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { AppointmentInput, CannedResponse, Contract, ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
+import { readCapped } from "../attachments.js";
+import type { AppointmentInput, CannedResponse, Contract, ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaAttachment, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -220,6 +221,38 @@ export class SyncroAdapter implements PsaAdapter {
       const minutes = Number(x.duration_minutes) || (Number.isFinite(start) && Number.isFinite(end) ? Math.round((end - start) / 60_000) : 0);
       return { id: String(x.id), minutes, member: String(x.user?.full_name ?? x.user_id ?? ""), notes: String(x.notes ?? ""), createdAt: String(x.created_at ?? x.start_time ?? "") };
     });
+  }
+
+  /** The ticket's `attachments`, each with a pre-signed link to Syncro's file storage. */
+  async listAttachments(ticketId: string): Promise<PsaAttachment[]> {
+    const { ticket: t } = await this.call<Json>("GET", `/tickets/${ticketId}`);
+    return ((t?.attachments ?? []) as Json[]).map((a) => ({
+      id: String(a.id),
+      filename: String(a.file_name ?? a.name ?? `attachment-${a.id}`),
+      contentType: a.content_type ? String(a.content_type) : null,
+      size: typeof a.file_size === "number" ? a.file_size : null,
+      createdAt: String(a.created_at ?? ""),
+      fromCustomer: true,
+      url: String(a.file?.url ?? a.url ?? ""),
+    }));
+  }
+
+  /** Downloads from the pre-signed link, only from Syncro's own hosts or its S3 storage, with no credentials sent. */
+  async getAttachment(_ticketId: string, attachment: PsaAttachment, maxBytes: number): Promise<Uint8Array | null> {
+    let url: URL;
+    try {
+      url = new URL(attachment.url ?? "");
+    } catch {
+      throw new ConnectorError("Syncro didn't give a download link for the file.");
+    }
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== "https:" || !(host.endsWith(".amazonaws.com") || host.endsWith(".syncromsp.com"))) {
+      throw new ConnectorError(`Not downloading a Syncro file from ${host}.`);
+    }
+    if (attachment.size && attachment.size > maxBytes) return null;
+    const res = await this.fetchImpl(url, { redirect: "follow" });
+    if (!res.ok) throw new ConnectorError(`Downloading a Syncro file failed (${res.status}).`, res.status);
+    return readCapped(res, maxBytes);
   }
 
   async setOwner(ticketId: string, ownerId: string): Promise<void> {

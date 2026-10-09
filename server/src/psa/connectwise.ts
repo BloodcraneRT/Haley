@@ -1,7 +1,8 @@
 import { ConnectorError } from "../connectors/types.js";
 import type { TicketPriority, TicketStatus } from "../types.js";
 import { registerPsaFactory } from "./registry.js";
-import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaOwner, TimeEntry } from "./types.js";
+import { readCapped } from "../attachments.js";
+import type { ExternalComment, ExternalCustomer, ExternalTicket, HistoricTicket, LoggedTime, PsaAdapter, PsaAttachment, PsaOwner, TimeEntry } from "./types.js";
 
 type Json = Record<string, any>;
 
@@ -116,13 +117,16 @@ export class ConnectWiseAdapter implements PsaAdapter {
     this.notifiesCustomer = /^(true|yes|1)$/i.test(config.emailContacts ?? "");
   }
 
-  private async call<T = Json>(method: string, path: string, body?: unknown): Promise<T> {
+  private auth(): Record<string, string> {
     const auth = Buffer.from(`${this.config.companyId.trim()}+${this.config.publicKey.trim()}:${this.config.privateKey.trim()}`).toString("base64");
+    return { authorization: `Basic ${auth}`, clientId: this.config.clientId.trim() };
+  }
+
+  private async call<T = Json>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await this.fetchImpl(`${this.base}${path}`, {
       method,
       headers: {
-        authorization: `Basic ${auth}`,
-        clientId: this.config.clientId.trim(),
+        ...this.auth(),
         accept: "application/json",
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
@@ -237,6 +241,27 @@ export class ConnectWiseAdapter implements PsaAdapter {
       notes: String(r.notes ?? ""),
       createdAt: iso(r.timeStart ?? r.dateEntered),
     }));
+  }
+
+  /** Documents attached to the ticket (emailed-in files arrive here too, so they're treated as the customer's). */
+  async listAttachments(ticketId: string): Promise<PsaAttachment[]> {
+    if (!/^\d+$/.test(ticketId)) throw new ConnectorError(`Not a ConnectWise ticket id: ${ticketId}`);
+    const docs = await this.call<Json[]>("GET", `/system/documents?recordType=Ticket&recordId=${ticketId}&pageSize=${PAGE_SIZE}`);
+    return (Array.isArray(docs) ? docs : []).map((d) => ({
+      id: String(d.id),
+      filename: String(d.fileName ?? d.title ?? `document-${d.id}`),
+      contentType: d.contentType ? String(d.contentType) : null,
+      size: typeof d.fileSize === "number" ? d.fileSize : null,
+      createdAt: iso(d._info?.lastUpdated ?? d._info?.dateEntered),
+      fromCustomer: true,
+    }));
+  }
+
+  async getAttachment(_ticketId: string, attachment: PsaAttachment, maxBytes: number): Promise<Uint8Array | null> {
+    if (!/^\d+$/.test(attachment.id)) throw new ConnectorError(`Not a ConnectWise document id: ${attachment.id}`);
+    const res = await this.fetchImpl(`${this.base}/system/documents/${attachment.id}/download`, { headers: this.auth(), redirect: "follow" });
+    if (!res.ok) throw new ConnectorError(`ConnectWise GET /system/documents/${attachment.id}/download failed (${res.status})`, res.status);
+    return readCapped(res, maxBytes);
   }
 
   async setOwner(ticketId: string, ownerId: string): Promise<void> {

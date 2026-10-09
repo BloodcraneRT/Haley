@@ -89,6 +89,10 @@ On first start, a Claude profile is created from `HALEY_MODEL`, `HALEY_EFFORT` a
 - **Replies:** PSA-originated tickets are answered through a channel adapter as public PSA comments. Dynamics and Autotask notes don't notify customers (nor do ConnectWise notes unless the MSP says its board emails contacts), so those replies are also emailed.
 - **Mirroring:** Haley's notes, actions and conversations from other channels go back upstream as internal comments. Tickets that start in Haley are created in the PSA.
 - **Loop prevention:** `ticket_links` tracks the comment ids Haley posted and the events already mirrored, so nothing echoes back.
+- **Owners (`psa/owners.ts`):** every adapter reads the ticket's owner (`ExternalTicket.owner`). It's matched to a directory technician by their saved PSA id, then email, then name, and the id is saved. A changed owner assigns the Haley ticket; the link's `last_owner` stops an unchanged owner from overwriting an assignment made in Haley. With the connection's `syncOwner` option, assignments go back through `setOwner`. Tickets closed in the PSA credit their assignee in dispatch.
+- **Working hours (`workingHours.ts`):** technicians' weekly hours in their own time zone (via `Intl`, no date library) and a last day away. Dispatch leaves out people who are off and never auto-assigns them.
+- **Technicians' time:** `listTimeEntries` lets the close check warn when no technician time is on a PSA-linked ticket. Haley's own entries are known by the ids kept on the link (`time_entry_ids`) or by her note. Advisory only: `require` mode doesn't enforce it, and a PSA failure is a hint.
+- **Attachments:** `listAttachments` and `getAttachment` bring in files on changed tickets (`seen_attachment_ids`, capped per ticket and per sync). Customer files go through the hub like a message's; technicians' files are stored on an internal note with `technicianFiles`, which keeps them out of Haley's runs.
 - **Schedule:** the scheduler syncs each connection every 2 minutes, and `POST /api/psa/:id/sync` syncs on demand.
 
 ### Plan mode
@@ -232,7 +236,7 @@ Connectors that call an MSP-configured host or tenant (NinjaOne, SyncroMSP RMM, 
 | `schedules` | Recurring tasks and Haley's one-off ticket follow-ups. |
 | `model_profiles` | AI models: provider, model, base URL, encrypted key, options, fallback, default flag. |
 | `verification_attempts`, `secret_links` | Step-up verification history (drives fatigue limits) and view-once credential links (hashed tokens). |
-| `psa_connections`, `ticket_links` | PSA credentials (encrypted), customer→client map, sync cursor and options; ticket ↔ PSA ticket links with seen comments and mirrored events. |
+| `psa_connections`, `ticket_links` | PSA credentials (encrypted), customer→client map, sync cursor and options; ticket ↔ PSA ticket links with seen comments and attachments, mirrored events, Haley's time entries and the last PSA owner. |
 | `assist_drafts`, `rule_suggestions` | Copilot reply drafts (30 days, to see how they were edited) and policy rules Haley suggested from technicians' feedback. |
 | `technicians`, `approval_posts` | The MSP's technicians with their Slack and Teams ids; approval cards and escalation notices posted to chat, so they can be updated. |
 | `attachments` | Files that came with messages (bytes, sniffed type, extracted text), purged after the retention period. |

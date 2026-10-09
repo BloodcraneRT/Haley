@@ -85,6 +85,10 @@ export interface PsaAdapter {
   logTime?(ticketId: string, entry: TimeEntry): Promise<string>;
   /** Time recorded on the PSA ticket, by anyone (Haley's entries included; callers tell them apart). */
   listTimeEntries?(ticketId: string): Promise<LoggedTime[]>;
+  /** Files attached to the PSA ticket. */
+  listAttachments?(ticketId: string): Promise<PsaAttachment[]>;
+  /** One file's bytes, or null when it's over `maxBytes` (checked before or while downloading). */
+  getAttachment?(ticketId: string, attachment: PsaAttachment, maxBytes: number): Promise<Uint8Array | null>;
   /** The MSP's saved replies matching a search. */
   findCannedResponses?(query: string): Promise<CannedResponse[]>;
   /** A customer's contracts (agreements), for checking what work is covered. */
@@ -134,6 +138,22 @@ export interface TimeEntry {
   startedAt: string;
   minutes: number;
   notes: string;
+}
+
+/** A file attached to a PSA ticket. */
+export interface PsaAttachment {
+  id: string;
+  filename: string;
+  contentType: string | null;
+  /** Bytes, when the PSA says. */
+  size: number | null;
+  createdAt: string;
+  /** Added by the customer or contact (their files go to Haley like their messages); otherwise by a technician. */
+  fromCustomer: boolean;
+  /** The comment it came with, when the PSA links them; that comment's author then decides `fromCustomer`. */
+  commentId?: string | null;
+  /** A pre-signed download link, for PSAs that give one. */
+  url?: string;
 }
 
 /** A time entry already on a PSA ticket. */

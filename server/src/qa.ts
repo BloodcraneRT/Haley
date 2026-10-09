@@ -7,7 +7,7 @@ import type { Ticket, TicketEvent } from "./types.js";
 /** A message from the requester (or someone else on their side) that arrived on a channel or from the PSA. */
 export const isCustomerMessage = (e: TicketEvent) => e.kind === "comment" && Boolean(e.meta.channel) && !e.meta.fromTechnician;
 /** A note a technician wrote: in the dashboard (no channel) or in the PSA. */
-export const isTechnicianNote = (e: TicketEvent) => e.kind === "comment" && (!e.meta.channel || Boolean(e.meta.fromTechnician));
+export const isTechnicianNote = (e: TicketEvent) => e.kind === "comment" && (!e.meta.channel || Boolean(e.meta.fromTechnician)) && !e.meta.technicianFiles;
 /** A reply someone wrote to the requester; automatic acknowledgements and notices don't count. */
 export const isRealReply = (e: TicketEvent) => e.kind === "reply" && !e.meta.auto;
 

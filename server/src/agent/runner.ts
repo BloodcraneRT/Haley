@@ -96,7 +96,8 @@ export class AgentService {
     });
     const events = this.store.listTicketEvents(ticketId);
     const history = events.filter((event) => !event.meta.untrustedContinuation);
-    const files = attachmentParts(this.store, ticketId, new Set(events.filter((e) => e.meta.untrustedContinuation).map((e) => e.id)));
+    // Files from untrusted messages, and technicians' files from the PSA, aren't Haley's to read.
+    const files = attachmentParts(this.store, ticketId, new Set(events.filter((e) => e.meta.untrustedContinuation || e.meta.technicianFiles).map((e) => e.id)));
     const current = this.store.getTicket(ticketId) ?? ticket;
     const incident = incidentContext(this.store, current);
     const care = careContext(current);

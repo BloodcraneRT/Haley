@@ -1,3 +1,4 @@
+import { MAX_DOWNLOAD_BYTES, MAX_FILES_PER_MESSAGE, storeAttachments, type IncomingFile } from "../attachments.js";
 import type { ChannelHub } from "../channels/hub.js";
 import type { ChannelAdapter, DeliveryResult } from "../channels/types.js";
 import type { Store } from "../store.js";
@@ -13,6 +14,8 @@ export interface SyncResult {
   statusUpdates: number;
   /** Time entries added for Haley's work. */
   timeLogged: number;
+  /** Files imported from PSA tickets (including ones listed by name without being downloaded). */
+  attachmentsImported: number;
   unmappedCustomers: string[];
   /** Technicians assigned in Haley who have no id in this PSA, so the assignment couldn't be sent. */
   ownersNotSent: string[];
@@ -52,6 +55,10 @@ export function workingMinutes(callTimes: string[]): number {
 export const MAX_PULL_ATTEMPTS = 3;
 
 const MIRRORED_KINDS = new Set<TicketEvent["kind"]>(["agent_note", "escalation", "action", "reply", "comment"]);
+
+/** PSA files imported per ticket per sync (the same as one message) and per sync overall; the rest wait. */
+export const MAX_PSA_FILES_PER_TICKET = MAX_FILES_PER_MESSAGE;
+export const MAX_PSA_FILES_PER_SYNC = 50;
 
 function mirrorText(event: TicketEvent, ticket: Ticket, kind: PsaKind): string | null {
   if (!MIRRORED_KINDS.has(event.kind)) return null;
@@ -148,7 +155,7 @@ export class PsaSync {
   }
 
   async sync(connectionId: string): Promise<SyncResult> {
-    const result: SyncResult = { imported: 0, commentsImported: 0, exported: 0, pushed: 0, statusUpdates: 0, timeLogged: 0, unmappedCustomers: [], ownersNotSent: [], errors: [] };
+    const result: SyncResult = { imported: 0, commentsImported: 0, exported: 0, pushed: 0, statusUpdates: 0, timeLogged: 0, attachmentsImported: 0, unmappedCustomers: [], ownersNotSent: [], errors: [] };
     const connection = this.store.getPsaConnection(connectionId);
     if (!connection) return { ...result, skipped: "The connection no longer exists." };
     if (!connection.enabled) return { ...result, skipped: "Sync is paused for this connection." };
@@ -219,6 +226,8 @@ export class PsaSync {
       }
       // Tickets closed before Haley ever saw them aren't worth importing.
       if (coarse(external.status) === "resolved") return;
+      // The customer's files go in with the ticket, so Haley sees them from the start.
+      const files = await this.newAttachments(connection, external, [], result);
       const received = await this.hub.receive({
         channel: connection.kind,
         org,
@@ -232,6 +241,7 @@ export class PsaSync {
         text: external.description || external.subject,
         thread: null,
         ref: { connectionId: connection.id, externalId: external.id, externalNumber: external.number },
+        ...(files.customer.length ? { attachments: files.customer } : {}),
       });
       const key = `${connection.id}:${external.id}`;
       this.store.createTicketLink({
@@ -248,6 +258,8 @@ export class PsaSync {
         pushedEventIds: this.store.listTicketEvents(received.ticketId).map((e) => e.id),
       });
       this.applyOwner(connection, received.ticketId, external);
+      await this.storeTechnicianFiles(connection, received.ticketId, files.technician);
+      this.store.updateTicketLink(received.ticketId, connection.id, { seenAttachmentIds: files.ids });
       result.imported++;
       return;
     }
@@ -255,6 +267,12 @@ export class PsaSync {
     const ticket = this.store.getTicket(link.ticket_id);
     if (!ticket) return;
     const fresh = external.comments.filter((c) => !link.seen_comment_ids.includes(c.id));
+    const files = await this.newAttachments(connection, external, link.seen_attachment_ids, result);
+    // The customer's new files ride on their last new message (or one of their own), so they're treated alike.
+    const customerFileIds = files.customer.length
+      ? (await storeAttachments(this.store, { ticketId: ticket.id, eventId: null, source: connection.kind, files: files.customer })).map((a) => a.id)
+      : [];
+    const lastCustomer = fresh.findLast((c) => c.fromCustomer && c.public);
     for (const comment of fresh) {
       if (comment.fromCustomer && comment.public) {
         this.hub.appendToTicket(this.store.getTicket(ticket.id)!, {
@@ -263,6 +281,7 @@ export class PsaSync {
           email: external.requesterEmail,
           assurance: connection.options.requesterAssurance,
           text: comment.body,
+          ...(comment === lastCustomer && customerFileIds.length ? { attachmentIds: customerFileIds } : {}),
         });
       } else {
         // A technician worked the ticket in the PSA: keep the record, don't wake Haley.
@@ -283,11 +302,77 @@ export class PsaSync {
         result.statusUpdates++;
       }
     }
+    if (customerFileIds.length && !lastCustomer) {
+      this.hub.appendToTicket(this.store.getTicket(ticket.id)!, {
+        channel: connection.kind,
+        author: external.requesterName || "Requester",
+        email: external.requesterEmail,
+        assurance: connection.options.requesterAssurance,
+        text: `(Sent ${customerFileIds.length} attachment${customerFileIds.length === 1 ? "" : "s"} in ${connection.name}: ${files.customer.map((f) => f.filename).join(", ")})`,
+        attachmentIds: customerFileIds,
+      });
+    }
+    await this.storeTechnicianFiles(connection, ticket.id, files.technician);
     this.store.updateTicketLink(ticket.id, connection.id, {
       seenCommentIds: [...link.seen_comment_ids, ...fresh.map((c) => c.id)],
       lastStatus,
+      ...(files.ids.length ? { seenAttachmentIds: [...link.seen_attachment_ids, ...files.ids] } : {}),
     });
     this.applyOwner(connection, ticket.id, external);
+  }
+
+  /**
+   * New files on a PSA ticket, downloaded and split into the customer's (which Haley reads, like their messages)
+   * and technicians' (kept for the record only). A file comes from whoever wrote the comment it's attached to,
+   * when the PSA links them. Within the caps; the rest wait for the next sync. Too large or failed downloads are
+   * listed by name with why, and not retried.
+   */
+  private async newAttachments(
+    connection: PsaConnection,
+    external: ExternalTicket,
+    seen: string[],
+    result: SyncResult,
+  ): Promise<{ customer: IncomingFile[]; technician: IncomingFile[]; ids: string[] }> {
+    const out = { customer: [] as IncomingFile[], technician: [] as IncomingFile[], ids: [] as string[] };
+    if (!connection.options.importAttachments) return out;
+    const adapter = this.adapterFor(connection);
+    if (!adapter.listAttachments || !adapter.getAttachment) return out;
+    let listed;
+    try {
+      listed = (await adapter.listAttachments(external.id)).filter((a) => !seen.includes(a.id));
+    } catch (err) {
+      result.errors.push(`Attachments on #${external.number || external.id}: ${err instanceof Error ? err.message : String(err)}`);
+      return out;
+    }
+    const budget = Math.max(0, Math.min(MAX_PSA_FILES_PER_TICKET, MAX_PSA_FILES_PER_SYNC - result.attachmentsImported));
+    for (const a of listed.slice(0, budget)) {
+      const comment = a.commentId ? external.comments.find((c) => c.id === a.commentId) : undefined;
+      const fromCustomer = comment ? comment.fromCustomer && comment.public : a.fromCustomer;
+      const base = { filename: a.filename, contentType: a.contentType ?? "application/octet-stream" };
+      let file: IncomingFile;
+      try {
+        const data = await adapter.getAttachment(external.id, a, MAX_DOWNLOAD_BYTES);
+        file = data ? { ...base, data } : { ...base, data: new Uint8Array(), skipped: `Not downloaded: over ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB.` };
+      } catch (err) {
+        file = { ...base, data: new Uint8Array(), skipped: `Not downloaded from ${connection.name}: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      (fromCustomer ? out.customer : out.technician).push(file);
+      out.ids.push(a.id);
+      result.attachmentsImported++;
+    }
+    return out;
+  }
+
+  /** Technicians' files go on an internal note of their own, which keeps them out of Haley's runs. */
+  private async storeTechnicianFiles(connection: PsaConnection, ticketId: string, files: IncomingFile[]) {
+    if (!files.length) return;
+    const note = this.store.addTicketEvent(ticketId, "comment", connection.name, `Files added in ${connection.name}: ${files.map((f) => f.filename).join(", ")}`, {
+      channel: connection.kind,
+      fromTechnician: true,
+      internal: true,
+      technicianFiles: true,
+    });
+    await storeAttachments(this.store, { ticketId, eventId: note.id, source: connection.kind, files });
   }
 
   /**
