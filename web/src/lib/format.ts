@@ -184,6 +184,7 @@ export const CHANNEL_META: Record<TicketChannel, { label: string; help: string }
   slack: { label: "Slack", help: "Direct message or @mention in Slack" },
   teams: { label: "Teams", help: "Message to the Haley bot in Microsoft Teams" },
   chat: { label: "Chat", help: "Chat bridge (web widget, SMS, Google Chat) or the end-user simulator" },
+  phone: { label: "Phone", help: "A call, transcribed by a call-answering service. The caller isn't verified; replies go by email to the matched person" },
   syncro: { label: "Syncro", help: "Imported from SyncroMSP; replies go back as public ticket comments" },
   dynamics: { label: "Dynamics 365", help: "Imported from a Dynamics 365 Customer Service case; replies go to the case timeline" },
   connectwise: { label: "ConnectWise", help: "Imported from ConnectWise PSA; replies go back as Discussion notes" },

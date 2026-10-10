@@ -7,6 +7,7 @@ import { conversationRoot, stripQuotedReply, ticketNumberFromSubject, verifyEmai
 import type { ChannelHub } from "../channels/hub.js";
 import { verifySlackSignature, type SlackChannel } from "../channels/slack.js";
 import type { TeamsChannel } from "../channels/teams.js";
+import type { CallOutcome, PhoneCall } from "../channels/phone.js";
 import type { Store } from "../store.js";
 import type { IncomingFile } from "../attachments.js";
 
@@ -57,6 +58,20 @@ const emailSchema = z.object({
   attachments: attachmentInput,
 });
 
+const voiceSchema = z.object({
+  callId: z.string().trim().min(1).max(200),
+  from: z.string().trim().min(3).max(40),
+  to: z.string().trim().max(40).default(""),
+  startedAt: z.iso.datetime({ offset: true }).optional(),
+  durationSec: z.number().min(0).max(86_400).optional(),
+  callerName: z.string().trim().max(200).optional(),
+  company: z.string().trim().max(200).optional(),
+  summary: z.string().max(10_000).optional(),
+  transcript: z.string().max(200_000).default(""),
+  // A link only: stored for technicians, never fetched or shown to the model.
+  recordingUrl: z.url({ protocol: /^https$/ }).max(2000).optional(),
+});
+
 const chatSchema = z.object({
   orgId: z.string().optional(),
   threadId: z.string().min(1),
@@ -81,6 +96,8 @@ export interface HookDeps {
   slack: SlackChannel | null;
   teams: TeamsChannel | null;
   log: (err: unknown) => void;
+  /** Turns a call into a ticket (channels/phone.ts). */
+  phone?: (call: PhoneCall) => Promise<CallOutcome>;
   /** Handles approval-card invokes and "approvals here" before end-user handling; null passes the activity on. */
   teamsIntercept?: (activity: Record<string, any>) => Promise<{ status: number; body?: unknown } | null>;
 }
@@ -155,6 +172,21 @@ export function registerHooks(app: FastifyInstance, deps: HookDeps) {
       if (inbound) await hub.receive(inbound);
     })().catch(log);
     return reply.status(202).send();
+  });
+
+  app.post("/hooks/voice", async (req, reply) => {
+    if (!verifyChatSignature(config.voiceWebhookSecret, header(req, "x-haley-signature"), rawBody(req))) {
+      return reply.status(401).send({ error: "Bad signature" });
+    }
+    if (!deps.phone) return reply.status(404).send({ error: "Phone intake isn't set up" });
+    const parsed = voiceSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: z.prettifyError(parsed.error) });
+    const call = parsed.data;
+    if (!call.transcript.trim() && !call.summary?.trim()) return reply.status(400).send({ error: "Send a transcript or a summary." });
+    const outcome = await deps.phone(call);
+    // The service can retry or alert someone: Haley couldn't tell whose call it was.
+    if (outcome.status === "unmatched") return reply.status(422).send({ error: "No client matches this call. Add the number dialled to a client, or connect the client's directory." });
+    return outcome;
   });
 
   app.post("/hooks/chat", { bodyLimit: ATTACHMENT_BODY_LIMIT }, async (req, reply) => {

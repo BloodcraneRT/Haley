@@ -1,6 +1,6 @@
 # Spec: phase 4, the deferred items
 
-Status: **4a, 4b and 4c built** (sections 5, 8, 2, 3, 4 and 1), 2026-10-09. Changes from this spec while building:
+Status: **all built** (4a–4d), 2026-10-09. Phone uses the generic webhook with a setup guide (no provider-specific shim yet); SentinelOne is the first new integration. Changes from this spec while building:
 
 - **4a:** the probe also runs from the dashboard (**Check fields** on the PSA page), not only as a script. Autotask categories come from `issueType`.
 - **4b:**
@@ -15,6 +15,11 @@ Status: **4a, 4b and 4c built** (sections 5, 8, 2, 3, 4 and 1), 2026-10-09. Chan
   - The "can't be DMed" list on the settings page names approvers from client rules who aren't in the directory or have no linked chat account. It doesn't track Teams installs; those are audited when a DM fails.
   - The reminder counts from when the change was proposed.
   - The reminder DM is the full card again (so it can be decided from there), not a text line.
+- **4d:**
+  - Phone: a call nobody can place gets a 422 (and an audit entry) so the service can alert someone, rather than a ticket on no client. A client guessed from the company name needs a technician to confirm it before Haley works the ticket.
+  - Phone: the caller's number is matched by its last ten digits against users' phone numbers read from the client's directory tools (Microsoft 365 mobile and business phones, Google phones and recovery phone), cached a day per client. A number on more than one person matches nobody.
+  - Alert sources: ticket dedupe keys from other sources are prefixed with the source (`sentinelone:…`); Syncro's stay as they were, so tickets already open keep matching.
+  - SentinelOne: tools are `s1_list_devices`, `s1_get_device`, `s1_list_threats`, `s1_get_threat`, `s1_update_threat` (write), `s1_mitigate_threat` (destructive), `s1_disconnect_device` (destructive, technician-only rail) and `s1_reconnect_device` (destructive). Recipes: *SentinelOne threat triage* and *Contain a compromised device*.
 
 Phases 1–3 of [NEO_FOLLOWUPS.md](NEO_FOLLOWUPS.md) are built. This spec covers what was left out of them, plus the two items that were always planned for phase 4 (phone and new integrations). Each section says what changes, where in the code, the data, the API and UI, safety rules, tests, and size. File references are to `main` after PR #14. The last migration today is 18; the numbers below follow the suggested order and are indicative.
 
@@ -28,8 +33,8 @@ Phases 1–3 of [NEO_FOLLOWUPS.md](NEO_FOLLOWUPS.md) are built. This spec covers
 3. [PSA time entries in the close check](#3-psa-time-entries-in-the-close-check) (built)
 4. [Attachments from the PSA](#4-attachments-from-the-psa) (built)
 5. [Reports from Autotask and Dynamics](#5-reports-from-autotask-and-dynamics) (built)
-6. [Phone through a partner](#6-phone-through-a-partner)
-7. [Alert sources and integrations by demand](#7-alert-sources-and-integrations-by-demand)
+6. [Phone through a partner](#6-phone-through-a-partner) (built)
+7. [Alert sources and integrations by demand](#7-alert-sources-and-integrations-by-demand) (built: SentinelOne first)
 8. [Live-tenant checks](#8-live-tenant-checks) (built)
 - [Suggested order](#suggested-order)
 - [Open questions](#open-questions)

@@ -7,7 +7,7 @@
 
 export type Autonomy = "read_only" | "supervised" | "autonomous" | "unattended";
 export const AUTONOMY_LEVELS: Autonomy[] = ["read_only", "supervised", "autonomous", "unattended"];
-export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code" | "ninjaone" | "syncro_rmm" | "itglue" | "hudu" | "rest";
+export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code" | "ninjaone" | "syncro_rmm" | "sentinelone" | "itglue" | "hudu" | "rest";
 /** directory: tools Haley acts with; channel: how end users reach Haley; verification: step-up MFA. */
 export type ProviderKind = "directory" | "channel" | "verification";
 
@@ -21,7 +21,7 @@ export const ASSURANCE_LEVELS: Assurance[] = ["none", "email", "chat", "director
 export const MFA_WINDOW_MINUTES = 30;
 
 /** Where a ticket came from; replies go back the same way. */
-export type TicketChannel = "portal" | "api" | "monitoring" | "email" | "slack" | "teams" | "chat" | "syncro" | "dynamics" | "connectwise" | "autotask" | "halopsa";
+export type TicketChannel = "portal" | "api" | "monitoring" | "email" | "slack" | "teams" | "chat" | "phone" | "syncro" | "dynamics" | "connectwise" | "autotask" | "halopsa";
 export type RunMode = "live" | "plan";
 export type Cadence = "once" | "daily" | "weekly" | "monthly";
 export const CADENCES: Cadence[] = ["once", "daily", "weekly", "monthly"];
@@ -81,6 +81,8 @@ export interface OrgSettings {
   approvalSlackChannel: string;
   /** Requesters (emails) whose tickets get a priority bump and extra care. */
   vipRequesters: string[];
+  /** Numbers callers dial for this client, when the MSP has a line per client. */
+  phoneNumbers?: string[];
 }
 
 /** deny: blocked; approve: goes to the approval queue; allow: runs without a sign-off the autonomy level would have asked for. */

@@ -1,3 +1,5 @@
+import { SentinelOneApi } from "../src/connectors/sentinelone/api.js";
+import { sentinelOneTools } from "../src/connectors/sentinelone/tools.js";
 import { describe, expect, it } from "vitest";
 import { builtinTools } from "../src/agent/builtinTools.js";
 import { RECIPE_CATEGORIES, TASK_TEMPLATES, templateAvailability } from "../src/agent/templates.js";
@@ -33,6 +35,7 @@ async function realTools() {
     itglue: itGlueTools(new ItGlueApi({ host: "api.itglue.com", apiKey: "k" }, noFetch), "1"),
     hudu: huduTools(new HuduApi({ baseUrl: "https://docs.example.com", apiKey: "k" }, noFetch), 1),
     syncro_rmm: syncroRmmTools(new SyncroRmmApi({ subdomain: "lint", apiKey: "k" }, noFetch), 1, []),
+    sentinelone: sentinelOneTools(new SentinelOneApi({ consoleUrl: "https://lint.sentinelone.net", apiToken: "k" }, "1", noFetch)),
     builtin: builtinTools(store, taskRun),
   };
   const all = new Map<string, HaleyTool>();

@@ -34,7 +34,7 @@ export const PRIVILEGED_ROLES = [
   "Billing Administrator",
   "Conditional Access Administrator",
 ];
-const USER_SELECT = "id,displayName,userPrincipalName,mail,accountEnabled,jobTitle,department,usageLocation,assignedLicenses";
+const USER_SELECT = "id,displayName,userPrincipalName,mail,accountEnabled,jobTitle,department,usageLocation,assignedLicenses,mobilePhone,businessPhones";
 
 export interface GraphCredentials {
   tenantId: string;
@@ -117,6 +117,7 @@ export class GraphM365Api implements M365Api {
       department: u.department ?? null,
       usageLocation: u.usageLocation ?? null,
       licenses: (u.assignedLicenses ?? []).map((l: Json) => l.skuId),
+      phones: [u.mobilePhone, ...(u.businessPhones ?? [])].filter((p): p is string => typeof p === "string" && p.trim() !== ""),
     };
   }
 

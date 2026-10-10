@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import type { SyncroAlertTickets } from "../monitoring/syncroAlerts.js";
+import type { AlertTickets } from "../monitoring/alerts.js";
 import type { PsaSync } from "../psa/sync.js";
 import type { Store } from "../store.js";
 
@@ -69,14 +69,14 @@ const sameSecret = (given: string, expected: string) => {
  */
 export function registerSyncroWebhook(
   app: FastifyInstance,
-  deps: { store: Store; psa: PsaSync; alerts: SyncroAlertTickets; publicUrl: string; actor: (req: FastifyRequest) => string; log: (err: unknown) => void },
+  deps: { store: Store; psa: PsaSync; alerts: AlertTickets; publicUrl: string; actor: (req: FastifyRequest) => string; log: (err: unknown) => void },
 ): Debouncer {
   const { store, psa, alerts } = deps;
   const debouncer = new Debouncer(async () => {
     for (const connection of store.listPsaConnections()) {
       if (connection.kind === "syncro" && connection.enabled) await psa.sync(connection.id);
     }
-    await alerts.pollNow();
+    await alerts.pollNow(Date.now(), "syncro_rmm");
   }, WEBHOOK_MIN_GAP_MS, deps.log);
 
   const url = (secret: string) => `${deps.publicUrl}/hooks/syncro/${secret}`;

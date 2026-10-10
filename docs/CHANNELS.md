@@ -91,6 +91,61 @@ x-haley-signature: sha256=<hex HMAC-SHA256 of the raw body with HALEY_CHAT_WEBHO
 - **`private: true`** means only this user sees replies in the thread, so self-service credentials may be sent there.
 - **Replies** are POSTed to `callbackUrl` as `{ threadId, ticketNumber, text, private }` and signed the same way.
 
+## Phone
+
+Haley doesn't answer calls. A voice-AI receptionist or phone system that can send a webhook after each call (a transcript, and ideally a summary) gives Haley the call, and she turns it into a ticket.
+
+```
+POST {HALEY_PUBLIC_URL}/hooks/voice
+content-type: application/json
+x-haley-signature: sha256=<hex HMAC-SHA256 of the raw body with HALEY_VOICE_WEBHOOK_SECRET>
+```
+
+```json
+{
+  "callId": "the service's id for the call (a repeat is ignored)",
+  "from": "+14255550109",
+  "to": "+18005550100",
+  "startedAt": "2026-10-09T15:04:00Z",
+  "durationSec": 184,
+  "callerName": "optional, as the caller said it",
+  "company": "optional, as the caller said it",
+  "summary": "optional: the service's summary; its first line becomes the ticket title",
+  "transcript": "the conversation",
+  "recordingUrl": "optional https link, kept for technicians only"
+}
+```
+
+**Responses:**
+- `200` with `{ status: "created", ticketId, ticketNumber, orgId, matched }`;
+- `200` with `{ status: "duplicate", ticketId }` for a `callId` already received;
+- `422` when Haley can't tell whose call it was, so your service can alert someone (also in the audit log as `phone.unmatched`);
+- `401` for a bad signature, `400` for a malformed body.
+
+**Which client:**
+1. The number dialled, if it's in a client's **Phone numbers callers dial** (client page → Self-service & safety). Use this if you have a line per client.
+2. Otherwise the caller's number, matched against the phone numbers on users in each client's Microsoft 365 or Google Workspace directory. Matching uses the last ten digits, so formats don't matter. A number on more than one person matches nobody. Directories are read with each client's own connection and kept for a day.
+3. Otherwise the company the caller named, if it's clearly one client's name. That's only a guess: the ticket goes to the unassigned queue with a note, and Haley doesn't work it until a technician confirms the client.
+
+**What Haley does:**
+- The ticket's channel is **Phone**, with the summary and transcript as the description. Both are treated as the caller's words, never as instructions.
+- **The caller is never verified**, whatever caller ID says: caller ID can be faked. That's enforced by Haley's server, not just her instructions. So the client's policy keeps anything sensitive from running on the call alone. Haley investigates, fixes what doesn't depend on who called, and for the caller's own account sends a step-up verification to the matched person or asks them to continue by email or Teams.
+- **Replies** go by email to the directory address the caller's number matched, never to the caller's number. With no match, there's no reply channel and the ticket is for technicians.
+- **The recording** is kept as a link on the ticket for technicians. Haley never fetches it, and the model never sees it.
+
+**Setting up a service** (any provider that can send an HTTP webhook after a call):
+1. Set `HALEY_VOICE_WEBHOOK_SECRET` on the Haley server, and the same secret in your service.
+2. Point the service's post-call webhook at `{HALEY_PUBLIC_URL}/hooks/voice`.
+3. Map its fields to the body above. Most services call them something like `call_id`, `from_number`/`caller`, `to_number`/`called`, `started_at`, `duration`, `transcript` and `summary`/`call_analysis`.
+4. Sign the raw JSON body with HMAC-SHA256 and send `sha256=<hex>` in `x-haley-signature`. If the service can't sign requests, put a small relay in front (a serverless function or an automation platform's code step) that maps the fields and signs. In Node:
+
+   ```js
+   const body = JSON.stringify(mapped);
+   const signature = "sha256=" + require("node:crypto").createHmac("sha256", process.env.HALEY_VOICE_WEBHOOK_SECRET).update(body).digest("hex");
+   await fetch(`${HALEY}/hooks/voice`, { method: "POST", headers: { "content-type": "application/json", "x-haley-signature": signature }, body });
+   ```
+5. Make a test call from a number on a test user in a client's directory, and check the ticket on the **Tickets** page.
+
 ## SyncroMSP and Dynamics 365
 
 PSA tickets are a channel too. Connect a PSA on the dashboard's **PSA sync** page and map its customers to Haley clients; Haley suggests mappings by email and website domains. What happens next:

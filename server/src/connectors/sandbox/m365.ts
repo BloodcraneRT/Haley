@@ -142,7 +142,7 @@ function seed(domain: string, displayName: string): M365SandboxState {
   const [all, sales, finance, ap, vpn] = groups;
 
   const users = [
-    mk("Megan", "Bowen", "Marketing Manager", "Marketing", { groups: [all.id] }),
+    mk("Megan", "Bowen", "Marketing Manager", "Marketing", { groups: [all.id], phones: ["+1 425 555 0109"] }),
     mk("Alex", "Wilber", "Sales Representative", "Sales", { groups: [all.id, sales.id] }),
     mk("Diego", "Siciliani", "Sales Director", "Sales", { groups: [all.id, sales.id, vpn.id], licenses: [SKU_E3] }),
     mk("Isaiah", "Langer", "Accountant", "Finance", {
@@ -157,7 +157,7 @@ function seed(domain: string, displayName: string): M365SandboxState {
         { type: "phone:mobile", detail: "+1 5550142" },
       ],
     }),
-    mk("Grady", "Archie", "IT Coordinator", "Operations", { groups: [all.id, vpn.id], licenses: [SKU_E3] }),
+    mk("Grady", "Archie", "IT Coordinator", "Operations", { groups: [all.id, vpn.id], licenses: [SKU_E3], phones: ["+1 425 555 0186", "+1 425 555 0100"] }),
     mk("Pradeep", "Gupta", "Former Sales Rep", "Sales", {
       accountEnabled: false,
       groups: [all.id, sales.id],
@@ -226,7 +226,7 @@ export class SandboxM365Api implements M365Api {
 
   private strip(u: SandboxUser): M365User {
     const { groups: _g, authMethods: _a, sessionsRevokedAt: _s, passwordChangedAt: _p, autoReply: _r, ...rest } = u;
-    return { ...rest, licenses: [...u.licenses] };
+    return { ...rest, licenses: [...u.licenses], phones: [...(u.phones ?? [])] };
   }
 
   async organization() {

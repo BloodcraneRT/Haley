@@ -12,6 +12,8 @@ export interface GwsUser {
   aliases: string[];
   /** Recovery phone on file (E.164), used for SMS verification codes. */
   recoveryPhone: string | null;
+  /** Phone numbers on the directory profile. */
+  phones?: string[];
 }
 
 export interface GwsGroup {

@@ -23,7 +23,9 @@ import { SlackChannel } from "./channels/slack.js";
 import { TeamsChannel } from "./channels/teams.js";
 import { clientReport } from "./report.js";
 import { psaConnectorsFor } from "./psa/tools.js";
-import { SyncroAlertTickets } from "./monitoring/syncroAlerts.js";
+import { AlertTickets } from "./monitoring/alerts.js";
+import { sentinelOneAlertSource } from "./monitoring/sentinelOneAlerts.js";
+import { syncroAlertSource } from "./monitoring/syncroAlerts.js";
 import { rankSimilar, tokens } from "./similar.js";
 import { IncidentDetector } from "./incidents.js";
 import { registerIncidentRoutes } from "./routes/incidents.js";
@@ -40,6 +42,7 @@ import "./psa/autotask.js";
 import "./psa/halopsa.js";
 import { PsaSync } from "./psa/sync.js";
 import { DEFAULT_PSA_OPTIONS, type PsaAdapter, type PsaConnection } from "./psa/types.js";
+import { handleCall, PhoneDirectory } from "./channels/phone.js";
 import { registerHooks } from "./routes/hooks.js";
 import { registerM365Onboarding } from "./routes/m365Onboarding.js";
 import { registerMemoryRoutes } from "./routes/memories.js";
@@ -232,7 +235,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   const approvalNotifier = new ApprovalNotifier(store, teamsApprovals ? [slackApprovals, teamsApprovals] : [slackApprovals], ch.publicUrl);
   agent.attachApprovalEvents(approvalNotifier);
   store.onTicketStatusChanged((ticket, from, who) => approvalNotifier.escalated(ticket, from, who));
-  const alertTickets = new SyncroAlertTickets(store, agent, fetchImpl);
+  const alertTickets = new AlertTickets(store, agent, [syncroAlertSource(fetchImpl), sentinelOneAlertSource(fetchImpl)]);
   const scheduler = new Scheduler(store, agent, psa, alertTickets, approvalNotifier);
 
   const withSla = (ticket: Ticket, org: Org | null | undefined) => ({ ...ticket, sla: org ? slaFor(ticket, org.settings.sla) : null });
@@ -252,10 +255,12 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
     }
   });
 
+  const phoneDirectory = new PhoneDirectory(store, connectorsFor);
   registerHooks(app, {
     config: ch,
     store,
     hub,
+    phone: (call) => handleCall({ store, hub, directory: phoneDirectory }, call),
     slack,
     teams,
     log: (err) => app.log.error(err),
@@ -379,6 +384,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       ),
       policyRules: z.array(policyRuleInput).max(100),
       vipRequesters: emails.max(200),
+      phoneNumbers: z.array(z.string().trim().regex(/^\+?[\d\s().-]{7,20}$/, "Phone numbers look like +1 425 555 0100")).max(20),
       approvalSlackChannel: z.union([z.literal(""), z.string().trim().regex(/^[CG][A-Z0-9]{2,20}$/, "Slack channel ids look like C0123ABCD")]),
     })
     .partial();
@@ -662,6 +668,8 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
       { id: "slack", name: "Slack", enabled: hub.has("slack"), inbound: hub.has("slack"), outbound: hub.has("slack"), webhookUrl: `${base}/hooks/slack/events`, env: ["HALEY_SLACK_SIGNING_SECRET"] },
       { id: "teams", name: "Microsoft Teams", enabled: hub.has("teams"), inbound: hub.has("teams"), outbound: hub.has("teams"), webhookUrl: `${base}/hooks/teams/messages`, env: ["HALEY_TEAMS_APP_ID", "HALEY_TEAMS_APP_PASSWORD", "HALEY_TEAMS_TENANT_ID"] },
       { id: "chat", name: "Chat bridge (Google Chat, SMS, custom)", enabled: Boolean(config.channels.chatWebhookSecret), inbound: Boolean(config.channels.chatWebhookSecret), outbound: Boolean(config.channels.chatWebhookSecret), webhookUrl: `${base}/hooks/chat`, env: ["HALEY_CHAT_WEBHOOK_SECRET"] },
+      // Calls come in as transcripts; replies go by email to the matched person, so there's no phone outbound.
+      { id: "phone", name: "Phone (call-answering service)", enabled: Boolean(config.channels.voiceWebhookSecret), inbound: Boolean(config.channels.voiceWebhookSecret), outbound: false, webhookUrl: `${base}/hooks/voice`, env: ["HALEY_VOICE_WEBHOOK_SECRET"] },
     ];
   });
 
