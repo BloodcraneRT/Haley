@@ -14,6 +14,8 @@ import { SmsCodeVerifier, type PhoneLookup } from "./verification/sms.js";
 import { ninjaHost, NinjaOneApi } from "./ninjaone/api.js";
 import { SyncroRmmApi, syncroSubdomain } from "./syncro/api.js";
 import { parseAllowedScripts, syncroRmmTools } from "./syncro/tools.js";
+import { SentinelOneApi, sentinelOneBase } from "./sentinelone/api.js";
+import { sentinelOneTools } from "./sentinelone/tools.js";
 import { ninjaOneTools } from "./ninjaone/tools.js";
 import { ItGlueApi, itglueHost, itGlueTools } from "./itglue/tools.js";
 import { HuduApi, huduBase, huduTools } from "./hudu/tools.js";
@@ -209,6 +211,33 @@ export const PROVIDERS: ProviderInfo[] = [
     kind: "directory",
   },
   {
+    id: "sentinelone",
+    name: "SentinelOne",
+    description:
+      "This client's SentinelOne site: devices, threats and their details, plus marking threats resolved, mitigating them (kill, quarantine, remediate, roll back) and disconnecting a compromised device from the network, all policy-gated. Can open a Haley ticket for each new threat. Scoped to one SentinelOne site.",
+    fields: [
+      { key: "consoleUrl", label: "Console URL", placeholder: "https://usea1-partners.sentinelone.net", help: "The address you sign in to SentinelOne at." },
+      { key: "apiToken", label: "API token", secret: true, help: "A service user's API token (Settings → Users → Service Users). Tokens expire; set a reminder to renew it." },
+      { key: "siteId", label: "Site ID", placeholder: "1234567890123456789", help: "The client's site: Sentinels → the site → its ID in the site details (or the siteIds value in the URL)." },
+      {
+        key: "alertTickets",
+        label: "Open a ticket for each new threat",
+        optional: true,
+        placeholder: "false",
+        help: "\"true\" makes Haley open and triage a ticket for each new SentinelOne threat on this client.",
+      },
+    ],
+    setupSteps: [
+      "In SentinelOne go to Settings → Users → Service Users → New Service User, scoped to your account (or to each client's site).",
+      "Give it a role that can view and act on threats and endpoints (for example IR Team, or a custom role with Threats: view, mark as, mitigation actions; Endpoints: view, disconnect from network). Copy the API token; it's shown once.",
+      "Copy the client's site ID from its site details.",
+      "One service user can serve every client; Haley only reads and acts on the site you enter here.",
+    ],
+    capabilities: ["Devices & network status", "Threats & details", "Mark resolved / verdict", "Kill, quarantine, remediate, roll back", "Disconnect from network (technician only)", "Optional ticket per new threat"],
+    supportsSandbox: false,
+    kind: "directory",
+  },
+  {
     id: "itglue",
     name: "IT Glue",
     description: "Read-only access to this client's IT Glue documents and configurations, so Haley follows your documented procedures. Passwords are never read.",
@@ -281,6 +310,10 @@ export function validateProviderConfig(provider: string, config: Record<string, 
       if (!/^\d+$/.test(config.customerId?.trim() ?? "")) return "Syncro customer ID must be a number.";
       parseAllowedScripts(config.scripts);
       if (config.alertTickets && !/^(true|false)$/i.test(config.alertTickets.trim())) return "Open a ticket for each new alert must be true or false.";
+    } else if (provider === "sentinelone") {
+      sentinelOneBase(config.consoleUrl);
+      if (!/^\d+$/.test(config.siteId?.trim() ?? "")) return "SentinelOne site ID must be a number.";
+      if (config.alertTickets && !/^(true|false)$/i.test(config.alertTickets.trim())) return "Open a ticket for each new threat must be true or false.";
     } else if (provider === "itglue") {
       itglueHost(config.region);
       if (!/^\d+$/.test(config.organizationId?.trim() ?? "")) return "IT Glue organization ID must be a number.";
@@ -502,6 +535,22 @@ export function buildConnector(
         const assets = await api.customerAssets(customerId);
         const flagged = assets.filter((a) => Object.values(a.rmm_store?.triggers ?? {}).some((v) => String(v) === "true")).length;
         return `Connected to ${api.base.replace("/api/v1", "")}; customer ${customerId} has ${assets.length} assets (${flagged} with health flags). ${scripts.length} script${scripts.length === 1 ? "" : "s"} allowed.`;
+      },
+    };
+  }
+
+  if (integration.provider === "sentinelone") {
+    required(config, ["consoleUrl", "apiToken", "siteId"]);
+    const api = new SentinelOneApi({ consoleUrl: config.consoleUrl, apiToken: config.apiToken.trim() }, config.siteId.trim(), fetchImpl);
+    return {
+      integrationId: integration.id,
+      provider: "sentinelone",
+      label: integration.label,
+      tools: sentinelOneTools(api),
+      test: async () => {
+        const site = await api.site();
+        const [agents, threats] = await Promise.all([api.agents({}, 500), api.threats({ unresolvedOnly: true }, 200)]);
+        return `Connected to ${new URL(api.base).hostname}; site "${site.name}" has ${agents.length} devices and ${threats.length} unresolved threat${threats.length === 1 ? "" : "s"}.`;
       },
     };
   }

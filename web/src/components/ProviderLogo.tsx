@@ -1,4 +1,4 @@
-import { Braces, Headset, MessageSquareText, MonitorCog, NotebookText } from "lucide-react";
+import { Braces, Headset, MessageSquareText, MonitorCog, NotebookText, ShieldAlert } from "lucide-react";
 
 export function ProviderLogo({ provider }: { provider: string }) {
   if (provider === "m365") {
@@ -71,6 +71,7 @@ export function ProviderLogo({ provider }: { provider: string }) {
   const tone = (
     {
       ninjaone: [MonitorCog, "blue"],
+      sentinelone: [ShieldAlert, "violet"],
       itglue: [NotebookText, "violet"],
       hudu: [NotebookText, "teal"],
       rest: [Braces, "neutral"],
@@ -78,7 +79,7 @@ export function ProviderLogo({ provider }: { provider: string }) {
       autotask: [Headset, "blue"],
       halopsa: [Headset, "green"],
     } as const
-  )[provider as "ninjaone" | "itglue" | "hudu" | "rest" | "connectwise" | "autotask" | "halopsa"];
+  )[provider as "ninjaone" | "sentinelone" | "itglue" | "hudu" | "rest" | "connectwise" | "autotask" | "halopsa"];
   if (tone) {
     const [Icon, color] = tone;
     return (

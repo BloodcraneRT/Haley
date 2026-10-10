@@ -24,6 +24,7 @@ import { TeamsChannel } from "./channels/teams.js";
 import { clientReport } from "./report.js";
 import { psaConnectorsFor } from "./psa/tools.js";
 import { AlertTickets } from "./monitoring/alerts.js";
+import { sentinelOneAlertSource } from "./monitoring/sentinelOneAlerts.js";
 import { syncroAlertSource } from "./monitoring/syncroAlerts.js";
 import { rankSimilar, tokens } from "./similar.js";
 import { IncidentDetector } from "./incidents.js";
@@ -234,7 +235,7 @@ export async function buildApp({ config, llm, fetchImpl = fetch, mailTransport, 
   const approvalNotifier = new ApprovalNotifier(store, teamsApprovals ? [slackApprovals, teamsApprovals] : [slackApprovals], ch.publicUrl);
   agent.attachApprovalEvents(approvalNotifier);
   store.onTicketStatusChanged((ticket, from, who) => approvalNotifier.escalated(ticket, from, who));
-  const alertTickets = new AlertTickets(store, agent, [syncroAlertSource(fetchImpl)]);
+  const alertTickets = new AlertTickets(store, agent, [syncroAlertSource(fetchImpl), sentinelOneAlertSource(fetchImpl)]);
   const scheduler = new Scheduler(store, agent, psa, alertTickets, approvalNotifier);
 
   const withSla = (ticket: Ticket, org: Org | null | undefined) => ({ ...ticket, sla: org ? slaFor(ticket, org.settings.sla) : null });

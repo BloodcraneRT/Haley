@@ -7,7 +7,7 @@
 
 export type Autonomy = "read_only" | "supervised" | "autonomous" | "unattended";
 export const AUTONOMY_LEVELS: Autonomy[] = ["read_only", "supervised", "autonomous", "unattended"];
-export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code" | "ninjaone" | "syncro_rmm" | "itglue" | "hudu" | "rest";
+export type ProviderId = "m365" | "google" | "slack" | "duo" | "okta" | "sms_code" | "ninjaone" | "syncro_rmm" | "sentinelone" | "itglue" | "hudu" | "rest";
 /** directory: tools Haley acts with; channel: how end users reach Haley; verification: step-up MFA. */
 export type ProviderKind = "directory" | "channel" | "verification";
 

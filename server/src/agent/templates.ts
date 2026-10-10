@@ -44,6 +44,7 @@ const DIRECTORY = [["m365", "google"]];
 const M365 = [["m365"]];
 const NINJA = [["ninjaone"]];
 const SYNCRO = [["syncro_rmm"]];
+const SENTINELONE = [["sentinelone"]];
 
 export const TASK_TEMPLATES: TaskTemplate[] = [
   // ------------------------------------------------------------------ Identity & access
@@ -761,6 +762,47 @@ Don't run scripts or reboot anything. For each group, report the likely cause, t
 For each online device, list pending OS patches (count and the critical/security ones by KB), whether a reboot is pending, and the last boot time. List offline devices separately with last contact, since their patch state is unknown. Highlight servers and anything missing security patches.
 
 Don't install patches or reboot anything. Save the report as a knowledge base article titled "Patch status - <today's date>".`,
+  },
+  {
+    id: "s1-threat-triage",
+    name: "SentinelOne threat triage",
+    description: "Review unresolved SentinelOne threats, separate real ones from noise, and recommend the response for each.",
+    category: "Security",
+    requires: SENTINELONE,
+    changes: false,
+    estimatedMinutes: 25,
+    tags: ["sentinelone", "edr", "threats", "malware", "security", "triage", "incident"],
+    tools: ["s1_list_threats", "s1_get_threat", "s1_get_device", "s1_list_devices", "search_knowledge_base"],
+    instruction: `Triage this client's unresolved SentinelOne threats.
+
+For each threat, look at the detail (classification, confidence, mitigation status, file path and hash, how it was detected) and the device (network status, last user, other threats). Group duplicates of the same threat across devices.
+
+Sort them into: likely malicious (needs action now), suspicious (needs a closer look), and likely false positive (with why). Check the knowledge base for known false positives at this client.
+
+Don't change anything. For each group, report the recommended response (mark resolved, kill or quarantine, roll back, or disconnect from the network) and why, so a technician can approve it.`,
+  },
+  {
+    id: "s1-contain-device",
+    name: "Contain a compromised device (SentinelOne)",
+    description: "Stop and quarantine an active threat, disconnect the device from the network, and record what was done.",
+    category: "Security",
+    requires: SENTINELONE,
+    changes: true,
+    estimatedMinutes: 30,
+    tags: ["sentinelone", "edr", "compromise", "ransomware", "contain", "isolate", "quarantine", "incident response"],
+    tools: ["s1_get_device", "s1_list_threats", "s1_get_threat", "s1_mitigate_threat", "s1_disconnect_device", "s1_update_threat", "remember_for_client"],
+    instruction: `Contain a device with an active threat.
+Device: (name)
+Reason: (what was seen)
+
+Steps, in order:
+1. Look up the device and its unresolved threats in SentinelOne.
+2. ${CONFIRM}
+3. Kill and quarantine each active malicious threat on it.
+4. Disconnect the device from the network (a technician must approve this).
+5. Mark the threats in progress, and add a client note with what was done and when, so whoever picks it up knows the device is isolated.
+
+Don't roll back or reconnect the device; that's for the technician after investigating.`,
   },
   {
     id: "syncro-alert-triage",

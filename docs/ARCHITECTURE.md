@@ -132,10 +132,10 @@ Ticket text comes from end users. The system prompt tells the model to treat it 
 
 ## Monitoring alerts
 
-`monitoring/syncroAlerts.ts` runs on the scheduler tick for each `syncro_rmm` integration with `alertTickets` turned on, at most every two minutes per client.
+`monitoring/alerts.ts` (`AlertTickets`) runs on the scheduler tick for each integration of an alert source with `alertTickets` turned on, at most every two minutes per client. Each source implements `AlertSource` (`listActive`, `dedupeKey`, `describe`): `monitoring/syncroAlerts.ts` (SyncroMSP RMM alerts) and `monitoring/sentinelOneAlerts.ts` (SentinelOne threats). A new source is only an adapter.
 - **Starting point:** the first check only records a cursor, so existing alerts aren't ticketed.
-- **New alerts:** after that, each new active alert for the client's Syncro customer opens a ticket on the `monitoring` channel and starts a run.
-- **Skipped alerts:** alerts Syncro already ticketed are skipped (the PSA sync imports those). An alert that fires again while its ticket is open is noted on that ticket instead of opening another.
+- **New alerts:** after that, each new alert for the client opens a ticket on the `monitoring` channel and starts a run.
+- **Skipped alerts:** alerts the product already handled are skipped (Syncro: already ticketed, which the PSA sync imports; SentinelOne: already resolved). An alert that fires again while its ticket is open (same device and problem: Syncro's description, SentinelOne's file hash) is noted on that ticket instead of opening another.
 - **Limits:** at most 5 tickets per check and 20 per client per hour; the rest wait for later checks.
 - **Policy:** the runner gives monitoring tickets a requester flagged `monitoring`, so in Unattended mode routine fixes run as in Autonomous mode (see [TRUST_MODEL.md](TRUST_MODEL.md)).
 

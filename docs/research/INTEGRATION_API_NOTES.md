@@ -809,3 +809,29 @@ Built from the vendors' documentation; **not yet run against live tenants**. **C
 | Syncro | `user_id` and `user {full_name, email}` / `PUT /tickets/{id} {user_id}` | the ticket's `ticket_timers` | the ticket's `attachments[]` / its pre-signed `file.url` (S3), only from `*.amazonaws.com` or `*.syncromsp.com`, with no credentials |
 | Dynamics 365 | `_ownerid_value` (teams have no single owner); `GET /systemusers({id})?$select=fullname,internalemailaddress` / `PATCH incidents({id})` with `ownerid@odata.bind` | not supported (cases have no standard time entry) | note `annotations` with `isdocument eq true` (technicians') and `activitymimeattachments` on the case's incoming `emails` (the customer's) / `documentbody` and `body` (base64) |
 
+## SentinelOne management API v2.1 (connector: `server/src/connectors/sentinelone/`, added 2026-10-09)
+
+Built from SentinelOne's API v2.1 documentation; **not yet run against a live console**.
+
+- **Base and auth:** `https://<console>.sentinelone.net/web/api/v2.1` (or `*.s1gov.net`), header `Authorization: ApiToken <token>`. Haley refuses any other host, so the token can't be sent elsewhere. Service-user tokens expire (the console sets the lifetime).
+- **Scope:** one site per client. Every list sends `siteIds=<site>`, every action's `filter` includes `siteIds: [<site>]`, and each action first looks the threat or agent up within the site and refuses it if it isn't there.
+- **Paging:** `limit` (up to 100 used) with `cursor` from `pagination.nextCursor`.
+- **Errors:** `{ errors: [{ code, detail, title }] }`.
+
+| Use | Call |
+|---|---|
+| Connection test | `GET /sites?siteIds=` (`data.sites[]`), `GET /agents`, `GET /threats?resolved=false` |
+| Devices | `GET /agents?siteIds=&computerName__contains=&infected=&ids=` |
+| Threats | `GET /threats?siteIds=&resolved=false&createdAt__gte=&ids=&sortBy=createdAt&sortOrder=desc` |
+| Mark a threat | `POST /threats/incident` `{ filter: { ids, siteIds }, data: { incidentStatus } }`; `POST /threats/analyst-verdict` `{ …, data: { analystVerdict } }` |
+| Mitigate (destructive) | `POST /threats/mitigate/{kill\|quarantine\|remediate\|rollback-remediation}` `{ filter: { ids, siteIds } }` |
+| Network isolation (destructive; technician only) | `POST /agents/actions/disconnect` and `/agents/actions/connect` `{ filter: { ids, siteIds } }` |
+| Threat tickets | the threats list with `createdAt__gte` = the cursor minus 10 minutes; resolved threats are skipped; a repeat on the same agent with the same SHA1 goes on the open ticket |
+
+**Unverified:**
+- Whether `resolved=false` is still accepted alongside `incidentStatuses`; newer consoles may prefer `incidentStatuses=unresolved,in_progress`.
+- The exact role permissions names for a least-privilege service user.
+- Whether `data.affected` is returned by every action endpoint.
+
+**Device names:** actions on a device need its exact computer name or agent id. A partial name never matches, because these tools can cut a device off the network.
+
